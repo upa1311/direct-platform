@@ -106,10 +106,11 @@ export function getCartItemViews(state: PrototypeState): CartItemView[] {
 export function detectZoneId(
   street: string,
   state: Pick<PrototypeState, "zones">,
+  house = "",
 ): ZoneId | null {
   const normalizedStreet = street.trim().toLocaleLowerCase("ru-RU");
 
-  if (!normalizedStreet) {
+  if (!normalizedStreet || !house.trim()) {
     return null;
   }
 
@@ -121,6 +122,27 @@ export function detectZoneId(
       ),
     )?.id ?? null
   );
+}
+
+export function getValidatedAddressZoneId(
+  address: DeliveryAddress,
+  state: Pick<PrototypeState, "zones">,
+): ZoneId | null {
+  const expectedZoneId = detectZoneId(address.street, state, address.house);
+  return expectedZoneId && expectedZoneId === address.zoneId
+    ? expectedZoneId
+    : null;
+}
+
+export function getDeliveryFeeCents(
+  state: PrototypeState,
+  restaurant: Restaurant,
+): number | null {
+  const customerZoneId = getValidatedAddressZoneId(state.cart.address, state);
+  const cents = customerZoneId
+    ? state.tariffs[restaurant.zoneId]?.[customerZoneId]
+    : undefined;
+  return Number.isInteger(cents) && Number(cents) >= 0 ? Number(cents) : null;
 }
 
 export function calculateCartPricing(state: PrototypeState): CartPricing {
@@ -142,10 +164,9 @@ export function calculateCartPricing(state: PrototypeState): CartPricing {
             restaurantCommissionCents,
         )
       : 0;
-  const deliveryFeeCents =
-    restaurant && state.cart.address.zoneId
-      ? state.tariffs[restaurant.zoneId][state.cart.address.zoneId]
-      : null;
+  const deliveryFeeCents = restaurant
+    ? getDeliveryFeeCents(state, restaurant)
+    : null;
   const platformGrossRevenueCents =
     restaurantCommissionCents + smallOrderFeeCents;
   const restaurantPayoutBeforeBankFeeCents =
@@ -224,6 +245,9 @@ export function getRestaurantOrders(
   );
 }
 
-export function isAddressReady(address: DeliveryAddress): boolean {
-  return Boolean(address.street.trim() && address.house.trim() && address.zoneId);
+export function isAddressReady(
+  address: DeliveryAddress,
+  state: Pick<PrototypeState, "zones">,
+): boolean {
+  return getValidatedAddressZoneId(address, state) !== null;
 }

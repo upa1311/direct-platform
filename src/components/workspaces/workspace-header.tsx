@@ -10,6 +10,8 @@ interface WorkspaceHeaderProps {
   navAriaLabel: string;
   navItems: readonly WorkspaceNavItem[];
   rightSlot?: ReactNode;
+  showWorkspaceLink?: boolean;
+  brandHref?: string;
 }
 
 export function WorkspaceHeader({
@@ -17,20 +19,24 @@ export function WorkspaceHeader({
   navAriaLabel,
   navItems,
   rightSlot,
+  showWorkspaceLink = true,
+  brandHref,
 }: WorkspaceHeaderProps) {
   return (
     <header className={styles.workspaceHeader}>
       <div className={styles.headerTopline}>
         <BrandLink
           applicationName={applicationName}
-          href={navItems[0]?.href ?? "/"}
+          href={brandHref ?? navItems[0]?.href ?? "/workspaces"}
           priority
         />
         <div className={styles.headerActions}>
           {rightSlot}
-          <Link className={styles.quietLink} href="/">
-            Выбрать другую роль
-          </Link>
+          {showWorkspaceLink ? (
+            <Link className={styles.quietLink} href="/workspaces">
+              Выбрать другую роль
+            </Link>
+          ) : null}
         </div>
       </div>
       <WorkspaceNav ariaLabel={navAriaLabel} items={navItems} />

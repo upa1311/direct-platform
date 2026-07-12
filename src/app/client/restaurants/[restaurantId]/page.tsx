@@ -1,22 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { TEST_RESTAURANT_ID } from "@/prototype/default-state";
+import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatMoney,
   getRestaurant,
   getRestaurantMenu,
+  getDeliveryFeeCents,
+  getValidatedAddressZoneId,
 } from "@/prototype/selectors";
 
 export default function ClientRestaurantPage() {
   const params = useParams<{ restaurantId: string }>();
   const { state, addItem } = usePrototype();
+  const { notifyItemAdded } = useClientCartUi();
   const [feedback, setFeedback] = useState("");
   const restaurant = getRestaurant(state, params.restaurantId);
 
@@ -29,6 +33,8 @@ export default function ClientRestaurantPage() {
   }
 
   const menuItems = getRestaurantMenu(state, restaurant.id);
+  const customerZoneId = getValidatedAddressZoneId(state.cart.address, state);
+  const deliveryFee = getDeliveryFeeCents(state, restaurant);
   const canOrder =
     restaurant.id === TEST_RESTAURANT_ID &&
     restaurant.isAcceptingOrders &&
@@ -45,7 +51,7 @@ export default function ClientRestaurantPage() {
     return "Блюдо сейчас недоступно.";
   };
 
-  const handleAdd = (menuItemId: string) => {
+  const handleAdd = (menuItemId: string, event: MouseEvent<HTMLButtonElement>) => {
     const result = addItem(menuItemId);
 
     if (result === "RESTAURANT_CONFLICT") {
@@ -61,10 +67,12 @@ export default function ClientRestaurantPage() {
           ? "Предыдущая корзина очищена. Блюдо добавлено."
           : getAddFeedback(replacementResult),
       );
+      if (replacementResult === "ADDED") notifyItemAdded(event.currentTarget);
       return;
     }
 
     setFeedback(getAddFeedback(result));
+    if (result === "ADDED") notifyItemAdded(event.currentTarget);
   };
 
   return (
@@ -84,6 +92,13 @@ export default function ClientRestaurantPage() {
             <li key={mode}>{deliveryModeLabels[mode]}</li>
           ))}
         </ul>
+        <div className={flowStyles.deliveryQuote}>
+          {customerZoneId && deliveryFee !== null ? (
+            <><strong>Доставка по вашему адресу: {formatMoney(deliveryFee)}</strong><span>{state.cart.address.street}, дом {state.cart.address.house}</span></>
+          ) : (
+            <><strong>Укажите адрес в каталоге</strong><Link href="/client/catalog">Рассчитать доставку</Link></>
+          )}
+        </div>
       </div>
 
       {!canOrder ? (
@@ -124,7 +139,7 @@ export default function ClientRestaurantPage() {
                 className={flowStyles.primaryButton}
                 type="button"
                 disabled={!menuItem.available || !canOrder}
-                onClick={() => handleAdd(menuItem.id)}
+                onClick={(event) => handleAdd(menuItem.id, event)}
               >
                 Добавить
               </button>

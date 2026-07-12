@@ -199,6 +199,45 @@
   gap: 14px;
 }
 
+.cartHeaderButton {
+  width: 44px;
+  height: 44px;
+  position: relative;
+  border: 1px solid #d8ddd8;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  color: #303632;
+  cursor: pointer;
+}
+
+.cartHeaderButton svg {
+  width: 20px;
+  height: 20px;
+}
+
+.cartHeaderButton > span {
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #b85f2c;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.cartHeaderButtonPulse > span {
+  animation: cart-badge-pulse 600ms ease;
+}
+
 .quietLink,
 .sidebarExit {
   color: #626a65;
@@ -281,6 +320,17 @@
   font-size: 13px;
   font-weight: 700;
   text-decoration: none;
+}
+
+.activeOrderStripInner .activeOrderCurrent {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgb(143 67 28 / 9%);
+  font-weight: 700;
+}
+
+@keyframes cart-badge-pulse {
+  50% { transform: scale(1.35); }
 }
 
 .pageHeading {
@@ -598,4 +648,6 @@
   .routeCard {
     transition: none;
   }
+
+  .cartHeaderButtonPulse > span { animation: none; }
 }

@@ -25,7 +25,7 @@ export function AdminSidebar() {
         items={adminNavigation}
         variant="sidebar"
       />
-      <Link className={styles.sidebarExit} href="/">
+      <Link className={styles.sidebarExit} href="/workspaces">
         Выбрать другую роль
       </Link>
     </aside>

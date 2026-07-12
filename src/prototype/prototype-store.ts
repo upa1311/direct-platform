@@ -6,6 +6,7 @@ import {
   type PrototypeState,
   type Restaurant,
 } from "./models";
+import { createDefaultTariffs } from "./default-state";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v3";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v3";
@@ -107,7 +108,10 @@ function isLegacyPrototypeState(
 }
 
 function normalizePaymentMethod(value: unknown): PaymentMethod {
-  return value === "CASH" ? "CASH" : "ONLINE";
+  if (value === "CASH" || value === "QR") {
+    return "ONLINE";
+  }
+  return "ONLINE";
 }
 
 function normalizePaymentMethods(values: unknown): PaymentMethod[] {
@@ -129,8 +133,25 @@ function normalizeHistoryMessage(message: string): string {
 export function normalizePrototypeState(
   state: PrototypeState,
 ): PrototypeState {
-  const platformDriverCashEnabled =
-    state.platformSettings.platformDriverCashEnabled === true;
+  const defaultTariffs = createDefaultTariffs();
+  const zoneIds = ["zone-1", "zone-2", "zone-3", "zone-4"] as const;
+  const tariffs = Object.fromEntries(
+    zoneIds.map((fromZoneId) => [
+      fromZoneId,
+      Object.fromEntries(
+        zoneIds.map((toZoneId) => {
+          const saved = state.tariffs[fromZoneId]?.[toZoneId];
+          return [
+            toZoneId,
+            Number.isInteger(saved) && Number(saved) >= 0
+              ? saved
+              : defaultTariffs[fromZoneId][toZoneId],
+          ];
+        }),
+      ),
+    ]),
+  ) as PrototypeState["tariffs"];
+  const platformDriverCashEnabled = false;
   const cartPaymentMethod = normalizePaymentMethod(
     state.cart.paymentMethod,
   );
@@ -142,25 +163,54 @@ export function normalizePrototypeState(
       ...state.platformSettings,
       platformDriverCashEnabled,
     },
+    tariffs,
     restaurants: state.restaurants.map((restaurant) => ({
       ...restaurant,
+      status:
+        restaurant.id === "restaurant-1" ||
+        restaurant.id === "restaurant-2" ||
+        restaurant.id === "restaurant-3"
+          ? "PUBLISHED"
+          : restaurant.status,
+      isAcceptingOrders:
+        restaurant.id === "restaurant-1"
+          ? true
+          : restaurant.id === "restaurant-2" || restaurant.id === "restaurant-3"
+            ? false
+            : restaurant.isAcceptingOrders,
       paymentMethods: normalizePaymentMethods(restaurant.paymentMethods),
     })),
     cart: {
       ...state.cart,
-      paymentMethod:
-        !platformDriverCashEnabled && cartPaymentMethod === "CASH"
-          ? "ONLINE"
-          : cartPaymentMethod,
+      paymentMethod: cartPaymentMethod,
     },
-    orders: state.orders.map((order) => ({
-      ...order,
-      paymentMethod: normalizePaymentMethod(order.paymentMethod),
-      history: order.history.map((event) => ({
-        ...event,
-        message: normalizeHistoryMessage(event.message),
-      })),
-    })),
+    orders: state.orders.map((order) => {
+      const wasCashOrder =
+        order.paymentMethod === "CASH" ||
+        order.paymentStatus === "CASH_ON_DELIVERY";
+      const safeStatus =
+        wasCashOrder &&
+        (order.status === "PREPARING" || order.status === "READY")
+          ? "AWAITING_PAYMENT"
+          : order.status;
+
+      return {
+        ...order,
+        paymentMethod: "ONLINE",
+        status: safeStatus,
+        paymentStatus: wasCashOrder
+          ? safeStatus === "AWAITING_PAYMENT"
+            ? "AWAITING_PAYMENT"
+            : "NOT_STARTED"
+          : order.paymentStatus,
+        paidAt: wasCashOrder ? null : order.paidAt,
+        expectedReadyAt: wasCashOrder ? null : order.expectedReadyAt,
+        history: order.history.map((event) => ({
+          ...event,
+          message: normalizeHistoryMessage(event.message),
+        })),
+      };
+    }),
   };
 }
 

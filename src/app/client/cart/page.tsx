@@ -31,6 +31,10 @@ export default function ClientCartPage() {
   const restaurant = getRestaurant(state, state.cart.restaurantId);
   const pricing = calculateCartPricing(state);
   const smallOrderMissingCents = getSmallOrderMissingAmountCents(state);
+  const hasAddressInput = Boolean(
+    state.cart.address.street.trim() || state.cart.address.house.trim(),
+  );
+  const addressIsReady = isAddressReady(state.cart.address, state);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -194,6 +198,11 @@ export default function ClientCartPage() {
                 Зона определена автоматически: {state.cart.address.zoneId.replace("zone-", "зона ")}.
               </div>
             ) : null}
+            {hasAddressInput && !addressIsReady ? (
+              <div className={flowStyles.warningNotice} role="alert">
+                Выберите известную улицу и укажите номер дома. Зона адреса должна определиться автоматически.
+              </div>
+            ) : null}
           </section>
 
           <section className={flowStyles.card}>
@@ -252,10 +261,12 @@ export default function ClientCartPage() {
                   : formatMoney(pricing.deliveryFeeCents)}
               </dd>
             </div>
-            <div className={flowStyles.summaryRow}>
-              <dt>Доплата за небольшой заказ</dt>
-              <dd>{formatMoney(pricing.smallOrderFeeCents)}</dd>
-            </div>
+            {pricing.smallOrderFeeCents > 0 ? (
+              <div className={flowStyles.summaryRow}>
+                <dt>Доплата за небольшой заказ</dt>
+                <dd>{formatMoney(pricing.smallOrderFeeCents)}</dd>
+              </div>
+            ) : null}
             <div className={`${flowStyles.summaryRow} ${flowStyles.summaryTotal}`}>
               <dt>К оплате</dt>
               <dd>
@@ -275,7 +286,7 @@ export default function ClientCartPage() {
             <button
               className={flowStyles.primaryButton}
               type="submit"
-              disabled={!isAddressReady(state.cart.address)}
+              disabled={!addressIsReady}
             >
               Отправить заказ
             </button>

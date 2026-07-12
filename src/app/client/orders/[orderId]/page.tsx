@@ -51,13 +51,28 @@ export default function ClientOrderPage() {
           </div>
           <dl className={flowStyles.summaryList}>
             <div className={flowStyles.summaryRow}>
-              <dt>Сумма заказа</dt>
-              <dd>{formatMoney(order.financials.customerTotalCents)}</dd>
+              <dt>Адрес</dt>
+              <dd>{order.address.street}, дом {order.address.house}{order.address.apartment ? `, кв. ${order.address.apartment}` : ""}</dd>
             </div>
             <div className={flowStyles.summaryRow}>
               <dt>Оплата</dt>
               <dd>{paymentMethodLabels[order.paymentMethod]}</dd>
             </div>
+          </dl>
+          <h3>Состав заказа</h3>
+          <div className={flowStyles.orderItemList}>
+            {order.items.map((item) => (
+              <div key={item.menuItemId}>
+                <span><strong>{item.name}</strong> × {item.quantity}{item.cookingComment ? <small>Комментарий: {item.cookingComment}</small> : null}</span>
+                <span>{formatMoney(item.lineTotalCents, item.currencyCode)}</span>
+              </div>
+            ))}
+          </div>
+          <dl className={flowStyles.summaryList}>
+            <div className={flowStyles.summaryRow}><dt>Еда</dt><dd>{formatMoney(order.financials.foodSubtotalCents)}</dd></div>
+            <div className={flowStyles.summaryRow}><dt>Доставка</dt><dd>{formatMoney(order.financials.deliveryFeeCents)}</dd></div>
+            {order.financials.smallOrderFeeCents > 0 ? <div className={flowStyles.summaryRow}><dt>Доплата за небольшой заказ</dt><dd>{formatMoney(order.financials.smallOrderFeeCents)}</dd></div> : null}
+            <div className={`${flowStyles.summaryRow} ${flowStyles.summaryTotal}`}><dt>Итого</dt><dd>{formatMoney(order.financials.customerTotalCents)}</dd></div>
           </dl>
           {order.status === "AWAITING_PAYMENT" &&
           order.paymentMethod === "ONLINE" ? (

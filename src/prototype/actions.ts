@@ -69,7 +69,7 @@ export function addCartItem(
 
   const baseCart =
     state.cart.restaurantId && state.cart.restaurantId !== menuItem.restaurantId
-      ? createEmptyCart()
+      ? createEmptyCart(state.cart.address)
       : state.cart;
   const existingItem = baseCart.items.find(
     (item) => item.menuItemId === menuItemId,
@@ -158,7 +158,11 @@ export function updateCartAddress(
   const addressWithoutZone = { ...state.cart.address, ...patch };
   const address: DeliveryAddress = {
     ...addressWithoutZone,
-    zoneId: detectZoneId(addressWithoutZone.street, state),
+    zoneId: detectZoneId(
+      addressWithoutZone.street,
+      state,
+      addressWithoutZone.house,
+    ),
   };
 
   return finalizeMutation(state, {
@@ -185,14 +189,21 @@ export function saveTariffs(
   state: PrototypeState,
   tariffs: TariffMatrix,
 ): PrototypeState {
+  const defaults = createDefaultTariffs();
+  const zoneIds = ["zone-1", "zone-2", "zone-3", "zone-4"] as const;
   const normalizedTariffs = Object.fromEntries(
-    Object.entries(tariffs).map(([fromZoneId, row]) => [
+    zoneIds.map((fromZoneId) => [
       fromZoneId,
       Object.fromEntries(
-        Object.entries(row).map(([toZoneId, cents]) => [
-          toZoneId,
-          Math.max(0, Math.round(cents)),
-        ]),
+        zoneIds.map((toZoneId) => {
+          const cents = tariffs[fromZoneId]?.[toZoneId];
+          return [
+            toZoneId,
+            Number.isFinite(cents) && cents >= 0
+              ? Math.round(cents)
+              : defaults[fromZoneId][toZoneId],
+          ];
+        }),
       ),
     ]),
   ) as TariffMatrix;
@@ -315,9 +326,13 @@ export function createOrderFromCart(
 
   const pricing = calculateCartPricing(state);
 
-  const customerZoneId = state.cart.address.zoneId;
+  const customerZoneId = detectZoneId(
+    state.cart.address.street,
+    state,
+    state.cart.address.house,
+  );
   if (
-    !isAddressReady(state.cart.address) ||
+    !isAddressReady(state.cart.address, state) ||
     pricing.deliveryFeeCents === null ||
     !customerZoneId
   ) {
@@ -403,7 +418,7 @@ export function createOrderFromCart(
     {
       ...state,
       nextOrderNumber: state.nextOrderNumber + 1,
-      cart: createEmptyCart(),
+      cart: createEmptyCart(state.cart.address),
       orders: [...state.orders, order],
     },
     now,

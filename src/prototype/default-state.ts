@@ -22,28 +22,28 @@ export const defaultZones: Zone[] = [
 export function createDefaultTariffs(): TariffMatrix {
   return {
     "zone-1": {
-      "zone-1": 300,
+      "zone-1": 200,
       "zone-2": 300,
-      "zone-3": 300,
-      "zone-4": 300,
+      "zone-3": 400,
+      "zone-4": 500,
     },
     "zone-2": {
       "zone-1": 300,
-      "zone-2": 300,
+      "zone-2": 200,
       "zone-3": 300,
-      "zone-4": 300,
+      "zone-4": 400,
     },
     "zone-3": {
-      "zone-1": 300,
+      "zone-1": 400,
       "zone-2": 300,
-      "zone-3": 300,
+      "zone-3": 200,
       "zone-4": 300,
     },
     "zone-4": {
-      "zone-1": 300,
-      "zone-2": 300,
+      "zone-1": 500,
+      "zone-2": 400,
       "zone-3": 300,
-      "zone-4": 300,
+      "zone-4": 200,
     },
   };
 }
@@ -204,13 +204,13 @@ const defaultMenuItems: MenuItem[] = [
   },
 ];
 
-export function createEmptyCart(): Cart {
+export function createEmptyCart(address?: Cart["address"]): Cart {
   return {
     restaurantId: null,
     items: [],
     deliveryMode: "PLATFORM_DRIVER",
     paymentMethod: "ONLINE",
-    address: {
+    address: address ? { ...address } : {
       street: "",
       house: "",
       apartment: "",
