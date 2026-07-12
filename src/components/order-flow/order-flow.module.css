@@ -1,0 +1,598 @@
+.catalogGrid,
+.menuList,
+.panelStack,
+.orderList {
+  display: grid;
+  gap: 16px;
+}
+
+.catalogGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.restaurantCard,
+.card,
+.orderCard {
+  border: 1px solid #dfe3df;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgb(34 43 37 / 4%);
+}
+
+.restaurantCard {
+  min-height: 180px;
+}
+
+.restaurantCardLink {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 24px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.restaurantCardLink h2,
+.menuItem h2,
+.orderCard h2,
+.card h2 {
+  margin: 0;
+  color: #202522;
+  font-size: 20px;
+  letter-spacing: -0.025em;
+}
+
+.restaurantCardLink p,
+.menuItem p,
+.orderCard p,
+.card p {
+  margin: 8px 0 0;
+  color: #68716b;
+  line-height: 1.55;
+}
+
+.cardMeta,
+.inlineMeta,
+.statusLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  color: #68716b;
+  font-size: 13px;
+}
+
+.detailHeader {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 30px;
+}
+
+.detailHeader h1 {
+  margin: 0;
+  font-size: clamp(32px, 4vw, 46px);
+}
+
+.detailHeader > p {
+  max-width: 720px;
+  margin: 0;
+  color: #68716b;
+  font-size: 17px;
+  line-height: 1.6;
+}
+
+.modeList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.modeList li,
+.statusBadge {
+  padding: 7px 10px;
+  border: 1px solid #dfe3df;
+  border-radius: 999px;
+  background: #f6f7f5;
+  color: #59625c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.menuItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  padding: 22px 24px;
+  border: 1px solid #e2e5e2;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.menuItemUnavailable {
+  background: #f7f8f6;
+  opacity: 0.72;
+}
+
+.menuActions {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+}
+
+.price {
+  color: #202522;
+  font-family: var(--font-geist-mono), monospace;
+  font-weight: 700;
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton,
+.primaryLink,
+.quantityButton,
+.removeButton {
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton,
+.primaryLink {
+  min-height: 42px;
+  padding: 10px 16px;
+}
+
+.primaryButton {
+  border: 1px solid #a95020;
+  background: #b85f2c;
+  color: #fff;
+}
+
+.primaryLink {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #a95020;
+  background: #b85f2c;
+  color: #fff;
+  text-decoration: none;
+}
+
+.primaryLink:hover {
+  background: #9e4e22;
+}
+
+.primaryButton:hover {
+  background: #9e4e22;
+}
+
+.secondaryButton {
+  border: 1px solid #d5dad6;
+  background: #fff;
+  color: #303632;
+}
+
+.dangerButton {
+  border: 1px solid #d7b9b5;
+  background: #fff7f5;
+  color: #8c342b;
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled,
+.quantityButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.primaryButton:focus-visible,
+.primaryLink:focus-visible,
+.secondaryButton:focus-visible,
+.dangerButton:focus-visible,
+.quantityButton:focus-visible,
+.removeButton:focus-visible,
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible,
+.tariffInput:focus-visible {
+  outline: 3px solid rgb(198 102 45 / 25%);
+  outline-offset: 2px;
+}
+
+.feedback {
+  min-height: 22px;
+  color: #38644a;
+  font-size: 14px;
+}
+
+.cartLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  align-items: start;
+  gap: 22px;
+}
+
+.card,
+.orderCard {
+  padding: 24px;
+}
+
+.cartItems {
+  display: grid;
+  gap: 0;
+  margin-top: 18px;
+}
+
+.cartLine {
+  display: grid;
+  gap: 14px;
+  padding: 20px 0;
+  border-top: 1px solid #ecefec;
+}
+
+.cartLine:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.cartLineTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.cartLineTop strong {
+  font-size: 16px;
+}
+
+.quantityControls,
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.quantityButton {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #d8ddd8;
+  background: #fff;
+}
+
+.removeButton {
+  border: 0;
+  background: transparent;
+  color: #8c342b;
+  font-size: 13px;
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.field,
+.radioField {
+  display: grid;
+  gap: 7px;
+}
+
+.fieldFull {
+  grid-column: 1 / -1;
+}
+
+.field > span,
+.radioLegend {
+  color: #4f5852;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.field input,
+.field select,
+.field textarea,
+.tariffInput {
+  width: 100%;
+  border: 1px solid #d8ddd8;
+  border-radius: 10px;
+  background: #fff;
+  color: #202522;
+  font: inherit;
+}
+
+.field input,
+.field select {
+  min-height: 42px;
+  padding: 9px 11px;
+}
+
+.field textarea {
+  min-height: 78px;
+  padding: 10px 11px;
+  resize: vertical;
+}
+
+.zoneNotice,
+.warningNotice,
+.successNotice {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.zoneNotice,
+.successNotice {
+  border: 1px solid #c9ddcf;
+  background: #f0f7f2;
+  color: #305c3d;
+}
+
+.warningNotice {
+  border: 1px solid #ead3b8;
+  background: #fff8ef;
+  color: #744a1c;
+}
+
+.paymentOptions {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.paymentOption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dfe3df;
+  border-radius: 10px;
+}
+
+.paymentOptionDisabled {
+  opacity: 0.55;
+}
+
+.summaryList,
+.definitionList {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0 0;
+}
+
+.summaryRow,
+.definitionRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.summaryRow dt,
+.definitionRow dt {
+  color: #68716b;
+}
+
+.summaryRow dd,
+.definitionRow dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 650;
+}
+
+.summaryTotal {
+  padding-top: 14px;
+  border-top: 1px solid #dfe3df;
+  font-size: 18px;
+}
+
+.submitArea {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.emptyState {
+  padding: 30px;
+  border: 1px dashed #cfd5d0;
+  border-radius: 16px;
+  background: #fff;
+  color: #68716b;
+  text-align: center;
+}
+
+.orderHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.orderNumber {
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.orderItemList {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.orderItemList li {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding-top: 10px;
+  border-top: 1px solid #ecefec;
+}
+
+.itemComment {
+  display: block;
+  margin-top: 3px;
+  color: #68716b;
+  font-size: 13px;
+}
+
+.orderActions {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(220px, 1fr);
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.countdown {
+  margin-top: 16px;
+  color: #4b554f;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.historyList {
+  display: grid;
+  gap: 0;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.historyList li {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid #ecefec;
+}
+
+.historyMarker {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: #b85f2c;
+}
+
+.historyList strong,
+.historyList span {
+  display: block;
+}
+
+.historyList strong {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.historyList span {
+  margin-top: 5px;
+  color: #747d77;
+  font-size: 12px;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  margin-top: 20px;
+}
+
+.tariffTable {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+}
+
+.tariffTable th,
+.tariffTable td {
+  padding: 12px;
+  border: 1px solid #dfe3df;
+  text-align: left;
+}
+
+.tariffTable th {
+  background: #f6f7f5;
+  font-size: 13px;
+}
+
+.tariffInput {
+  min-width: 92px;
+  padding: 8px 10px;
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.adminOrderGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 20px;
+}
+
+.sectionTitle {
+  margin: 24px 0 0;
+  color: #202522;
+  font-size: 15px;
+}
+
+.latestOrderSection {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
+.latestOrderSection > h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+@media (max-width: 850px) {
+  .catalogGrid,
+  .cartLayout,
+  .adminOrderGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .orderActions {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .menuItem,
+  .fieldGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .menuActions {
+    justify-items: start;
+  }
+
+  .fieldFull {
+    grid-column: auto;
+  }
+
+  .orderHeader,
+  .cartLineTop,
+  .summaryRow,
+  .definitionRow {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .summaryRow dd,
+  .definitionRow dd {
+    text-align: left;
+  }
+}
