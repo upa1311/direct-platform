@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { MapPin } from "lucide-react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
-import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
+  canPlacePrototypeOrder,
   getDeliveryFeeCents,
   getValidatedAddressZoneId,
   sortPublishedRestaurants,
@@ -16,79 +17,92 @@ import {
 export default function ClientCatalogPage() {
   const { state, updateAddress } = usePrototype();
   const [sort, setSort] = useState<CatalogSort>("RECOMMENDED");
+  const [isEditingAddress, setIsEditingAddress] = useState(false);
   const hasValidAddress =
     getValidatedAddressZoneId(state.cart.address, state) !== null;
-  const effectiveSort = sort === "DELIVERY" && !hasValidAddress
-    ? "RECOMMENDED"
-    : sort;
+  const showAddressForm = !hasValidAddress || isEditingAddress;
+  const effectiveSort =
+    sort === "DELIVERY" && !hasValidAddress ? "RECOMMENDED" : sort;
   const restaurants = useMemo(
     () => sortPublishedRestaurants(state, effectiveSort),
     [effectiveSort, state],
   );
-  const availableFees = hasValidAddress
+  const orderableFees = hasValidAddress
     ? restaurants
+        .filter(canPlacePrototypeOrder)
         .map((restaurant) => getDeliveryFeeCents(state, restaurant))
         .filter((fee): fee is number => fee !== null)
     : [];
-  const bestFee = availableFees.length > 0 ? Math.min(...availableFees) : null;
+  const bestFee = orderableFees.length > 0 ? Math.min(...orderableFees) : null;
 
   return (
     <>
-      <PageHeading
-        eyebrow="Клиент"
-        title="Рестораны"
-        description="Выберите адрес и откройте меню подходящего ресторана."
-      />
       <section
-        className={`${flowStyles.card} ${flowStyles.catalogAddress}`}
+        className={`${flowStyles.card} ${flowStyles.catalogAddress} ${showAddressForm ? "" : flowStyles.catalogAddressCollapsed}`}
         aria-labelledby="catalog-address-title"
       >
-        <div>
-          <h2 id="catalog-address-title">Куда доставить?</h2>
-          <p>Стоимость доставки может меняться в зависимости от района.</p>
-        </div>
-        <div className={flowStyles.catalogAddressFields}>
-          <label className={flowStyles.field}>
-            <span>Улица</span>
-            <select
-              value={state.cart.address.street}
-              onChange={(event) => updateAddress({ street: event.target.value })}
-            >
-              <option value="">Выберите улицу</option>
-              {state.zones.flatMap((zone) =>
-                zone.streets.map((street) => (
-                  <option value={street} key={street}>
-                    {street}
-                  </option>
-                )),
-              )}
-            </select>
-          </label>
-          <label className={flowStyles.field}>
-            <span>Дом</span>
-            <input
-              required
-              value={state.cart.address.house}
-              onChange={(event) => updateAddress({ house: event.target.value })}
-              placeholder="Номер дома"
-            />
-          </label>
-        </div>
-        {hasValidAddress ? (
-          <p className={flowStyles.zoneNotice}>
-            Доставка будет рассчитана для выбранного адреса: {state.cart.address.street}, дом {state.cart.address.house}.
-          </p>
+        {showAddressForm ? (
+          <>
+            <div>
+              <h2 id="catalog-address-title">Куда доставить?</h2>
+              <p>От адреса зависит стоимость доставки.</p>
+            </div>
+            <div className={flowStyles.catalogAddressFields}>
+              <label className={flowStyles.field}>
+                <span>Улица</span>
+                <select
+                  value={state.cart.address.street}
+                  onChange={(event) =>
+                    updateAddress({ street: event.target.value })
+                  }
+                >
+                  <option value="">Выберите улицу</option>
+                  {state.zones.flatMap((zone) =>
+                    zone.streets.map((street) => (
+                      <option value={street} key={street}>
+                        {street}
+                      </option>
+                    )),
+                  )}
+                </select>
+              </label>
+              <label className={flowStyles.field}>
+                <span>Дом</span>
+                <input
+                  required
+                  value={state.cart.address.house}
+                  onChange={(event) =>
+                    updateAddress({ house: event.target.value })
+                  }
+                  placeholder="Номер дома"
+                />
+              </label>
+            </div>
+            {isEditingAddress && hasValidAddress ? (
+              <button
+                className={flowStyles.compactTextButton}
+                type="button"
+                onClick={() => setIsEditingAddress(false)}
+              >
+                Готово
+              </button>
+            ) : null}
+          </>
         ) : (
-          <p className={flowStyles.feedback}>
-            Выберите улицу и укажите номер дома.
-          </p>
+          <div className={flowStyles.compactAddressLine}>
+            <MapPin aria-hidden="true" />
+            <strong id="catalog-address-title">
+              {state.cart.address.street}, дом {state.cart.address.house}
+            </strong>
+            <button type="button" onClick={() => setIsEditingAddress(true)}>
+              Изменить
+            </button>
+          </div>
         )}
-        <small>
-          Определение адреса по геолокации появится после подключения карт.
-        </small>
       </section>
 
-      <div className={flowStyles.catalogToolbar}>
+      <div className={flowStyles.catalogHeadingRow}>
+        <h1>Рестораны</h1>
         <label className={flowStyles.field}>
           <span>Сортировка</span>
           <select
@@ -107,9 +121,10 @@ export default function ClientCatalogPage() {
 
       <div className={flowStyles.catalogGrid}>
         {restaurants.map((restaurant) => {
-          const deliveryFee = hasValidAddress
-            ? getDeliveryFeeCents(state, restaurant)
-            : null;
+          const deliveryFee =
+            hasValidAddress && canPlacePrototypeOrder(restaurant)
+              ? getDeliveryFeeCents(state, restaurant)
+              : null;
           return (
             <article className={flowStyles.restaurantCard} key={restaurant.id}>
               <Link

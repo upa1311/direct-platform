@@ -5,12 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
-import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   calculateCartPricing,
   formatMoney,
   getCartItemViews,
+  getDeliveryProviderLabel,
   getRestaurant,
   getSmallOrderMissingAmountCents,
   isAddressReady,
@@ -26,7 +26,6 @@ export default function ClientCartPage() {
     setItemComment,
     updateAddress,
     updateCustomer,
-    setPaymentMethod,
     createOrder,
   } = usePrototype();
   const [submitError, setSubmitError] = useState("");
@@ -38,6 +37,9 @@ export default function ClientCartPage() {
     state.cart.address.street.trim() || state.cart.address.house.trim(),
   );
   const addressIsReady = isAddressReady(state.cart.address, state);
+  const deliveryProviderLabel = restaurant
+    ? getDeliveryProviderLabel(restaurant)
+    : null;
   const customerNameIsValid = isCustomerNameValid(state.customer.name);
   const customerPhoneIsValid = isCustomerPhoneValid(state.customer.phone);
   const canSubmitOrder =
@@ -64,11 +66,9 @@ export default function ClientCartPage() {
   if (!restaurant || itemViews.length === 0) {
     return (
       <>
-        <PageHeading
-          eyebrow="Клиент"
-          title="Корзина"
-          description="Здесь будут собраны блюда перед отправкой заказа."
-        />
+        <header className={flowStyles.checkoutHeading}>
+          <h1>Ваш заказ</h1>
+        </header>
         <div className={flowStyles.emptyState}>
           Корзина пуста. <Link href="/client/catalog">Перейти в каталог</Link>
         </div>
@@ -78,16 +78,15 @@ export default function ClientCartPage() {
 
   return (
     <form onSubmit={handleSubmit}>
-      <PageHeading
-        eyebrow="Клиент"
-        title="Корзина"
-        description={`Заказ из ${restaurant.name}. Один заказ содержит блюда только одного ресторана.`}
-      />
+      <header className={flowStyles.checkoutHeading}>
+        <h1>Ваш заказ</h1>
+        <p>{restaurant.name}</p>
+      </header>
 
       <div className={flowStyles.cartLayout}>
         <div className={flowStyles.panelStack}>
           <section className={flowStyles.card}>
-            <h2>Блюда</h2>
+            <h2>Состав заказа</h2>
             <div className={flowStyles.cartItems}>
               {itemViews.map(({ cartItem, menuItem, lineTotalCents }) => (
                 <div className={flowStyles.cartLine} key={menuItem.id}>
@@ -253,11 +252,6 @@ export default function ClientCartPage() {
                 />
               </label>
             </div>
-            {addressIsReady ? (
-              <div className={flowStyles.zoneNotice}>
-                Адрес доставки принят.
-              </div>
-            ) : null}
             {hasAddressInput && !addressIsReady ? (
               <div className={flowStyles.warningNotice} role="alert">
                 Выберите известную улицу и укажите номер дома.
@@ -266,43 +260,13 @@ export default function ClientCartPage() {
           </section>
 
           <section className={flowStyles.card}>
-            <fieldset className={flowStyles.radioField}>
-              <legend className={flowStyles.radioLegend}>Способ оплаты</legend>
-              <div className={flowStyles.paymentOptions}>
-                <label className={flowStyles.paymentOption}>
-                  <input
-                    type="radio"
-                    name="paymentMethod"
-                    value="ONLINE"
-                    checked={state.cart.paymentMethod === "ONLINE"}
-                    onChange={() => setPaymentMethod("ONLINE")}
-                  />
-                  Оплата онлайн
-                </label>
-                <p>
-                  КЛЕВЕР-карта, KleverPay/банковское приложение или QR — после
-                  подключения банка.
-                </p>
-                <label
-                  className={`${flowStyles.paymentOption} ${flowStyles.paymentOptionDisabled}`}
-                >
-                  <input
-                    type="radio"
-                    name="paymentMethod"
-                    value="CASH"
-                    checked={state.cart.paymentMethod === "CASH"}
-                    disabled
-                    onChange={() => setPaymentMethod("CASH")}
-                  />
-                  Наличные
-                </label>
-              </div>
-            </fieldset>
-            <div className={flowStyles.warningNotice}>
-              Наличные будут подключены отдельным этапом после завершения и
-              проверки водительского маршрута онлайн-заказов. Пока выберите
-              оплату онлайн.
-            </div>
+            <h2>Оплата</h2>
+            <p className={flowStyles.compactPayment}>Оплата онлайн</p>
+            {deliveryProviderLabel ? (
+              <p className={flowStyles.deliveryProvider}>
+                {deliveryProviderLabel}
+              </p>
+            ) : null}
           </section>
         </div>
 

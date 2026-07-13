@@ -11,7 +11,10 @@ import type {
   Restaurant,
   ZoneId,
 } from "./models";
-import { getDefaultRecommendationRank } from "./default-state";
+import {
+  getDefaultRecommendationRank,
+  TEST_RESTAURANT_ID,
+} from "./default-state";
 
 export type CatalogSort =
   | "RECOMMENDED"
@@ -135,6 +138,16 @@ export function getDeliveryProviderLabel(
     return "Доставит курьер ресторана";
   }
   return null;
+}
+
+export function canPlacePrototypeOrder(restaurant: Restaurant): boolean {
+  return (
+    restaurant.id === TEST_RESTAURANT_ID &&
+    restaurant.status === "PUBLISHED" &&
+    restaurant.isAcceptingOrders &&
+    restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
+    restaurant.paymentMethods.includes("ONLINE")
+  );
 }
 
 export function isCustomerNameValid(name: string): boolean {

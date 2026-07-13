@@ -6,6 +6,76 @@
   gap: 16px;
 }
 
+.guidedFlow {
+  margin-bottom: 26px;
+  color: #778079;
+}
+
+.guidedFlowDesktop {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guidedFlowDesktop li {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.guidedFlowDesktop li:not(:last-child)::after {
+  height: 1px;
+  margin-inline: 10px;
+  flex: 1;
+  content: "";
+  background: #d7dcd8;
+}
+
+.guidedFlowDesktop li > span {
+  width: 21px;
+  height: 21px;
+  border: 1px solid #d3d8d4;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  font-size: 10px;
+}
+
+.guidedFlowDesktop .guidedStepCurrent {
+  color: #8f431c;
+  font-weight: 800;
+}
+
+.guidedFlowDesktop .guidedStepCurrent > span {
+  border-color: #b85f2c;
+  background: #fff4ed;
+}
+
+.guidedFlowDesktop .guidedStepCompleted {
+  color: #356045;
+}
+
+.guidedFlowDesktop .guidedStepCompleted > span {
+  border-color: #bdd4c4;
+  background: #edf6ef;
+}
+
+.guidedFlowMobile {
+  display: none;
+  margin: 0;
+  color: #59625c;
+  font-size: 13px;
+  font-weight: 750;
+}
+
 .catalogGrid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -96,6 +166,54 @@
   margin-bottom: 20px;
 }
 
+.card.catalogAddressCollapsed {
+  display: block;
+  padding: 14px 18px;
+}
+
+.compactAddressLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.compactAddressLine svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: #b85f2c;
+}
+
+.compactAddressLine strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactAddressLine button,
+.compactTextButton {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: #8f431c;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.compactAddressLine button:focus-visible,
+.compactTextButton:focus-visible {
+  outline: 3px solid rgb(198 102 45 / 25%);
+  outline-offset: 3px;
+}
+
+.compactTextButton {
+  grid-column: 1 / -1;
+  width: fit-content;
+}
+
 .catalogAddressFields {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 130px;
@@ -111,13 +229,41 @@
 
 .catalogAddress > small { color: #7b837e; }
 
-.catalogToolbar {
+.catalogHeadingRow {
   display: flex;
-  justify-content: flex-end;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
   margin-bottom: 18px;
 }
 
-.catalogToolbar .field { min-width: 220px; }
+.catalogHeadingRow h1,
+.checkoutHeading h1 {
+  margin: 0;
+  color: #202522;
+  font-size: clamp(30px, 4vw, 42px);
+  letter-spacing: -0.035em;
+}
+
+.catalogHeadingRow .field { min-width: 220px; }
+
+.checkoutHeading {
+  margin-bottom: 28px;
+}
+
+.checkoutHeading p {
+  margin: 7px 0 0;
+  color: #68716b;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.compactPayment {
+  margin: 16px 0 18px;
+  color: #202522;
+  font-size: 16px;
+  font-weight: 750;
+}
 
 .restaurantCardLink h2,
 .menuItem h2,
@@ -798,6 +944,36 @@
 }
 
 @media (max-width: 560px) {
+  .guidedFlow {
+    margin-bottom: 20px;
+  }
+
+  .guidedFlowDesktop {
+    display: none;
+  }
+
+  .guidedFlowMobile {
+    display: block;
+  }
+
+  .catalogHeadingRow {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .catalogHeadingRow .field {
+    min-width: 0;
+  }
+
+  .compactAddressLine {
+    gap: 8px;
+  }
+
+  .compactAddressLine strong {
+    font-size: 13px;
+  }
+
   .catalogAddressFields { grid-template-columns: 1fr; }
   .cartDrawer { padding: 20px 16px; }
   .cartDrawerItems article { align-items: flex-start; flex-direction: column; }
