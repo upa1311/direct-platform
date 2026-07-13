@@ -66,8 +66,8 @@ export function ClientGuidedFlow() {
   const activeOrder = getActiveCustomerOrder(state);
   const selectedRestaurantId =
     restaurantRouteId ??
-    state.cart.restaurantId ??
     existingOrder?.restaurant.id ??
+    state.cart.restaurantId ??
     null;
   const hasCartItems = state.cart.items.length > 0;
 
@@ -82,10 +82,10 @@ export function ClientGuidedFlow() {
     return null;
   }
 
-  const currentStep = !isAddressConfirmed
-    ? 1
-    : existingOrder
-      ? 5
+  const currentStep = existingOrder
+    ? 5
+    : !isAddressConfirmed
+      ? 1
       : hasCartItems
         ? 4
         : selectedRestaurantId
@@ -101,64 +101,66 @@ export function ClientGuidedFlow() {
     {
       label: "Выбор ресторана",
       href:
-        isAddressConfirmed
+        existingOrder || isAddressConfirmed
           ? "/client/catalog#restaurant-list"
           : null,
       state:
-        !isAddressConfirmed
-          ? "locked"
+        existingOrder
+          ? "completed"
+          : !isAddressConfirmed
+            ? "locked"
           : currentStep === 2
-          ? "current"
-          : existingOrder || Boolean(selectedRestaurantId)
-            ? "completed"
-            : isAddressConfirmed
-              ? "available"
-              : "locked",
+            ? "current"
+            : Boolean(selectedRestaurantId)
+              ? "completed"
+              : "available",
     },
     {
       label: "Выбор блюд",
       href:
-        isAddressConfirmed && selectedRestaurantId
+        (existingOrder || isAddressConfirmed) && selectedRestaurantId
           ? `/client/restaurants/${selectedRestaurantId}#restaurant-menu`
           : null,
       state:
-        !isAddressConfirmed
-          ? "locked"
+        existingOrder
+          ? "completed"
+          : !isAddressConfirmed
+            ? "locked"
           : currentStep === 3
-          ? "current"
-          : existingOrder || hasCartItems
-            ? "completed"
-            : isAddressConfirmed && selectedRestaurantId
-              ? "available"
-              : "locked",
+            ? "current"
+            : hasCartItems
+              ? "completed"
+              : selectedRestaurantId
+                ? "available"
+                : "locked",
     },
     {
       label: "Оформление и оплата",
-      href: isAddressConfirmed && hasCartItems
-        ? "/client/cart#checkout-cart"
-        : isAddressConfirmed && existingOrder
-          ? `/client/orders/${existingOrder.id}#order-status`
+      href: existingOrder
+        ? `/client/orders/${existingOrder.id}#order-status`
+        : isAddressConfirmed && hasCartItems
+          ? "/client/cart#checkout-cart"
           : null,
       state:
-        !isAddressConfirmed
-          ? "locked"
+        existingOrder
+          ? "completed"
+          : !isAddressConfirmed
+            ? "locked"
           : currentStep === 4
-          ? "current"
-          : existingOrder
-            ? "completed"
-            : isAddressConfirmed && hasCartItems
+            ? "current"
+            : hasCartItems
               ? "available"
               : "locked",
     },
     {
       label: "Статус заказа",
-      href: isAddressConfirmed && existingOrder
+      href: existingOrder
         ? `/client/orders/${existingOrder.id}#order-status`
         : isAddressConfirmed && activeOrder
           ? `/client/orders/${activeOrder.id}#order-status`
           : null,
       state:
-        isAddressConfirmed && existingOrder
+        existingOrder
           ? "current"
           : isAddressConfirmed && activeOrder
             ? "available"

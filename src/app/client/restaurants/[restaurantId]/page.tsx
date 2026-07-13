@@ -6,6 +6,7 @@ import { useState, type MouseEvent } from "react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { TEST_RESTAURANT_ID } from "@/prototype/default-state";
+import { useClientAddressConfirmation } from "@/components/order-flow/client-address-confirmation";
 import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -27,6 +28,7 @@ function getProductLabel(quantity: number): string {
 export default function ClientRestaurantPage() {
   const params = useParams<{ restaurantId: string }>();
   const { state, addItem, setItemQuantity } = usePrototype();
+  const { isAddressConfirmed } = useClientAddressConfirmation();
   const { notifyItemAdded } = useClientCartUi();
   const [feedback, setFeedback] = useState("");
   const restaurant = getRestaurant(state, params.restaurantId);
@@ -190,12 +192,18 @@ export default function ClientRestaurantPage() {
       {cartQuantity > 0 ? (
         <Link
           className={flowStyles.menuCheckoutCta}
-          href="/client/cart#checkout-cart"
+          href={
+            isAddressConfirmed
+              ? "/client/cart#checkout-cart"
+              : "/client/catalog#delivery-address"
+          }
         >
           <span>
-            {cartQuantity} {getProductLabel(cartQuantity)}
+            {cartQuantity} {getProductLabel(cartQuantity)} ·
           </span>
-          <strong>Перейти к оформлению</strong>
+          <strong>
+            {isAddressConfirmed ? "Перейти к оформлению" : "Указать адрес"}
+          </strong>
         </Link>
       ) : null}
     </div>

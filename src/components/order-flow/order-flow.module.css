@@ -354,6 +354,22 @@
   font-weight: 650;
 }
 
+.addressConfirmationPrompt {
+  width: fit-content;
+  margin: -12px 0 18px;
+  padding: 9px 12px;
+  border: 1px solid #ead3b8;
+  border-radius: 9px;
+  background: #fff8ef;
+  font-size: 14px;
+}
+
+.addressConfirmationPrompt a {
+  color: #744a1c;
+  font-weight: 700;
+  text-underline-offset: 3px;
+}
+
 .compactPayment {
   margin: 16px 0 18px;
   color: #202522;

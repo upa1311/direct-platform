@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { useClientAddressConfirmation } from "@/components/order-flow/client-address-confirmation";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -20,6 +21,8 @@ import {
 
 export default function ClientCartPage() {
   const router = useRouter();
+  const { isAddressConfirmed, isConfirmationHydrated } =
+    useClientAddressConfirmation();
   const {
     state,
     setItemQuantity,
@@ -43,6 +46,7 @@ export default function ClientCartPage() {
   const customerNameIsValid = isCustomerNameValid(state.customer.name);
   const customerPhoneIsValid = isCustomerPhoneValid(state.customer.phone);
   const canSubmitOrder =
+    isAddressConfirmed &&
     customerNameIsValid &&
     customerPhoneIsValid &&
     addressIsReady &&
@@ -82,6 +86,14 @@ export default function ClientCartPage() {
         <h1>Ваш заказ</h1>
         <p>{restaurant.name}</p>
       </header>
+
+      {isConfirmationHydrated && !isAddressConfirmed ? (
+        <div className={flowStyles.addressConfirmationPrompt} role="status">
+          <Link href="/client/catalog#delivery-address">
+            Подтвердите адрес доставки
+          </Link>
+        </div>
+      ) : null}
 
       <div className={flowStyles.cartLayout}>
         <div className={flowStyles.panelStack}>
