@@ -256,14 +256,14 @@ function CreatePromotionForm({ restaurants }: { restaurants: Restaurant[] }) {
     savePromotion({
       id,
       restaurantId,
-      title: "Новая акция 3+1",
+      title: "Закажи 3 пиццы и получи четвёртую бесплатно",
       enabled: false,
       type: "BUY_N_GET_M_CHEAPEST_FREE",
       buyQuantity: 3,
       freeQuantity: 1,
       repeat: true,
       eligibleMenuItemIds: eligible,
-      displayText: "3 + 1 в подарок",
+      displayText: "Закажи 3 пиццы и получи четвёртую бесплатно",
       createdAt: "",
       updatedAt: "",
     });
@@ -294,7 +294,7 @@ function CreatePromotionForm({ restaurants }: { restaurants: Restaurant[] }) {
           type="button"
           onClick={create}
         >
-          Создать акцию 3+1
+          Создать акцию
         </button>
         <p className={flowStyles.feedback} aria-live="polite">
           {created}

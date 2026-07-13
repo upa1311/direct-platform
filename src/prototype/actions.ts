@@ -12,12 +12,15 @@ import type {
   Order,
   OrderItemSnapshot,
   PaymentMethod,
+  PaymentStatus,
+  PickupPaymentMethod,
   Promotion,
   PrototypeState,
   Restaurant,
   RestaurantDeliveryProvider,
   RestaurantDeliverySnapshot,
   RestaurantDeliverySettings,
+  SettlementEntry,
   TariffMatrix,
 } from "./models";
 import {
@@ -32,6 +35,7 @@ import {
   isCustomerPhoneValid,
   WORKING_RESTAURANT_IDS,
 } from "./selectors";
+import { computePickupSettlement, generatePickupCode } from "./pricing-engine";
 import { finalizeMutation } from "./prototype-store";
 
 export interface ActionResult<T> {
@@ -380,6 +384,34 @@ export function createOrderFromCart(
   const appliedPromotion: AppliedPromotionSnapshot | null =
     pricing.appliedPromotion;
 
+  const isPickup = deliveryMode === "PICKUP";
+  // Самовывоз: отдельная финансовая модель (клиент платит ресторану на точке).
+  const pickup = isPickup
+    ? computePickupSettlement({
+        foodSubtotalCents: pricing.foodSubtotalCents,
+        commissionRateBps: restaurant.pickupCommissionRateBps,
+        smallOrderFeeCents: pricing.smallOrderFeeCents,
+      })
+    : null;
+  const paymentMethod: PaymentMethod = isPickup
+    ? "PAY_AT_RESTAURANT"
+    : "ONLINE";
+  const paymentStatus: PaymentStatus = isPickup
+    ? "DUE_AT_PICKUP"
+    : "NOT_STARTED";
+  const pickupCode = isPickup
+    ? generatePickupCode(state.nextOrderNumber)
+    : null;
+  const restaurantCommissionCents = pickup
+    ? pickup.restaurantCommissionCents
+    : pricing.restaurantCommissionCents;
+  const restaurantCommissionRateBps = isPickup
+    ? restaurant.pickupCommissionRateBps
+    : restaurant.commissionRateBps;
+  const platformGrossRevenueCents = pickup
+    ? pickup.platformCommissionReceivableCents
+    : pricing.platformGrossRevenueCents;
+
   const items: OrderItemSnapshot[] = itemViews.map((view) => ({
     menuItemId: view.menuItem.id,
     name: view.menuItem.name,
@@ -422,20 +454,22 @@ export function createOrderFromCart(
       ? { ...state.cart.address, zoneId: customerZoneId }
       : null,
     deliveryMode,
-    paymentMethod: "ONLINE",
-    paymentStatus: "NOT_STARTED",
+    paymentMethod,
+    paymentStatus,
     paidAt: null,
     status: "RESTAURANT_REVIEW",
     preparationMinutes: null,
     expectedReadyAt: null,
     cancellationReason: null,
+    pickupCode,
+    pickupCodeUsed: false,
     items,
     financials: {
       currencyCode: state.platformSettings.currencyCode,
       deliveryMode,
       deliveryProvider: restaurant.deliveryProvider,
-      restaurantCommissionRateBps: restaurant.commissionRateBps,
-      restaurantCommissionCents: pricing.restaurantCommissionCents,
+      restaurantCommissionRateBps,
+      restaurantCommissionCents,
       foodSubtotalBeforeDiscountsCents:
         pricing.foodSubtotalBeforeDiscountsCents,
       variantSurchargeSubtotalCents: pricing.variantSurchargeSubtotalCents,
@@ -447,15 +481,28 @@ export function createOrderFromCart(
       freeDeliveryThresholdCents: pricing.freeDeliveryThresholdCents,
       minimumOrderCents: pricing.minimumOrderCents,
       smallOrderFeeCents: pricing.smallOrderFeeCents,
-      platformGrossRevenueCents: pricing.platformGrossRevenueCents,
-      driverPayoutCents: pricing.driverPayoutCents,
-      restaurantPayoutBeforeBankFeeCents:
-        pricing.restaurantPayoutBeforeBankFeeCents,
+      platformGrossRevenueCents,
+      driverPayoutCents: isPickup ? 0 : pricing.driverPayoutCents,
+      restaurantPayoutBeforeBankFeeCents: isPickup
+        ? 0
+        : pricing.restaurantPayoutBeforeBankFeeCents,
       customerTotalCents: pricing.customerTotalCents,
       restaurantZoneId: restaurant.zoneId,
       customerZoneId,
       appliedPromotion,
       restaurantDelivery: restaurantDeliverySnapshot,
+      restaurantCollectedFromCustomerCents: pickup
+        ? pickup.restaurantCollectedFromCustomerCents
+        : 0,
+      platformCollectedFromCustomerCents: pickup
+        ? 0
+        : pricing.customerTotalCents,
+      platformCommissionReceivableCents: pickup
+        ? pickup.platformCommissionReceivableCents
+        : 0,
+      restaurantNetAfterPlatformCommissionCents: pickup
+        ? pickup.restaurantNetAfterPlatformCommissionCents
+        : pricing.restaurantPayoutBeforeBankFeeCents,
     },
     history: [
       {
@@ -528,13 +575,48 @@ export function acceptRestaurantOrder(
   if (
     !targetOrder ||
     targetOrder.status !== "RESTAURANT_REVIEW" ||
-    !isWorkingRestaurantOrder(targetOrder) ||
-    targetOrder.paymentMethod !== "ONLINE"
+    !isWorkingRestaurantOrder(targetOrder)
   ) {
     return state;
   }
 
   const now = new Date().toISOString();
+
+  // Самовывоз: оплата в ресторане при получении, онлайн-оплата не запускается —
+  // заказ сразу переходит в приготовление.
+  if (targetOrder.paymentMethod === "PAY_AT_RESTAURANT") {
+    const expectedReadyAt = new Date(
+      new Date(now).getTime() + preparationMinutes * 60_000,
+    ).toISOString();
+    return replaceOrder(
+      state,
+      orderId,
+      (order) => ({
+        ...order,
+        status: "PREPARING",
+        preparationMinutes,
+        expectedReadyAt,
+        updatedAt: now,
+        history: [
+          ...order.history,
+          {
+            id: `${order.id}-history-${order.history.length + 1}`,
+            occurredAt: now,
+            actor: "RESTAURANT",
+            type: "STATUS",
+            fromStatus: "RESTAURANT_REVIEW",
+            toStatus: "PREPARING",
+            message: `Ресторан принял заказ. Время приготовления — ${preparationMinutes} минут. Оплата в ресторане при получении.`,
+          },
+        ],
+      }),
+      now,
+    );
+  }
+
+  if (targetOrder.paymentMethod !== "ONLINE") {
+    return state;
+  }
 
   return replaceOrder(
     state,
@@ -787,40 +869,153 @@ export function markOrderDelivered(
   );
 }
 
-export function markOrderPickedUp(
+export interface CompletePickupResult {
+  ok: boolean;
+  error: string | null;
+}
+
+/**
+ * Атомарная выдача самовывоза по коду клиента: оплата в ресторане, выдача,
+ * начисление комиссии Direct. Единственный путь завершить PICKUP-заказ.
+ */
+export function completePickupWithCode(
   state: PrototypeState,
   orderId: string,
+  code: string,
+): ActionResult<CompletePickupResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const done = (error: string | null): ActionResult<CompletePickupResult> => ({
+    state,
+    result: { ok: error === null, error },
+  });
+
+  if (!order || order.deliveryMode !== "PICKUP") {
+    return done("Заказ не найден или не является самовывозом.");
+  }
+  if (order.status === "PICKED_UP" || order.pickupCodeUsed) {
+    return done("Заказ уже выдан.");
+  }
+  if (order.status !== "READY_FOR_PICKUP") {
+    return done("Заказ ещё не готов к выдаче.");
+  }
+  if (!order.pickupCode || code.trim() !== order.pickupCode) {
+    return done("Неверный код клиента.");
+  }
+
+  const now = new Date().toISOString();
+  const nextHistoryNumber = order.history.length + 1;
+  const updatedOrder: Order = {
+    ...order,
+    status: "PICKED_UP",
+    paymentStatus: "PAID_AT_RESTAURANT",
+    paidAt: now,
+    pickupCodeUsed: true,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      {
+        id: `${order.id}-history-${nextHistoryNumber}`,
+        occurredAt: now,
+        actor: "RESTAURANT",
+        type: "PAYMENT",
+        fromStatus: "READY_FOR_PICKUP",
+        toStatus: "READY_FOR_PICKUP",
+        message: "Оплата получена в ресторане.",
+      },
+      {
+        id: `${order.id}-history-${nextHistoryNumber + 1}`,
+        occurredAt: now,
+        actor: "RESTAURANT",
+        type: "STATUS",
+        fromStatus: "READY_FOR_PICKUP",
+        toStatus: "PICKED_UP",
+        message: "Заказ выдан клиенту по коду.",
+      },
+    ],
+  };
+
+  // Начисление комиссии создаётся один раз (id привязан к заказу).
+  const settlementId = `settlement-${orderId}`;
+  const alreadySettled = state.settlements.some(
+    (entry) => entry.id === settlementId || entry.orderId === orderId,
+  );
+  const settlement: SettlementEntry = {
+    id: settlementId,
+    orderId,
+    restaurantId: order.restaurant.id,
+    type: "PICKUP_COMMISSION",
+    amountCents: order.financials.platformCommissionReceivableCents,
+    status: "PENDING",
+    createdAt: now,
+  };
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+      settlements: alreadySettled
+        ? state.settlements
+        : [...state.settlements, settlement],
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Невыкуп: заказ готов, но клиент не пришёл. Закрывается без комиссии Direct;
+ * увеличивается счётчик невыкупов клиента.
+ */
+export function markPickupNoShow(
+  state: PrototypeState,
+  orderId: string,
+  reason: string,
 ): PrototypeState {
-  const targetOrder = state.orders.find((order) => order.id === orderId);
+  const order = state.orders.find((o) => o.id === orderId);
+  const normalizedReason = reason.trim();
   if (
-    !targetOrder ||
-    targetOrder.deliveryMode !== "PICKUP" ||
-    targetOrder.status !== "READY_FOR_PICKUP"
+    !order ||
+    order.deliveryMode !== "PICKUP" ||
+    order.status !== "READY_FOR_PICKUP" ||
+    !normalizedReason
   ) {
     return state;
   }
 
   const now = new Date().toISOString();
-  return replaceOrder(
+  const updatedOrder: Order = {
+    ...order,
+    status: "CANCELED",
+    cancellationReason: normalizedReason,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      {
+        id: `${order.id}-history-${order.history.length + 1}`,
+        occurredAt: now,
+        actor: "RESTAURANT",
+        type: "STATUS",
+        fromStatus: "READY_FOR_PICKUP",
+        toStatus: "CANCELED",
+        message: `Клиент не пришёл за заказом. Причина: ${normalizedReason}`,
+      },
+    ],
+  };
+
+  return finalizeMutation(
     state,
-    orderId,
-    (order) => ({
-      ...order,
-      status: "PICKED_UP",
-      updatedAt: now,
-      history: [
-        ...order.history,
-        {
-          id: `${order.id}-history-${order.history.length + 1}`,
-          occurredAt: now,
-          actor: "RESTAURANT",
-          type: "STATUS",
-          fromStatus: "READY_FOR_PICKUP",
-          toStatus: "PICKED_UP",
-          message: "Заказ выдан клиенту",
-        },
-      ],
-    }),
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+      customer:
+        order.customer.id === state.customer.id
+          ? {
+              ...state.customer,
+              noShowPickupCount: state.customer.noShowPickupCount + 1,
+            }
+          : state.customer,
+    },
     now,
   );
 }
@@ -867,6 +1062,7 @@ export interface RestaurantFormInput {
   status: Restaurant["status"];
   isAcceptingOrders: boolean;
   restaurantDeliverySettings: RestaurantDeliverySettings | null;
+  pickupPaymentMethods?: PickupPaymentMethod[];
 }
 
 export function createRestaurant(
@@ -897,6 +1093,9 @@ export function createRestaurant(
         ? (input.restaurantDeliverySettings ??
           defaultRestaurantDeliverySettings())
         : input.restaurantDeliverySettings,
+    pickupPaymentMethods: input.pickupPaymentMethods ?? ["CASH", "CARD"],
+    pickupCommissionRateBps: 1500,
+    pickupPrepaymentThresholdCents: null,
   };
   const nextState = finalizeMutation(state, {
     ...state,
@@ -939,6 +1138,8 @@ export function updateRestaurant(
       deliveryProvider === "RESTAURANT"
         ? (settings ?? defaultRestaurantDeliverySettings())
         : settings,
+    pickupPaymentMethods:
+      patch.pickupPaymentMethods ?? target.pickupPaymentMethods,
   };
 
   return finalizeMutation(state, {

@@ -14,13 +14,14 @@ import {
 import {
   acceptRestaurantOrder,
   addCartItem,
+  completePickupWithCode,
   createOrderFromCart,
   createRestaurant,
   markOrderArriving,
   markOrderDelivered,
   markOrderOutForDelivery,
-  markOrderPickedUp,
   markOrderReady,
+  markPickupNoShow as runPickupNoShow,
   rejectRestaurantOrder,
   resetPrototypeState,
   restoreDefaultTariffs,
@@ -37,6 +38,7 @@ import {
   updateRestaurant,
   upsertPromotion,
   type AddCartItemResult,
+  type CompletePickupResult,
   type CreateOrderOptions,
   type CreateOrderResult,
   type RestaurantFormInput,
@@ -57,6 +59,7 @@ import {
   LEGACY_V2_PROTOTYPE_STORAGE_KEY,
   LEGACY_V3_PROTOTYPE_STORAGE_KEY,
   LEGACY_V4_PROTOTYPE_STORAGE_KEY,
+  LEGACY_V5_PROTOTYPE_STORAGE_KEY,
   normalizePrototypeState,
   parseLegacyStoredState,
   parseStoredState,
@@ -93,7 +96,8 @@ interface PrototypeContextValue {
   rejectOrder: (orderId: string, reason: string) => void;
   simulateOnlinePayment: (orderId: string) => void;
   markReady: (orderId: string) => void;
-  markPickedUp: (orderId: string) => void;
+  completePickup: (orderId: string, code: string) => CompletePickupResult;
+  markPickupNoShow: (orderId: string, reason: string) => void;
   markOutForDelivery: (orderId: string) => void;
   markArriving: (orderId: string) => void;
   markDelivered: (orderId: string) => void;
@@ -137,6 +141,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
     const storedState =
       parseStoredState(window.localStorage.getItem(PROTOTYPE_STORAGE_KEY)) ??
+      parseLegacyStoredState(
+        window.localStorage.getItem(LEGACY_V5_PROTOTYPE_STORAGE_KEY),
+      ) ??
       parseLegacyStoredState(
         window.localStorage.getItem(LEGACY_V4_PROTOTYPE_STORAGE_KEY),
       ) ??
@@ -319,9 +326,20 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
-  const markPickedUp = useCallback(
-    (orderId: string) => {
-      replaceState(markOrderPickedUp(stateRef.current, orderId));
+  const completePickup = useCallback(
+    (orderId: string, code: string) => {
+      const action = completePickupWithCode(stateRef.current, orderId, code);
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const markPickupNoShow = useCallback(
+    (orderId: string, reason: string) => {
+      replaceState(runPickupNoShow(stateRef.current, orderId, reason));
     },
     [replaceState],
   );
@@ -417,7 +435,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       rejectOrder,
       simulateOnlinePayment,
       markReady,
-      markPickedUp,
+      completePickup,
+      markPickupNoShow,
       markOutForDelivery,
       markArriving,
       markDelivered,
@@ -445,7 +464,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       rejectOrder,
       simulateOnlinePayment,
       markReady,
-      markPickedUp,
+      completePickup,
+      markPickupNoShow,
       markOutForDelivery,
       markArriving,
       markDelivered,

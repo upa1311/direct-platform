@@ -261,6 +261,63 @@ export function computeRestaurantDeliveryFinancials(
   };
 }
 
+export interface PickupSettlementInput {
+  /** Стоимость еды после скидок. */
+  foodSubtotalCents: number;
+  /** Комиссия Direct за самовывоз, bps (по умолчанию 1500 = 15%). */
+  commissionRateBps: number;
+  /** Действующая доплата за небольшой заказ (текущее поведение PICKUP). */
+  smallOrderFeeCents: number;
+}
+
+export interface PickupSettlement {
+  restaurantCommissionCents: number;
+  customerTotalCents: number;
+  /** Деньги клиента собирает ресторан на точке. */
+  restaurantCollectedFromCustomerCents: number;
+  /** Direct не удерживает клиентский платёж при самовывозе. */
+  platformCollectedFromCustomerCents: number;
+  /** Сколько ресторан должен Direct: комиссия + small-order fee, если есть. */
+  platformCommissionReceivableCents: number;
+  restaurantNetAfterPlatformCommissionCents: number;
+}
+
+/**
+ * Финансовая модель самовывоза: клиент платит ресторану на точке, Direct
+ * зарабатывает комиссию (и small-order fee, если применяется), которая
+ * становится задолженностью ресторана перед Direct только после выдачи.
+ */
+export function computePickupSettlement(
+  input: PickupSettlementInput,
+): PickupSettlement {
+  const restaurantCommissionCents = roundMoneyCents(
+    (input.foodSubtotalCents * input.commissionRateBps) / 10_000,
+  );
+  // Доставка при самовывозе равна нулю.
+  const customerTotalCents = input.foodSubtotalCents + input.smallOrderFeeCents;
+  const platformCommissionReceivableCents =
+    restaurantCommissionCents + input.smallOrderFeeCents;
+  return {
+    restaurantCommissionCents,
+    customerTotalCents,
+    restaurantCollectedFromCustomerCents: customerTotalCents,
+    platformCollectedFromCustomerCents: 0,
+    platformCommissionReceivableCents,
+    restaurantNetAfterPlatformCommissionCents:
+      customerTotalCents - platformCommissionReceivableCents,
+  };
+}
+
+/**
+ * Детерминированный 4-значный код выдачи самовывоза из номера заказа.
+ * В прототипе достаточно детерминированного значения; реальная система
+ * должна использовать криптографически стойкий одноразовый код.
+ */
+export function generatePickupCode(orderNumber: number): string {
+  const code = ((Math.abs(Math.trunc(orderNumber)) * 7919 + 1234) % 9000) + 1000;
+  return String(code);
+}
+
 /**
  * Нужно ли автоматически подтвердить адрес при открытии ресторана.
  * Только для доставки с валидным (известным) адресом, ещё не подтверждённым.

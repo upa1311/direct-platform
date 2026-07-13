@@ -4,7 +4,7 @@ import type {
   RestaurantDeliverySettings,
 } from "./pricing-engine";
 
-export const PROTOTYPE_SCHEMA_VERSION = 5 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 6 as const;
 
 export type {
   FulfillmentChoice,
@@ -26,7 +26,9 @@ export type DeliveryMode =
   | "PICKUP";
 /** Историческое клиентское понятие v4. Сохранено для совместимости миграции. */
 export type CustomerDeliveryMode = "PLATFORM_DRIVER" | "PICKUP";
-export type PaymentMethod = "ONLINE" | "CASH";
+export type PaymentMethod = "ONLINE" | "CASH" | "PAY_AT_RESTAURANT";
+/** Способы оплаты, доступные на точке самовывоза. */
+export type PickupPaymentMethod = "CASH" | "CARD";
 export type OrderStatus =
   | "RESTAURANT_REVIEW"
   | "AWAITING_PAYMENT"
@@ -42,7 +44,23 @@ export type PaymentStatus =
   | "NOT_STARTED"
   | "AWAITING_PAYMENT"
   | "PAID"
-  | "CASH_ON_DELIVERY";
+  | "CASH_ON_DELIVERY"
+  | "DUE_AT_PICKUP"
+  | "PAID_AT_RESTAURANT";
+
+export type SettlementType = "PICKUP_COMMISSION";
+export type SettlementStatus = "PENDING" | "NETTED" | "PAID" | "WAIVED";
+
+/** Неизменяемая запись начисления комиссии Direct (ledger). */
+export interface SettlementEntry {
+  id: string;
+  orderId: string;
+  restaurantId: string;
+  type: SettlementType;
+  amountCents: number;
+  status: SettlementStatus;
+  createdAt: string;
+}
 
 export type PromotionType = "BUY_N_GET_M_CHEAPEST_FREE";
 
@@ -80,6 +98,12 @@ export interface Restaurant {
   commissionRateBps: number;
   /** Собственные условия доставки для ресторана типа RESTAURANT. */
   restaurantDeliverySettings: RestaurantDeliverySettings | null;
+  /** Способы оплаты на точке самовывоза (наличные/карта). */
+  pickupPaymentMethods: PickupPaymentMethod[];
+  /** Комиссия Direct за самовывоз (по умолчанию 1500 bps = 15%). */
+  pickupCommissionRateBps: number;
+  /** Порог предоплаты самовывоза. Пока не активирован (null). */
+  pickupPrepaymentThresholdCents: number | null;
 }
 
 export interface MenuItemVariant {
@@ -139,6 +163,8 @@ export interface CustomerProfile {
   phone: string;
   phoneVerified: boolean;
   addresses: SavedAddress[];
+  /** Счётчик невыкупленных заказов самовывоза. */
+  noShowPickupCount: number;
 }
 
 export interface DriverProfile {
@@ -234,6 +260,15 @@ export interface FinancialSnapshot {
   customerZoneId: ZoneId | null;
   appliedPromotion: AppliedPromotionSnapshot | null;
   restaurantDelivery: RestaurantDeliverySnapshot | null;
+  /**
+   * Кто реально собирает деньги клиента. При PICKUP платит ресторан на точке,
+   * поэтому Direct клиентский платёж не удерживает.
+   */
+  restaurantCollectedFromCustomerCents: number;
+  platformCollectedFromCustomerCents: number;
+  /** Сколько ресторан должен Direct (комиссия + small-order fee, если есть). */
+  platformCommissionReceivableCents: number;
+  restaurantNetAfterPlatformCommissionCents: number;
 }
 
 export interface OrderHistoryEvent {
@@ -262,6 +297,9 @@ export interface Order {
   preparationMinutes: number | null;
   expectedReadyAt: string | null;
   cancellationReason: string | null;
+  /** Одноразовый код выдачи самовывоза (только для PICKUP). */
+  pickupCode: string | null;
+  pickupCodeUsed: boolean;
   items: OrderItemSnapshot[];
   financials: FinancialSnapshot;
   history: OrderHistoryEvent[];
@@ -282,6 +320,7 @@ export interface PrototypeState {
   drivers: DriverProfile[];
   cart: Cart;
   orders: Order[];
+  settlements: SettlementEntry[];
 }
 
 /** Результат расчёта корзины для клиентского оформления. */

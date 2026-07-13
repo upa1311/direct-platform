@@ -9,6 +9,7 @@ const adminNavigation = [
   { href: "/admin/restaurants", label: "Рестораны" },
   { href: "/admin/menu", label: "Меню и акции" },
   { href: "/admin/orders", label: "Заказы" },
+  { href: "/admin/settlements", label: "Расчёты" },
   { href: "/admin/drivers", label: "Водители" },
   { href: "/admin/zones", label: "Зоны и тарифы" },
 ] as const;

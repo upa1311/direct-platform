@@ -14,6 +14,7 @@ import {
   getOrder,
   orderStatusLabels,
   paymentMethodLabels,
+  paymentStatusLabels,
 } from "@/prototype/selectors";
 
 export default function ClientOrderPage() {
@@ -89,7 +90,22 @@ export default function ClientOrderPage() {
               <dt>Оплата</dt>
               <dd>{paymentMethodLabels[order.paymentMethod]}</dd>
             </div>
+            {order.deliveryMode === "PICKUP" ? (
+              <div className={flowStyles.summaryRow}>
+                <dt>Статус оплаты</dt>
+                <dd>{paymentStatusLabels[order.paymentStatus]}</dd>
+              </div>
+            ) : null}
           </dl>
+          {order.deliveryMode === "PICKUP" &&
+          order.pickupCode &&
+          !order.pickupCodeUsed &&
+          order.status !== "CANCELED" ? (
+            <div className={flowStyles.zoneNotice}>
+              Код получения: <strong>{order.pickupCode}</strong>. Назовите его в
+              ресторане при получении и оплате заказа.
+            </div>
+          ) : null}
           <h3>Состав заказа</h3>
           <div className={flowStyles.orderItemList}>
             {order.items.map((item) => (

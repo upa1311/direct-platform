@@ -13,6 +13,61 @@ import {
   paymentStatusLabels,
 } from "@/prototype/selectors";
 
+function PickupCompletion({ orderId }: { orderId: string }) {
+  const { completePickup, markPickupNoShow } = usePrototype();
+  const [code, setCode] = useState("");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+
+  return (
+    <div className={flowStyles.submitArea}>
+      <label className={flowStyles.field}>
+        <span>Код клиента</span>
+        <input
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+          placeholder="Код из приложения клиента"
+        />
+      </label>
+      <div className={flowStyles.buttonRow}>
+        <button
+          className={flowStyles.primaryButton}
+          type="button"
+          onClick={() => {
+            const result = completePickup(orderId, code);
+            setError(result.ok ? "" : (result.error ?? "Ошибка выдачи."));
+          }}
+        >
+          Оплата получена, заказ выдан
+        </button>
+      </div>
+      {error ? (
+        <div className={flowStyles.warningNotice} role="alert">
+          {error}
+        </div>
+      ) : null}
+      <label className={flowStyles.field}>
+        <span>Клиент не пришёл — причина</span>
+        <input
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="Например: не явился за заказом"
+        />
+      </label>
+      <div className={flowStyles.buttonRow}>
+        <button
+          className={flowStyles.dangerButton}
+          type="button"
+          disabled={!reason.trim()}
+          onClick={() => markPickupNoShow(orderId, reason)}
+        >
+          Заказ не выкуплен
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function formatCountdown(expectedReadyAt: string | null, now: number) {
   if (!expectedReadyAt) {
     return "Отсчёт начнётся после оплаты";
@@ -33,7 +88,6 @@ export default function RestaurantActiveOrdersPage() {
   const {
     state,
     markReady,
-    markPickedUp,
     markOutForDelivery,
     markArriving,
     markDelivered,
@@ -120,15 +174,7 @@ export default function RestaurantActiveOrdersPage() {
                 </>
               ) : null}
               {order.status === "READY_FOR_PICKUP" ? (
-                <div className={flowStyles.submitArea}>
-                  <button
-                    className={flowStyles.primaryButton}
-                    type="button"
-                    onClick={() => markPickedUp(order.id)}
-                  >
-                    Выдать заказ
-                  </button>
-                </div>
+                <PickupCompletion orderId={order.id} />
               ) : null}
               {order.deliveryMode === "RESTAURANT_DELIVERY" &&
               order.status === "READY" ? (

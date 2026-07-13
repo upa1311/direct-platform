@@ -41,6 +41,8 @@ function RestaurantEditor({ restaurant }: { restaurant: Restaurant }) {
     commissionPercent: (restaurant.commissionRateBps / 100).toString(),
     defaultPreparationMinutes: restaurant.defaultPreparationMinutes.toString(),
     pickupEnabled: restaurant.pickupEnabled,
+    pickupCash: restaurant.pickupPaymentMethods.includes("CASH"),
+    pickupCard: restaurant.pickupPaymentMethods.includes("CARD"),
     status: restaurant.status,
     isAcceptingOrders: restaurant.isAcceptingOrders,
     minimumOrder: settings ? dollars(settings.minimumOrderCents) : "10.00",
@@ -82,6 +84,10 @@ function RestaurantEditor({ restaurant }: { restaurant: Restaurant }) {
       defaultPreparationMinutes:
         Number.parseInt(form.defaultPreparationMinutes, 10) || 25,
       pickupEnabled: form.pickupEnabled,
+      pickupPaymentMethods: [
+        ...(form.pickupCash ? (["CASH"] as const) : []),
+        ...(form.pickupCard ? (["CARD"] as const) : []),
+      ],
       status: form.status,
       isAcceptingOrders: form.isAcceptingOrders,
       restaurantDeliverySettings: isRestaurantType
@@ -235,6 +241,30 @@ function RestaurantEditor({ restaurant }: { restaurant: Restaurant }) {
             }
           />
           <span>Самовывоз</span>
+        </label>
+      </div>
+
+      <h4 className={flowStyles.sectionTitle}>Оплата на точке самовывоза</h4>
+      <div className={flowStyles.buttonRow}>
+        <label className={flowStyles.sizeOption}>
+          <input
+            type="checkbox"
+            checked={form.pickupCash}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, pickupCash: e.target.checked }))
+            }
+          />
+          <span>Наличные</span>
+        </label>
+        <label className={flowStyles.sizeOption}>
+          <input
+            type="checkbox"
+            checked={form.pickupCard}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, pickupCard: e.target.checked }))
+            }
+          />
+          <span>Карта</span>
         </label>
       </div>
 

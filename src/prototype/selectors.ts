@@ -10,10 +10,12 @@ import type {
   OrderHistoryEvent,
   OrderStatus,
   PaymentMethod,
+  PickupPaymentMethod,
   Promotion,
   PrototypeState,
   PublicationStatus,
   Restaurant,
+  SettlementEntry,
   ZoneId,
 } from "./models";
 import {
@@ -57,7 +59,23 @@ export const deliveryModeLabels: Record<DeliveryMode, string> = {
 export const paymentMethodLabels: Record<PaymentMethod, string> = {
   ONLINE: "Оплата онлайн",
   CASH: "Наличные",
+  PAY_AT_RESTAURANT: "Оплата в ресторане при получении",
 };
+
+export const pickupPaymentMethodLabels: Record<PickupPaymentMethod, string> = {
+  CASH: "Наличными",
+  CARD: "Картой",
+};
+
+/** Строка способов оплаты на точке самовывоза, либо null. */
+export function getPickupPaymentSummary(restaurant: Restaurant): string | null {
+  const cash = restaurant.pickupPaymentMethods.includes("CASH");
+  const card = restaurant.pickupPaymentMethods.includes("CARD");
+  if (cash && card) return "Наличными или картой";
+  if (cash) return "Наличными";
+  if (card) return "Картой";
+  return null;
+}
 
 export const orderStatusLabels: Record<OrderStatus, string> = {
   RESTAURANT_REVIEW: "Ресторан проверяет заказ",
@@ -80,6 +98,8 @@ export const paymentStatusLabels: Record<
   AWAITING_PAYMENT: "Ожидается оплата",
   PAID: "Оплачено",
   CASH_ON_DELIVERY: "Наличные при получении",
+  DUE_AT_PICKUP: "Оплата при получении",
+  PAID_AT_RESTAURANT: "Оплачено в ресторане",
 };
 
 export const orderActorLabels: Record<OrderHistoryEvent["actor"], string> = {
@@ -728,6 +748,71 @@ export function isAddressReady(
   state: Pick<PrototypeState, "zones">,
 ): boolean {
   return getValidatedAddressZoneId(address, state) !== null;
+}
+
+// --- Самовывоз: ledger и статистика ----------------------------------------
+
+export function getSettlementForOrder(
+  state: PrototypeState,
+  orderId: string,
+): SettlementEntry | null {
+  return (
+    state.settlements.find((entry) => entry.orderId === orderId) ?? null
+  );
+}
+
+/** Задолженность ресторана перед Direct: сумма ожидающих (PENDING) начислений. */
+export function getRestaurantPickupDebtCents(
+  state: PrototypeState,
+  restaurantId: string,
+): number {
+  return state.settlements
+    .filter(
+      (entry) =>
+        entry.restaurantId === restaurantId && entry.status === "PENDING",
+    )
+    .reduce((total, entry) => total + entry.amountCents, 0);
+}
+
+export interface PickupStats {
+  issued: number;
+  noShow: number;
+  noShowPercent: number;
+  suspiciousAfterReady: number;
+}
+
+function wasCancelledAfterReady(order: Order): boolean {
+  return (
+    order.status === "CANCELED" &&
+    order.deliveryMode === "PICKUP" &&
+    order.history.some(
+      (event) =>
+        event.fromStatus === "READY_FOR_PICKUP" &&
+        event.toStatus === "CANCELED",
+    )
+  );
+}
+
+export function getPickupStats(
+  state: PrototypeState,
+  restaurantId?: string,
+): PickupStats {
+  const pickupOrders = state.orders.filter(
+    (order) =>
+      order.deliveryMode === "PICKUP" &&
+      (restaurantId ? order.restaurant.id === restaurantId : true),
+  );
+  const issued = pickupOrders.filter(
+    (order) => order.status === "PICKED_UP",
+  ).length;
+  const noShow = pickupOrders.filter(wasCancelledAfterReady).length;
+  const total = issued + noShow;
+  return {
+    issued,
+    noShow,
+    noShowPercent: total > 0 ? Math.round((noShow / total) * 100) : 0,
+    suspiciousAfterReady: noShow,
+  };
 }
 
 export { TEST_RESTAURANT_ID };

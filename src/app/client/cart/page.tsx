@@ -12,6 +12,7 @@ import {
   formatMoney,
   getCartItemViews,
   getDeliveryModeProviderLabel,
+  getPickupPaymentSummary,
   getRestaurant,
   getSmallOrderMissingAmountCents,
   isAddressReady,
@@ -92,12 +93,14 @@ export default function ClientCartPage() {
     );
   }
 
-  const deliveryValue =
-    isPickup || pricing.deliveryFeeCents !== null
-      ? formatMoney(pricing.deliveryFeeCents ?? 0)
+  const deliveryValue = isPickup
+    ? "Бесплатно"
+    : pricing.deliveryFeeCents !== null
+      ? formatMoney(pricing.deliveryFeeCents)
       : isRestaurantDelivery
         ? "—"
         : "Укажите адрес";
+  const pickupPaymentSummary = getPickupPaymentSummary(restaurant);
 
   const promoProgress =
     pricing.promotionEligibleUnits > 0 &&
@@ -341,7 +344,20 @@ export default function ClientCartPage() {
 
           <section className={flowStyles.card}>
             <h2>Оплата</h2>
-            <p className={flowStyles.compactPayment}>Оплата онлайн</p>
+            {isPickup ? (
+              <>
+                <p className={flowStyles.compactPayment}>
+                  Оплата в ресторане при получении
+                </p>
+                {pickupPaymentSummary ? (
+                  <p className={flowStyles.summaryHint}>
+                    {pickupPaymentSummary}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className={flowStyles.compactPayment}>Оплата онлайн</p>
+            )}
           </section>
         </div>
 
@@ -428,7 +444,7 @@ export default function ClientCartPage() {
             <div
               className={`${flowStyles.summaryRow} ${flowStyles.summaryTotal}`}
             >
-              <dt>К оплате</dt>
+              <dt>{isPickup ? "К оплате в ресторане" : "К оплате"}</dt>
               <dd>
                 {pricing.customerTotalCents === null
                   ? "—"
@@ -446,11 +462,11 @@ export default function ClientCartPage() {
           {isRestaurantDelivery &&
           pricing.restaurantDeliveryStatus === "BELOW_MINIMUM" &&
           pricing.restaurantDeliveryMissingCents !== null ? (
-            <div className={flowStyles.warningNotice}>
+            <p className={flowStyles.summaryHint} role="status">
               До минимальной суммы заказа не хватает{" "}
               {formatMoney(pricing.restaurantDeliveryMissingCents)}. Добавьте
               блюда, чтобы оформить доставку, или воспользуйтесь самовывозом.
-            </div>
+            </p>
           ) : null}
           {isRestaurantDelivery &&
           pricing.restaurantDeliveryStatus === "OK" &&

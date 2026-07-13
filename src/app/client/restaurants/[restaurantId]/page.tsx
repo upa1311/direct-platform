@@ -186,9 +186,7 @@ export default function ClientRestaurantPage() {
                   <span>{menuItem.available ? "В наличии" : "Недоступно"}</span>
                 </div>
                 {isEligible ? (
-                  <p className={flowStyles.itemPromoTag}>
-                    Участвует в акции 3+1
-                  </p>
+                  <p className={flowStyles.itemPromoTag}>Участвует в акции</p>
                 ) : null}
                 {hasVariants ? (
                   <div
