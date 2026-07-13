@@ -1055,6 +1055,12 @@
   font-size: 18px;
 }
 
+.summaryHint {
+  margin-top: 8px;
+  color: #59625c;
+  font-size: 13px;
+}
+
 .submitArea {
   display: grid;
   gap: 12px;

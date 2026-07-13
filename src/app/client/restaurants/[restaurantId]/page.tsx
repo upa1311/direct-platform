@@ -115,7 +115,6 @@ export default function ClientRestaurantPage() {
         {promotion ? (
           <div className={flowStyles.restaurantPromo}>
             <strong>{promotion.title}</strong>
-            <span>Акция повторяется: при 8 пиццах две бесплатно</span>
           </div>
         ) : null}
         {restaurant.restaurantDeliverySettings ? (

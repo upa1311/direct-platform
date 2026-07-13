@@ -289,7 +289,7 @@ const defaultPromotions: Promotion[] = [
   {
     id: "promo-restaurant-2-pizza",
     restaurantId: "restaurant-2",
-    title: "3 пиццы + четвёртая в подарок",
+    title: "Купи 3 пиццы и получи четвёртую в подарок",
     enabled: true,
     type: "BUY_N_GET_M_CHEAPEST_FREE",
     buyQuantity: 3,
@@ -300,7 +300,7 @@ const defaultPromotions: Promotion[] = [
       "restaurant-2-item-2",
       "restaurant-2-item-3",
     ],
-    displayText: "3 пиццы + 4-я в подарок",
+    displayText: "Купи 3 пиццы и получи четвёртую в подарок",
     createdAt: INITIAL_TIMESTAMP,
     updatedAt: INITIAL_TIMESTAMP,
   },

@@ -18,7 +18,6 @@ import {
   isCustomerNameValid,
   isCustomerPhoneValid,
   pluralizePizza,
-  pluralizePizzaNominative,
 } from "@/prototype/selectors";
 
 export default function ClientCartPage() {
@@ -199,15 +198,8 @@ export default function ClientCartPage() {
                 </div>
               ))}
             </div>
-            {pricing.appliedPromotion ? (
-              <div className={flowStyles.zoneNotice}>
-                Подарок применён: {pricing.promotionFreeUnitCount}{" "}
-                {pluralizePizzaNominative(pricing.promotionFreeUnitCount)}{" "}
-                бесплатно
-                {promoProgress ? `. ${promoProgress}` : ""}
-              </div>
-            ) : promoProgress ? (
-              <div className={flowStyles.zoneNotice}>{promoProgress}</div>
+            {promoProgress ? (
+              <p className={flowStyles.summaryHint}>{promoProgress}</p>
             ) : null}
           </section>
 
@@ -401,12 +393,28 @@ export default function ClientCartPage() {
               <dt>Еда</dt>
               <dd>{formatMoney(pricing.foodSubtotalBeforeDiscountsCents)}</dd>
             </div>
-            {pricing.appliedPromotion ? (
-              <div className={flowStyles.summaryRow}>
-                <dt>Акция 3+1</dt>
-                <dd>−{formatMoney(pricing.promotionDiscountCents)}</dd>
-              </div>
-            ) : null}
+            {itemViews
+              .filter((view) => view.promotionDiscountCents > 0)
+              .map((view) => {
+                const freeUnits =
+                  view.baseUnitPriceCents > 0
+                    ? Math.round(
+                        view.promotionDiscountCents / view.baseUnitPriceCents,
+                      )
+                    : 0;
+                return (
+                  <div
+                    className={flowStyles.summaryRow}
+                    key={`discount-${view.menuItem.id}-${view.cartItem.variantId ?? "base"}`}
+                  >
+                    <dt>
+                      Скидка: {view.menuItem.name}
+                      {freeUnits > 1 ? ` × ${freeUnits}` : ""}
+                    </dt>
+                    <dd>−{formatMoney(view.promotionDiscountCents)}</dd>
+                  </div>
+                );
+              })}
             <div className={flowStyles.summaryRow}>
               <dt>{isPickup ? "Самовывоз" : "Доставка"}</dt>
               <dd>{deliveryValue}</dd>
@@ -441,17 +449,23 @@ export default function ClientCartPage() {
             <div className={flowStyles.warningNotice}>
               До минимальной суммы заказа не хватает{" "}
               {formatMoney(pricing.restaurantDeliveryMissingCents)}. Добавьте
-              блюда, чтобы оформить доставку.
+              блюда, чтобы оформить доставку, или воспользуйтесь самовывозом.
             </div>
           ) : null}
           {isRestaurantDelivery &&
           pricing.restaurantDeliveryStatus === "OK" &&
           pricing.freeDeliveryRemainingCents !== null &&
           pricing.freeDeliveryRemainingCents > 0 ? (
-            <div className={flowStyles.zoneNotice}>
+            <p className={flowStyles.summaryHint}>
               До бесплатной доставки осталось{" "}
-              {formatMoney(pricing.freeDeliveryRemainingCents)}.
-            </div>
+              {formatMoney(pricing.freeDeliveryRemainingCents)}
+            </p>
+          ) : null}
+          {isRestaurantDelivery &&
+          pricing.restaurantDeliveryStatus === "OK" &&
+          pricing.freeDeliveryThresholdCents !== null &&
+          pricing.deliveryFeeCents === 0 ? (
+            <p className={flowStyles.summaryHint}>Доставка бесплатно</p>
           ) : null}
           {pricing.smallOrderFeeCents > 0 ? (
             <div className={flowStyles.warningNotice}>

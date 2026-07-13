@@ -169,7 +169,7 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
                 <dl className={styles.drawerSummary}>
                   <div><dt>Еда</dt><dd>{formatMoney(pricing.foodSubtotalBeforeDiscountsCents)}</dd></div>
                   {pricing.appliedPromotion ? (
-                    <div><dt>Акция 3+1</dt><dd>−{formatMoney(pricing.promotionDiscountCents)}</dd></div>
+                    <div><dt>Скидка</dt><dd>−{formatMoney(pricing.promotionDiscountCents)}</dd></div>
                   ) : null}
                   <div><dt>{fulfillmentLabel}</dt><dd>{fulfillmentValue}</dd></div>
                   {pricing.smallOrderFeeCents > 0 ? (

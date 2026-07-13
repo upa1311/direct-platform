@@ -114,7 +114,7 @@ export default function ClientOrderPage() {
             <div className={flowStyles.summaryRow}><dt>Еда</dt><dd>{formatMoney(order.financials.foodSubtotalBeforeDiscountsCents)}</dd></div>
             {order.financials.appliedPromotion ? (
               <div className={flowStyles.summaryRow}>
-                <dt>{order.financials.appliedPromotion.title}</dt>
+                <dt>Скидка: {order.financials.appliedPromotion.title}</dt>
                 <dd>−{formatMoney(order.financials.promotionDiscountCents)}</dd>
               </div>
             ) : null}

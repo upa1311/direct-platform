@@ -262,6 +262,23 @@ export function computeRestaurantDeliveryFinancials(
 }
 
 /**
+ * Нужно ли автоматически подтвердить адрес при открытии ресторана.
+ * Только для доставки с валидным (известным) адресом, ещё не подтверждённым.
+ * Для самовывоза и невалидного адреса — false.
+ */
+export function shouldAutoConfirmAddress(params: {
+  fulfillmentChoice: FulfillmentChoice;
+  isAddressConfirmed: boolean;
+  hasValidAddress: boolean;
+}): boolean {
+  return (
+    params.fulfillmentChoice === "DELIVERY" &&
+    !params.isAddressConfirmed &&
+    params.hasValidAddress
+  );
+}
+
+/**
  * Миграция клиентского способа получения из schema v4 в v5.
  * Старый `PICKUP` остаётся самовывозом, всё остальное (PLATFORM_DRIVER,
  * null, неизвестное) становится доставкой по умолчанию.

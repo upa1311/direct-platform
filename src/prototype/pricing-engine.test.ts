@@ -10,6 +10,7 @@ import {
   computeVariantUnitPriceCents,
   migrateFulfillmentChoice,
   resolveDeliveryMode,
+  shouldAutoConfirmAddress,
   type PromotionConfig,
   type RestaurantDeliverySettings,
 } from "./pricing-engine.ts";
@@ -177,6 +178,49 @@ test("RESTAURANT финансы: бесплатная доставка не да
   });
   assert.equal(r.deliveryFeeCents, 0);
   assert.equal(r.restaurantPayoutBeforeBankFeeCents, 2600 - 182);
+});
+
+test("автоподтверждение адреса: только для валидной доставки", () => {
+  // валидный адрес, доставка, не подтверждён → подтверждаем
+  assert.equal(
+    shouldAutoConfirmAddress({
+      fulfillmentChoice: "DELIVERY",
+      isAddressConfirmed: false,
+      hasValidAddress: true,
+    }),
+    true,
+  );
+});
+
+test("автоподтверждение адреса: невалидный адрес не подтверждается", () => {
+  assert.equal(
+    shouldAutoConfirmAddress({
+      fulfillmentChoice: "DELIVERY",
+      isAddressConfirmed: false,
+      hasValidAddress: false,
+    }),
+    false,
+  );
+});
+
+test("автоподтверждение адреса: PICKUP не требует подтверждения", () => {
+  assert.equal(
+    shouldAutoConfirmAddress({
+      fulfillmentChoice: "PICKUP",
+      isAddressConfirmed: false,
+      hasValidAddress: true,
+    }),
+    false,
+  );
+  // уже подтверждён — повторно не трогаем
+  assert.equal(
+    shouldAutoConfirmAddress({
+      fulfillmentChoice: "DELIVERY",
+      isAddressConfirmed: true,
+      hasValidAddress: true,
+    }),
+    false,
+  );
 });
 
 test("migrateFulfillmentChoice: v4 → v5", () => {

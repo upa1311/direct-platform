@@ -18,6 +18,7 @@ import {
   sortPublishedRestaurants,
   type CatalogSort,
 } from "@/prototype/selectors";
+import { shouldAutoConfirmAddress } from "@/prototype/pricing-engine";
 
 export default function ClientCatalogPage() {
   const { state, updateAddress, setFulfillmentChoice } = usePrototype();
@@ -203,6 +204,17 @@ export default function ClientCatalogPage() {
               <Link
                 className={flowStyles.restaurantCardLink}
                 href={`/client/restaurants/${restaurant.id}`}
+                onClick={() => {
+                  if (
+                    shouldAutoConfirmAddress({
+                      fulfillmentChoice: state.cart.fulfillmentChoice,
+                      isAddressConfirmed,
+                      hasValidAddress,
+                    })
+                  ) {
+                    confirmAddress();
+                  }
+                }}
               >
                 <div>
                   <div className={flowStyles.restaurantTitleRow}>
