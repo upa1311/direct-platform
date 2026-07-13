@@ -66,6 +66,7 @@ function RestaurantEditor({ restaurant }: { restaurant: Restaurant }) {
     ) as Record<ZoneId, boolean>,
   });
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   const isRestaurantType = form.deliveryProvider === "RESTAURANT";
 
@@ -106,7 +107,13 @@ function RestaurantEditor({ restaurant }: { restaurant: Restaurant }) {
           }
         : restaurant.restaurantDeliverySettings,
     };
-    updateRestaurantEntry(restaurant.id, patch);
+    const result = updateRestaurantEntry(restaurant.id, patch);
+    if (!result.ok) {
+      setSaveError(result.error ?? "Не удалось сохранить ресторан.");
+      setSaved(false);
+      return;
+    }
+    setSaveError("");
     setSaved(true);
     window.setTimeout(() => setSaved(false), 1500);
   };
@@ -341,6 +348,11 @@ function RestaurantEditor({ restaurant }: { restaurant: Restaurant }) {
         <p className={flowStyles.feedback} aria-live="polite">
           {saved ? "Сохранено. Существующие заказы не изменены." : ""}
         </p>
+        {saveError ? (
+          <div className={flowStyles.warningNotice} role="alert">
+            {saveError}
+          </div>
+        ) : null}
       </div>
     </article>
   );
@@ -367,9 +379,14 @@ function CreateRestaurantForm() {
       status: "PUBLISHED",
       isAcceptingOrders: true,
       restaurantDeliverySettings: null,
+      pickupPaymentMethods: ["CASH", "CARD"],
     };
-    const id = createRestaurantEntry(input);
-    setCreated(`Создан ${id}. Отредактируйте детали ниже.`);
+    const result = createRestaurantEntry(input);
+    if (!result.restaurantId) {
+      setCreated(result.error ?? "Не удалось создать ресторан.");
+      return;
+    }
+    setCreated(`Создан ${result.restaurantId}. Отредактируйте детали ниже.`);
     setName("");
   };
 

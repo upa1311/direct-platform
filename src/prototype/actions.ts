@@ -35,7 +35,11 @@ import {
   isCustomerPhoneValid,
   WORKING_RESTAURANT_IDS,
 } from "./selectors";
-import { computePickupSettlement, generatePickupCode } from "./pricing-engine";
+import {
+  computePickupSettlement,
+  generatePickupCode,
+  validatePickupPayment,
+} from "./pricing-engine";
 import { finalizeMutation } from "./prototype-store";
 
 export interface ActionResult<T> {
@@ -1065,10 +1069,24 @@ export interface RestaurantFormInput {
   pickupPaymentMethods?: PickupPaymentMethod[];
 }
 
+export interface CreateRestaurantResult {
+  restaurantId: string | null;
+  error: string | null;
+}
+
 export function createRestaurant(
   state: PrototypeState,
   input: RestaurantFormInput,
-): ActionResult<{ restaurantId: string }> {
+): ActionResult<CreateRestaurantResult> {
+  const pickupPaymentMethods = input.pickupPaymentMethods ?? ["CASH", "CARD"];
+  const validationError = validatePickupPayment(
+    input.pickupEnabled,
+    pickupPaymentMethods,
+  );
+  if (validationError) {
+    return { state, result: { restaurantId: null, error: validationError } };
+  }
+
   const id = nextRestaurantId(state);
   const restaurant: Restaurant = {
     id,
@@ -1093,7 +1111,7 @@ export function createRestaurant(
         ? (input.restaurantDeliverySettings ??
           defaultRestaurantDeliverySettings())
         : input.restaurantDeliverySettings,
-    pickupPaymentMethods: input.pickupPaymentMethods ?? ["CASH", "CARD"],
+    pickupPaymentMethods,
     pickupCommissionRateBps: 1500,
     pickupPrepaymentThresholdCents: null,
   };
@@ -1101,24 +1119,39 @@ export function createRestaurant(
     ...state,
     restaurants: [...state.restaurants, restaurant],
   });
-  return { state: nextState, result: { restaurantId: id } };
+  return { state: nextState, result: { restaurantId: id, error: null } };
+}
+
+export interface UpdateRestaurantResult {
+  ok: boolean;
+  error: string | null;
 }
 
 export function updateRestaurant(
   state: PrototypeState,
   restaurantId: string,
   patch: Partial<RestaurantFormInput>,
-): PrototypeState {
+): ActionResult<UpdateRestaurantResult> {
   const target = state.restaurants.find((r) => r.id === restaurantId);
   if (!target) {
-    return state;
+    return { state, result: { ok: false, error: "Ресторан не найден." } };
   }
   const deliveryProvider = patch.deliveryProvider ?? target.deliveryProvider;
   const pickupEnabled = patch.pickupEnabled ?? target.pickupEnabled;
+  const pickupPaymentMethods =
+    patch.pickupPaymentMethods ?? target.pickupPaymentMethods;
   const settings =
     patch.restaurantDeliverySettings !== undefined
       ? patch.restaurantDeliverySettings
       : target.restaurantDeliverySettings;
+
+  const validationError = validatePickupPayment(
+    pickupEnabled,
+    pickupPaymentMethods,
+  );
+  if (validationError) {
+    return { state, result: { ok: false, error: validationError } };
+  }
 
   const nextRestaurant: Restaurant = {
     ...target,
@@ -1138,16 +1171,16 @@ export function updateRestaurant(
       deliveryProvider === "RESTAURANT"
         ? (settings ?? defaultRestaurantDeliverySettings())
         : settings,
-    pickupPaymentMethods:
-      patch.pickupPaymentMethods ?? target.pickupPaymentMethods,
+    pickupPaymentMethods,
   };
 
-  return finalizeMutation(state, {
+  const nextState = finalizeMutation(state, {
     ...state,
     restaurants: state.restaurants.map((restaurant) =>
       restaurant.id === restaurantId ? nextRestaurant : restaurant,
     ),
   });
+  return { state: nextState, result: { ok: true, error: null } };
 }
 
 export function updateMenuItemVariants(

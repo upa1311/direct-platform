@@ -7,11 +7,19 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatMoney,
+  getSettlementForOrder,
   getZoneName,
   orderStatusLabels,
   paymentMethodLabels,
   paymentStatusLabels,
 } from "@/prototype/selectors";
+
+const SETTLEMENT_STATUS_LABELS: Record<string, string> = {
+  PENDING: "начислена, ожидает расчёта",
+  NETTED: "начислена, взаимозачёт",
+  PAID: "начислена, оплачена",
+  WAIVED: "начислена, списана",
+};
 
 export default function AdminOrdersPage() {
   const { state } = usePrototype();
@@ -27,7 +35,9 @@ export default function AdminOrdersPage() {
         <div className={flowStyles.emptyState}>Созданных заказов пока нет.</div>
       ) : (
         <div className={flowStyles.orderList}>
-          {[...state.orders].reverse().map((order) => (
+          {[...state.orders].reverse().map((order) => {
+            const settlement = getSettlementForOrder(state, order.id);
+            return (
             <article className={flowStyles.orderCard} key={order.id}>
               <div className={flowStyles.orderHeader}>
                 <div>
@@ -94,60 +104,143 @@ export default function AdminOrdersPage() {
 
                 <section>
                   <h3 className={flowStyles.sectionTitle}>Финансовый расчёт</h3>
-                  <dl className={flowStyles.definitionList}>
-                    <div className={flowStyles.definitionRow}>
-                      <dt>Стоимость еды</dt>
-                      <dd>{formatMoney(order.financials.foodSubtotalCents)}</dd>
-                    </div>
-                    <div className={flowStyles.definitionRow}>
-                      <dt>Доставка</dt>
-                      <dd>{formatMoney(order.financials.deliveryFeeCents)}</dd>
-                    </div>
-                    <div className={flowStyles.definitionRow}>
-                      <dt>Комиссия ресторана</dt>
-                      <dd>
-                        {formatMoney(
-                          order.financials.restaurantCommissionCents,
-                        )}
-                      </dd>
-                    </div>
-                    <div className={flowStyles.definitionRow}>
-                      <dt>Доплата за небольшой заказ</dt>
-                      <dd>{formatMoney(order.financials.smallOrderFeeCents)}</dd>
-                    </div>
-                    <div className={flowStyles.definitionRow}>
-                      <dt>Выплата ресторану до банковской комиссии</dt>
-                      <dd>
-                        {formatMoney(
-                          order.financials
-                            .restaurantPayoutBeforeBankFeeCents,
-                        )}
-                      </dd>
-                    </div>
-                    <div className={flowStyles.definitionRow}>
-                      <dt>Будущая выплата водителю</dt>
-                      <dd>{formatMoney(order.financials.driverPayoutCents)}</dd>
-                    </div>
-                    <div className={flowStyles.definitionRow}>
-                      <dt>Валовой доход Direct</dt>
-                      <dd>
-                        {formatMoney(
-                          order.financials.platformGrossRevenueCents,
-                        )}
-                      </dd>
-                    </div>
-                    <div className={flowStyles.definitionRow}>
-                      <dt>Итог клиента</dt>
-                      <dd>{formatMoney(order.financials.customerTotalCents)}</dd>
-                    </div>
-                  </dl>
+                  {order.deliveryMode === "PICKUP" ? (
+                    <dl className={flowStyles.definitionList}>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Стоимость еды</dt>
+                        <dd>
+                          {formatMoney(order.financials.foodSubtotalCents)}
+                        </dd>
+                      </div>
+                      {order.financials.smallOrderFeeCents > 0 ? (
+                        <div className={flowStyles.definitionRow}>
+                          <dt>Доплата за небольшой заказ</dt>
+                          <dd>
+                            {formatMoney(order.financials.smallOrderFeeCents)}
+                          </dd>
+                        </div>
+                      ) : null}
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Получено рестораном от клиента</dt>
+                        <dd>
+                          {formatMoney(
+                            order.financials
+                              .restaurantCollectedFromCustomerCents,
+                          )}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Расчётная комиссия Direct</dt>
+                        <dd>
+                          {formatMoney(
+                            order.financials.restaurantCommissionCents,
+                          )}
+                        </dd>
+                      </div>
+                      {settlement ? (
+                        <>
+                          <div className={flowStyles.definitionRow}>
+                            <dt>Начисленная комиссия Direct</dt>
+                            <dd>{formatMoney(settlement.amountCents)}</dd>
+                          </div>
+                          <div className={flowStyles.definitionRow}>
+                            <dt>Статус комиссии</dt>
+                            <dd>
+                              {SETTLEMENT_STATUS_LABELS[settlement.status] ??
+                                settlement.status}
+                            </dd>
+                          </div>
+                        </>
+                      ) : (
+                        <div className={flowStyles.definitionRow}>
+                          <dt>Статус комиссии</dt>
+                          <dd>не начислена</dd>
+                        </div>
+                      )}
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Чистая сумма ресторана после комиссии</dt>
+                        <dd>
+                          {formatMoney(
+                            order.financials
+                              .restaurantNetAfterPlatformCommissionCents,
+                          )}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Выплата от Direct</dt>
+                        <dd>не применяется — деньги получает ресторан</dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Итог клиента</dt>
+                        <dd>
+                          {formatMoney(order.financials.customerTotalCents)}
+                        </dd>
+                      </div>
+                    </dl>
+                  ) : (
+                    <dl className={flowStyles.definitionList}>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Стоимость еды</dt>
+                        <dd>
+                          {formatMoney(order.financials.foodSubtotalCents)}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Доставка</dt>
+                        <dd>{formatMoney(order.financials.deliveryFeeCents)}</dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Комиссия ресторана</dt>
+                        <dd>
+                          {formatMoney(
+                            order.financials.restaurantCommissionCents,
+                          )}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Доплата за небольшой заказ</dt>
+                        <dd>
+                          {formatMoney(order.financials.smallOrderFeeCents)}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Выплата ресторану до банковской комиссии</dt>
+                        <dd>
+                          {formatMoney(
+                            order.financials.restaurantPayoutBeforeBankFeeCents,
+                          )}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Будущая выплата водителю</dt>
+                        <dd>
+                          {formatMoney(order.financials.driverPayoutCents)}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Валовой доход Direct</dt>
+                        <dd>
+                          {formatMoney(
+                            order.financials.platformGrossRevenueCents,
+                          )}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Итог клиента</dt>
+                        <dd>
+                          {formatMoney(order.financials.customerTotalCents)}
+                        </dd>
+                      </div>
+                    </dl>
+                  )}
                 </section>
               </div>
 
               <h3 className={flowStyles.sectionTitle}>История статусов</h3>
               <OrderHistory events={order.history} />
             </article>
-          ))}
+            );
+          })}
         </div>
       )}
     </>

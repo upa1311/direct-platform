@@ -410,27 +410,51 @@ export function normalizePrototypeState(
 }
 
 /**
- * Миграция любой предыдущей версии (v5/v4/v3/v2) в v6. Seed-данные берутся
- * из актуальных дефолтов, пользовательские сохраняются. Старым pickup-заказам
- * комиссия задним числом НЕ начисляется (settlements пустой).
+ * Миграция любой предыдущей версии (v5/v4/v3/v2) в v6. Все корректные данные из
+ * исходного состояния СОХРАНЯЮТСЯ (настройки, зоны, тарифы, рестораны, меню,
+ * акции, клиент, водители, корзина, заказы, счётчик номеров); дефолты берутся
+ * только при отсутствии соответствующих данных. Каждый ресторан проходит
+ * нормализацию полей v6, но не заменяется дефолтным. Старым pickup-заказам
+ * комиссия задним числом НЕ начисляется (settlements начинается пустым).
  */
 export function upgradeToV6(raw: unknown): PrototypeState {
   const source = isRecord(raw) ? raw : {};
   const defaults = createDefaultState();
-  return normalizePrototypeState({
+  const merged: PrototypeState = {
     ...defaults,
     revision: num(source.revision, 0),
     nextOrderNumber: num(source.nextOrderNumber, defaults.nextOrderNumber),
+    platformSettings: isRecord(source.platformSettings)
+      ? (source.platformSettings as unknown as PrototypeState["platformSettings"])
+      : defaults.platformSettings,
+    zones: Array.isArray(source.zones)
+      ? (source.zones as unknown as PrototypeState["zones"])
+      : defaults.zones,
+    tariffs: isRecord(source.tariffs)
+      ? (source.tariffs as unknown as PrototypeState["tariffs"])
+      : defaults.tariffs,
+    restaurants:
+      Array.isArray(source.restaurants) && source.restaurants.length > 0
+        ? (source.restaurants as unknown as PrototypeState["restaurants"])
+        : defaults.restaurants,
+    menuItems:
+      Array.isArray(source.menuItems) && source.menuItems.length > 0
+        ? (source.menuItems as unknown as PrototypeState["menuItems"])
+        : defaults.menuItems,
+    promotions: Array.isArray(source.promotions)
+      ? (source.promotions as unknown as PrototypeState["promotions"])
+      : defaults.promotions,
     customer: normalizeCustomer(source.customer, defaults.customer),
     drivers: Array.isArray(source.drivers)
       ? (source.drivers as PrototypeState["drivers"])
       : defaults.drivers,
-    cart: normalizeCart(source.cart, defaults.cart) as PrototypeState["cart"],
+    cart: normalizeCart(source.cart, defaults.cart),
     orders: Array.isArray(source.orders)
       ? (source.orders as unknown[]).map(normalizeOrder)
       : [],
     settlements: [],
-  });
+  };
+  return normalizePrototypeState(merged);
 }
 
 export function parseStoredState(

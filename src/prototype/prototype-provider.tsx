@@ -41,7 +41,9 @@ import {
   type CompletePickupResult,
   type CreateOrderOptions,
   type CreateOrderResult,
+  type CreateRestaurantResult,
   type RestaurantFormInput,
+  type UpdateRestaurantResult,
 } from "./actions";
 import { createDefaultState } from "./default-state";
 import type {
@@ -103,11 +105,11 @@ interface PrototypeContextValue {
   markDelivered: (orderId: string) => void;
   saveTariffMatrix: (tariffs: TariffMatrix) => void;
   restoreTariffs: () => void;
-  createRestaurantEntry: (input: RestaurantFormInput) => string;
+  createRestaurantEntry: (input: RestaurantFormInput) => CreateRestaurantResult;
   updateRestaurantEntry: (
     restaurantId: string,
     patch: Partial<RestaurantFormInput>,
-  ) => void;
+  ) => UpdateRestaurantResult;
   setMenuItemVariants: (
     menuItemId: string,
     variants: MenuItemVariant[] | null,
@@ -379,15 +381,21 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   const createRestaurantEntry = useCallback(
     (input: RestaurantFormInput) => {
       const action = createRestaurant(stateRef.current, input);
-      replaceState(action.state);
-      return action.result.restaurantId;
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
     },
     [replaceState],
   );
 
   const updateRestaurantEntry = useCallback(
     (restaurantId: string, patch: Partial<RestaurantFormInput>) => {
-      replaceState(updateRestaurant(stateRef.current, restaurantId, patch));
+      const action = updateRestaurant(stateRef.current, restaurantId, patch);
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
     },
     [replaceState],
   );

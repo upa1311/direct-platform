@@ -308,6 +308,23 @@ export function computePickupSettlement(
   };
 }
 
+export const PICKUP_PAYMENT_REQUIRED_MESSAGE =
+  "Для самовывоза выберите оплату наличными, картой или оба способа.";
+
+/**
+ * Доменная проверка: включённый самовывоз обязан иметь хотя бы один способ
+ * оплаты на точке. Возвращает текст ошибки или null.
+ */
+export function validatePickupPayment(
+  pickupEnabled: boolean,
+  pickupPaymentMethods: readonly string[],
+): string | null {
+  if (pickupEnabled && pickupPaymentMethods.length === 0) {
+    return PICKUP_PAYMENT_REQUIRED_MESSAGE;
+  }
+  return null;
+}
+
 /**
  * Детерминированный 4-значный код выдачи самовывоза из номера заказа.
  * В прототипе достаточно детерминированного значения; реальная система

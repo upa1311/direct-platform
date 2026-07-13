@@ -100,7 +100,16 @@ export default function ClientOrderPage() {
           {order.deliveryMode === "PICKUP" &&
           order.pickupCode &&
           !order.pickupCodeUsed &&
-          order.status !== "CANCELED" ? (
+          (order.status === "RESTAURANT_REVIEW" ||
+            order.status === "PREPARING") ? (
+            <p className={flowStyles.summaryHint}>
+              Код получения появится, когда заказ будет готов.
+            </p>
+          ) : null}
+          {order.deliveryMode === "PICKUP" &&
+          order.pickupCode &&
+          !order.pickupCodeUsed &&
+          order.status === "READY_FOR_PICKUP" ? (
             <div className={flowStyles.zoneNotice}>
               Код получения: <strong>{order.pickupCode}</strong>. Назовите его в
               ресторане при получении и оплате заказа.

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test \"src/**/*.test.ts\""
+    "test": "node --import ./scripts/ts-node-register.mjs --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "geist": "^1.7.2",
