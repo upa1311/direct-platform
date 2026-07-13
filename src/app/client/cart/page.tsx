@@ -155,46 +155,6 @@ export default function ClientCartPage() {
             </div>
           </section>
 
-          <section className={flowStyles.card} id="fulfillment-method">
-            <h2>Как получить заказ</h2>
-            <fieldset
-              className={flowStyles.fulfillmentOptions}
-              aria-label="Способ получения"
-            >
-              <label className={flowStyles.fulfillmentOption}>
-                <input
-                  type="radio"
-                  name="checkout-delivery-mode"
-                  checked={isDelivery}
-                  onChange={() => setDeliveryMode("PLATFORM_DRIVER")}
-                />
-                <span>Доставка</span>
-              </label>
-              <label className={flowStyles.fulfillmentOption}>
-                <input
-                  type="radio"
-                  name="checkout-delivery-mode"
-                  checked={isPickup}
-                  onChange={() => setDeliveryMode("PICKUP")}
-                />
-                <span>Самовывоз</span>
-              </label>
-            </fieldset>
-            {isDelivery ? (
-              <p className={flowStyles.fulfillmentSummary}>
-                Доставит водитель Direct
-              </p>
-            ) : isPickup ? (
-              <p className={flowStyles.fulfillmentSummary}>
-                Самовывоз из ресторана
-              </p>
-            ) : (
-              <p className={flowStyles.fulfillmentHint}>
-                Выберите доставку или самовывоз
-              </p>
-            )}
-          </section>
-
           <section className={flowStyles.card}>
             <h2>Контактные данные</h2>
             <div className={flowStyles.fieldGrid}>
@@ -330,6 +290,50 @@ export default function ClientCartPage() {
         </div>
 
         <aside className={flowStyles.card}>
+          <div
+            id="fulfillment-method"
+            className={flowStyles.summaryFulfillment}
+          >
+            <h3 className={flowStyles.summaryFulfillmentTitle}>
+              Как получить заказ
+            </h3>
+            <fieldset
+              className={flowStyles.fulfillmentOptionsCompact}
+              aria-label="Способ получения"
+            >
+              <label className={flowStyles.fulfillmentOptionCompact}>
+                <input
+                  type="radio"
+                  name="checkout-delivery-mode"
+                  checked={isDelivery}
+                  onChange={() => setDeliveryMode("PLATFORM_DRIVER")}
+                />
+                <span>Доставка</span>
+              </label>
+              <label className={flowStyles.fulfillmentOptionCompact}>
+                <input
+                  type="radio"
+                  name="checkout-delivery-mode"
+                  checked={isPickup}
+                  onChange={() => setDeliveryMode("PICKUP")}
+                />
+                <span>Самовывоз</span>
+              </label>
+            </fieldset>
+            {isDelivery ? (
+              <p className={flowStyles.summaryFulfillmentNote}>
+                Доставит водитель Direct
+              </p>
+            ) : isPickup ? (
+              <p className={flowStyles.summaryFulfillmentNote}>
+                Самовывоз из ресторана
+              </p>
+            ) : (
+              <p className={flowStyles.summaryFulfillmentNote}>
+                Выберите доставку или самовывоз
+              </p>
+            )}
+          </div>
           <h2>Итого</h2>
           <dl className={flowStyles.summaryList}>
             <div className={flowStyles.summaryRow}>

@@ -99,7 +99,7 @@ export default function ClientCatalogPage() {
                     Забрать самому
                   </button>
                 </div>
-                <p>От адреса зависит стоимость доставки.</p>
+                <p>Стоимость доставки зависит от адреса.</p>
                 <div className={flowStyles.catalogAddressFields}>
                   <label className={flowStyles.field}>
                     <span>Улица</span>

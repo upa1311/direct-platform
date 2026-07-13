@@ -369,6 +369,65 @@
   color: #7b837e;
 }
 
+.summaryFulfillment {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #ecefec;
+}
+
+.summaryFulfillmentTitle {
+  margin: 0;
+  color: #202522;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.fulfillmentOptionsCompact {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.fulfillmentOptionCompact {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid #d8ddd8;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  color: #39413c;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.fulfillmentOptionCompact:has(input:checked) {
+  border-color: #c66a36;
+  background: #fff7f1;
+  color: #7f3d1c;
+}
+
+.fulfillmentOptionCompact input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #b85f2c;
+}
+
+.summaryFulfillment .summaryFulfillmentNote {
+  margin: 0;
+  color: #7b837e;
+  font-size: 12px;
+}
+
 .card.catalogAddressCollapsed {
   display: block;
   padding: 14px 18px;
@@ -425,8 +484,9 @@
 
 .catalogAddressFields {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 130px;
+  grid-template-columns: minmax(0, 400px) 140px;
   gap: 12px;
+  max-width: 100%;
 }
 
 .catalogAddress > .zoneNotice,
