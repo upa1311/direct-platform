@@ -11,7 +11,6 @@ import {
   calculateCartPricing,
   formatMoney,
   getCartItemViews,
-  getDeliveryProviderLabel,
   getRestaurant,
   getSmallOrderMissingAmountCents,
   isAddressReady,
@@ -40,9 +39,6 @@ export default function ClientCartPage() {
     state.cart.address.street.trim() || state.cart.address.house.trim(),
   );
   const addressIsReady = isAddressReady(state.cart.address, state);
-  const deliveryProviderLabel = restaurant
-    ? getDeliveryProviderLabel(restaurant)
-    : null;
   const customerNameIsValid = isCustomerNameValid(state.customer.name);
   const customerPhoneIsValid = isCustomerPhoneValid(state.customer.phone);
   const canSubmitOrder =
@@ -274,11 +270,6 @@ export default function ClientCartPage() {
           <section className={flowStyles.card}>
             <h2>Оплата</h2>
             <p className={flowStyles.compactPayment}>Оплата онлайн</p>
-            {deliveryProviderLabel ? (
-              <p className={flowStyles.deliveryProvider}>
-                {deliveryProviderLabel}
-              </p>
-            ) : null}
           </section>
         </div>
 

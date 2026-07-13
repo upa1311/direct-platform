@@ -11,7 +11,6 @@ import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   formatMoney,
-  getDeliveryProviderLabel,
   getRestaurant,
   getRestaurantMenu,
 } from "@/prototype/selectors";
@@ -47,7 +46,6 @@ export default function ClientRestaurantPage() {
     restaurant.isAcceptingOrders &&
     restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
     restaurant.paymentMethods.includes("ONLINE");
-  const deliveryProviderLabel = getDeliveryProviderLabel(restaurant);
   const cartQuantity =
     state.cart.restaurantId === restaurant.id
       ? state.cart.items.reduce((total, item) => total + item.quantity, 0)
@@ -102,11 +100,6 @@ export default function ClientRestaurantPage() {
           <span>{restaurant.address}</span>
           <span>Обычно {restaurant.defaultPreparationMinutes} минут</span>
         </div>
-        {canOrder && deliveryProviderLabel ? (
-          <p className={flowStyles.deliveryProvider}>
-            {deliveryProviderLabel}
-          </p>
-        ) : null}
       </div>
 
       {!canOrder ? (
