@@ -4,7 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MapPin } from "lucide-react";
 
-import { ADDRESS_REQUEST_EVENT } from "@/components/order-flow/client-guided-flow";
+import {
+  ADDRESS_REQUEST_EVENT,
+  useClientAddressConfirmation,
+} from "@/components/order-flow/client-address-confirmation";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -17,12 +20,16 @@ import {
 
 export default function ClientCatalogPage() {
   const { state, updateAddress } = usePrototype();
+  const {
+    isAddressConfirmed,
+    confirmAddress,
+    beginAddressEdit,
+  } = useClientAddressConfirmation();
   const [sort, setSort] = useState<CatalogSort>("RECOMMENDED");
-  const [isEditingAddress, setIsEditingAddress] = useState(true);
   const streetFieldRef = useRef<HTMLSelectElement>(null);
   const hasValidAddress =
     getValidatedAddressZoneId(state.cart.address, state) !== null;
-  const showAddressForm = !hasValidAddress || isEditingAddress;
+  const showAddressForm = !isAddressConfirmed;
   const effectiveSort =
     sort === "DELIVERY" && !hasValidAddress ? "RECOMMENDED" : sort;
   const restaurants = useMemo(
@@ -38,7 +45,7 @@ export default function ClientCatalogPage() {
   const bestFee = orderableFees.length > 0 ? Math.min(...orderableFees) : null;
 
   const revealAddress = useCallback(() => {
-    setIsEditingAddress(true);
+    beginAddressEdit();
     window.requestAnimationFrame(() => {
       document.getElementById("delivery-address")?.scrollIntoView({
         behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -48,20 +55,13 @@ export default function ClientCatalogPage() {
       });
       streetFieldRef.current?.focus({ preventScroll: true });
     });
-  }, []);
+  }, [beginAddressEdit]);
 
   useEffect(() => {
-    const addressWasConfirmed =
-      window.sessionStorage.getItem("direct-catalog-address-confirmed") === "1";
     const handleHash = () => {
       if (window.location.hash === "#delivery-address") revealAddress();
     };
-    const initialFrame = window.requestAnimationFrame(() => {
-      if (addressWasConfirmed && window.location.hash !== "#delivery-address") {
-        setIsEditingAddress(false);
-      }
-      handleHash();
-    });
+    const initialFrame = window.requestAnimationFrame(handleHash);
     window.addEventListener("hashchange", handleHash);
     window.addEventListener(ADDRESS_REQUEST_EVENT, revealAddress);
     return () => {
@@ -70,12 +70,6 @@ export default function ClientCatalogPage() {
       window.removeEventListener(ADDRESS_REQUEST_EVENT, revealAddress);
     };
   }, [revealAddress]);
-
-  const confirmAddress = () => {
-    if (!hasValidAddress) return;
-    window.sessionStorage.setItem("direct-catalog-address-confirmed", "1");
-    setIsEditingAddress(false);
-  };
 
   return (
     <>

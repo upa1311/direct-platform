@@ -4,11 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { MouseEvent } from "react";
 
-import { usePrototype } from "@/prototype/prototype-provider";
 import {
-  getActiveCustomerOrder,
-  isAddressReady,
-} from "@/prototype/selectors";
+  ADDRESS_REQUEST_EVENT,
+  useClientAddressConfirmation,
+} from "./client-address-confirmation";
+import { usePrototype } from "@/prototype/prototype-provider";
+import { getActiveCustomerOrder } from "@/prototype/selectors";
 import styles from "./order-flow.module.css";
 
 type StepState = "completed" | "current" | "available" | "locked";
@@ -25,8 +26,6 @@ const stepClassNames: Record<StepState, string> = {
   available: styles.guidedStepAvailable,
   locked: styles.guidedStepLocked,
 };
-
-const ADDRESS_REQUEST_EVENT = "direct:open-delivery-address";
 
 function getScrollBehavior(): ScrollBehavior {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -48,6 +47,11 @@ function getRouteId(pathname: string, pattern: RegExp): string | null {
 export function ClientGuidedFlow() {
   const pathname = usePathname();
   const { state, isHydrated } = usePrototype();
+  const {
+    isAddressConfirmed,
+    isConfirmationHydrated,
+    beginAddressEdit,
+  } = useClientAddressConfirmation();
   const restaurantRouteId = getRouteId(
     pathname,
     /^\/client\/restaurants\/([^/]+)$/,
@@ -65,11 +69,11 @@ export function ClientGuidedFlow() {
     state.cart.restaurantId ??
     existingOrder?.restaurant.id ??
     null;
-  const validAddress = isAddressReady(state.cart.address, state);
   const hasCartItems = state.cart.items.length > 0;
 
   if (
     !isHydrated ||
+    !isConfirmationHydrated ||
     (!pathname.startsWith("/client/catalog") &&
       !pathname.startsWith("/client/restaurants/") &&
       pathname !== "/client/cart" &&
@@ -78,81 +82,87 @@ export function ClientGuidedFlow() {
     return null;
   }
 
-  const currentStep = existingOrder
-    ? 5
-    : hasCartItems
-      ? 4
-      : selectedRestaurantId && validAddress
-        ? 3
-        : validAddress
-          ? 2
-          : 1;
+  const currentStep = !isAddressConfirmed
+    ? 1
+    : existingOrder
+      ? 5
+      : hasCartItems
+        ? 4
+        : selectedRestaurantId
+          ? 3
+          : 2;
 
   const steps: GuidedStep[] = [
     {
       label: "Куда доставить",
       href: "/client/catalog#delivery-address",
-      state:
-        currentStep === 1
-          ? "current"
-          : existingOrder || validAddress
-            ? "completed"
-            : "available",
+      state: currentStep === 1 ? "current" : "completed",
     },
     {
       label: "Выбор ресторана",
       href:
-        existingOrder || validAddress
+        isAddressConfirmed
           ? "/client/catalog#restaurant-list"
           : null,
       state:
-        currentStep === 2
+        !isAddressConfirmed
+          ? "locked"
+          : currentStep === 2
           ? "current"
-          : existingOrder || (validAddress && Boolean(selectedRestaurantId))
+          : existingOrder || Boolean(selectedRestaurantId)
             ? "completed"
-            : validAddress
+            : isAddressConfirmed
               ? "available"
               : "locked",
     },
     {
       label: "Выбор блюд",
       href:
-        (existingOrder || validAddress) && selectedRestaurantId
+        isAddressConfirmed && selectedRestaurantId
           ? `/client/restaurants/${selectedRestaurantId}#restaurant-menu`
           : null,
       state:
-        currentStep === 3
+        !isAddressConfirmed
+          ? "locked"
+          : currentStep === 3
           ? "current"
           : existingOrder || hasCartItems
             ? "completed"
-            : validAddress && selectedRestaurantId
+            : isAddressConfirmed && selectedRestaurantId
               ? "available"
               : "locked",
     },
     {
       label: "Оформление и оплата",
-      href: hasCartItems
+      href: isAddressConfirmed && hasCartItems
         ? "/client/cart#checkout-cart"
-        : existingOrder
+        : isAddressConfirmed && existingOrder
           ? `/client/orders/${existingOrder.id}#order-status`
           : null,
       state:
-        currentStep === 4
+        !isAddressConfirmed
+          ? "locked"
+          : currentStep === 4
           ? "current"
           : existingOrder
             ? "completed"
-            : hasCartItems
+            : isAddressConfirmed && hasCartItems
               ? "available"
               : "locked",
     },
     {
       label: "Статус заказа",
-      href: existingOrder
+      href: isAddressConfirmed && existingOrder
         ? `/client/orders/${existingOrder.id}#order-status`
-        : activeOrder
+        : isAddressConfirmed && activeOrder
           ? `/client/orders/${activeOrder.id}#order-status`
           : null,
-      state: existingOrder ? "current" : activeOrder ? "available" : "locked",
+      state:
+        isAddressConfirmed && existingOrder
+          ? "current"
+          : isAddressConfirmed && activeOrder
+            ? "available"
+            : "locked",
     },
   ];
 
@@ -161,7 +171,13 @@ export function ClientGuidedFlow() {
     href: string,
   ) => {
     const [targetPath, hash] = href.split("#");
-    if (targetPath !== pathname || !hash) return;
+    if (!hash) return;
+
+    if (hash === "delivery-address") {
+      beginAddressEdit();
+    }
+
+    if (targetPath !== pathname) return;
 
     if (hash === "delivery-address") {
       window.dispatchEvent(new Event(ADDRESS_REQUEST_EVENT));
@@ -228,5 +244,3 @@ export function ClientGuidedFlow() {
     </nav>
   );
 }
-
-export { ADDRESS_REQUEST_EVENT };

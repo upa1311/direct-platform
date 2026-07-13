@@ -115,7 +115,6 @@ export default function ClientRestaurantPage() {
 
       <div className={flowStyles.buttonRow} id="restaurant-menu">
         <h2>Меню</h2>
-        <Link href="/client/cart">Открыть корзину →</Link>
       </div>
       <p className={flowStyles.feedback} aria-live="polite">
         {feedback}
