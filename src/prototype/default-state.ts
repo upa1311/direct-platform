@@ -220,7 +220,7 @@ export function createEmptyCart(address?: Cart["address"]): Cart {
   return {
     restaurantId: null,
     items: [],
-    deliveryMode: null,
+    deliveryMode: "PLATFORM_DRIVER",
     paymentMethod: "ONLINE",
     address: address ? { ...address } : {
       street: "",

@@ -257,6 +257,30 @@
   margin-bottom: 20px;
 }
 
+.catalogFulfillment {
+  margin-bottom: 20px;
+}
+
+.catalogFulfillmentBody {
+  display: grid;
+  gap: 14px;
+}
+
+.catalogFulfillmentBody > p {
+  margin: 0;
+}
+
+.fulfillmentHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fulfillmentHeaderRow h2 {
+  margin: 0;
+}
+
 .fulfillmentCard {
   display: grid;
   grid-template-columns: auto minmax(240px, 1fr) auto;

@@ -136,7 +136,8 @@ export function setCartItemQuantity(
       ...state.cart,
       restaurantId: items.length > 0 ? state.cart.restaurantId : null,
       items,
-      deliveryMode: items.length > 0 ? state.cart.deliveryMode : null,
+      deliveryMode:
+        items.length > 0 ? state.cart.deliveryMode : "PLATFORM_DRIVER",
       paymentMethod,
     },
   });

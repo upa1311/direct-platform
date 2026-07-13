@@ -1,5 +1,5 @@
 import type { OrderHistoryEvent } from "@/prototype/models";
-import { formatDateTime } from "@/prototype/selectors";
+import { formatDateTime, orderActorLabels } from "@/prototype/selectors";
 import styles from "./order-flow.module.css";
 
 export function OrderHistory({ events }: { events: OrderHistoryEvent[] }) {
@@ -11,7 +11,7 @@ export function OrderHistory({ events }: { events: OrderHistoryEvent[] }) {
           <div>
             <strong>{event.message}</strong>
             <span>
-              {formatDateTime(event.occurredAt)} · {event.actor}
+              {formatDateTime(event.occurredAt)} · {orderActorLabels[event.actor]}
             </span>
           </div>
         </li>

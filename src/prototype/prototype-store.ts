@@ -164,10 +164,11 @@ function normalizePaymentMethods(values: unknown): PaymentMethod[] {
   return [...new Set(methods)];
 }
 
-function normalizeCartDeliveryMode(
-  value: unknown,
-): CustomerDeliveryMode | null {
-  return value === "PLATFORM_DRIVER" || value === "PICKUP" ? value : null;
+function normalizeCartDeliveryMode(value: unknown): CustomerDeliveryMode {
+  // Доставка — режим по умолчанию: неизвестный или отсутствующий (в т.ч.
+  // сохранённый ранее `null`, а также миграции v2/v3) режим корзины
+  // приводится к `PLATFORM_DRIVER` без потери адреса, блюд и заказов.
+  return value === "PICKUP" ? "PICKUP" : "PLATFORM_DRIVER";
 }
 
 function normalizeOrderDeliveryMode(value: unknown): CustomerDeliveryMode {

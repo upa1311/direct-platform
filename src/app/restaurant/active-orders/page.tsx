@@ -12,6 +12,7 @@ import {
   getRestaurant,
   getRestaurantOrders,
   orderStatusLabels,
+  paymentStatusLabels,
 } from "@/prototype/selectors";
 
 function formatCountdown(expectedReadyAt: string | null, now: number) {
@@ -69,7 +70,7 @@ export default function RestaurantActiveOrdersPage() {
                   <p>{deliveryModeLabels[order.deliveryMode]}</p>
                 </div>
                 <span className={flowStyles.statusBadge}>
-                  Оплата: {order.paymentStatus}
+                  Оплата: {paymentStatusLabels[order.paymentStatus]}
                 </span>
               </div>
               <ul className={flowStyles.orderItemList}>

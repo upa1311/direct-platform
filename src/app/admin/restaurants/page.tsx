@@ -3,6 +3,7 @@
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
+import { getZoneName, publicationStatusLabels } from "@/prototype/selectors";
 
 export default function AdminRestaurantsPage() {
   const { state } = usePrototype();
@@ -21,8 +22,8 @@ export default function AdminRestaurantsPage() {
             <div className={flowStyles.cartLine} key={restaurant.id}>
               <strong>{restaurant.name}</strong>
               <div className={flowStyles.inlineMeta}>
-                <span>{restaurant.status}</span>
-                <span>{restaurant.zoneId}</span>
+                <span>{publicationStatusLabels[restaurant.status]}</span>
+                <span>{getZoneName(state, restaurant.zoneId)}</span>
                 <span>{restaurant.address}</span>
               </div>
             </div>

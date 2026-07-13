@@ -5,9 +5,12 @@ import type {
   DeliveryMode,
   MenuItem,
   Order,
+  OrderHistoryEvent,
   OrderStatus,
   PaymentMethod,
+  PaymentStatus,
   PrototypeState,
+  PublicationStatus,
   Restaurant,
   ZoneId,
 } from "./models";
@@ -48,6 +51,34 @@ export const orderStatusLabels: Record<OrderStatus, string> = {
   PICKED_UP: "Выдан",
   CANCELED: "Отменён",
 };
+
+export const paymentStatusLabels: Record<PaymentStatus, string> = {
+  NOT_STARTED: "Оплата ещё не начата",
+  AWAITING_PAYMENT: "Ожидается оплата",
+  PAID: "Оплачено",
+  CASH_ON_DELIVERY: "Наличные при получении",
+};
+
+export const orderActorLabels: Record<OrderHistoryEvent["actor"], string> = {
+  CLIENT: "Клиент",
+  RESTAURANT: "Ресторан",
+  SYSTEM: "Система",
+};
+
+export const publicationStatusLabels: Record<PublicationStatus, string> = {
+  DRAFT: "Черновик",
+  PENDING_REVIEW: "На проверке",
+  PUBLISHED: "Опубликован",
+  HIDDEN: "Скрыт",
+  ARCHIVED: "Архив",
+};
+
+export function getZoneName(
+  state: Pick<PrototypeState, "zones">,
+  zoneId: ZoneId,
+): string {
+  return state.zones.find((zone) => zone.id === zoneId)?.name ?? zoneId;
+}
 
 export function formatMoney(cents: number, currencyCode = "USD"): string {
   return new Intl.NumberFormat("en-US", {

@@ -7,8 +7,10 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatMoney,
+  getZoneName,
   orderStatusLabels,
   paymentMethodLabels,
+  paymentStatusLabels,
 } from "@/prototype/selectors";
 
 export default function AdminOrdersPage() {
@@ -67,11 +69,17 @@ export default function AdminOrdersPage() {
                     </div>
                     <div className={flowStyles.definitionRow}>
                       <dt>Зона ресторана</dt>
-                      <dd>{order.financials.restaurantZoneId}</dd>
+                      <dd>
+                        {getZoneName(state, order.financials.restaurantZoneId)}
+                      </dd>
                     </div>
                     <div className={flowStyles.definitionRow}>
                       <dt>Зона клиента</dt>
-                      <dd>{order.financials.customerZoneId ?? "—"}</dd>
+                      <dd>
+                        {order.financials.customerZoneId
+                          ? getZoneName(state, order.financials.customerZoneId)
+                          : "—"}
+                      </dd>
                     </div>
                     <div className={flowStyles.definitionRow}>
                       <dt>Оплата</dt>
@@ -79,7 +87,7 @@ export default function AdminOrdersPage() {
                     </div>
                     <div className={flowStyles.definitionRow}>
                       <dt>Статус оплаты</dt>
-                      <dd>{order.paymentStatus}</dd>
+                      <dd>{paymentStatusLabels[order.paymentStatus]}</dd>
                     </div>
                   </dl>
                 </section>
@@ -104,7 +112,7 @@ export default function AdminOrdersPage() {
                       </dd>
                     </div>
                     <div className={flowStyles.definitionRow}>
-                      <dt>Small-order fee</dt>
+                      <dt>Доплата за небольшой заказ</dt>
                       <dd>{formatMoney(order.financials.smallOrderFeeCents)}</dd>
                     </div>
                     <div className={flowStyles.definitionRow}>
