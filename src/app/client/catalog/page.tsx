@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MapPin } from "lucide-react";
 
+import { ADDRESS_REQUEST_EVENT } from "@/components/order-flow/client-guided-flow";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -17,7 +18,8 @@ import {
 export default function ClientCatalogPage() {
   const { state, updateAddress } = usePrototype();
   const [sort, setSort] = useState<CatalogSort>("RECOMMENDED");
-  const [isEditingAddress, setIsEditingAddress] = useState(false);
+  const [isEditingAddress, setIsEditingAddress] = useState(true);
+  const streetFieldRef = useRef<HTMLSelectElement>(null);
   const hasValidAddress =
     getValidatedAddressZoneId(state.cart.address, state) !== null;
   const showAddressForm = !hasValidAddress || isEditingAddress;
@@ -35,9 +37,50 @@ export default function ClientCatalogPage() {
     : [];
   const bestFee = orderableFees.length > 0 ? Math.min(...orderableFees) : null;
 
+  const revealAddress = useCallback(() => {
+    setIsEditingAddress(true);
+    window.requestAnimationFrame(() => {
+      document.getElementById("delivery-address")?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+        block: "start",
+      });
+      streetFieldRef.current?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  useEffect(() => {
+    const addressWasConfirmed =
+      window.sessionStorage.getItem("direct-catalog-address-confirmed") === "1";
+    const handleHash = () => {
+      if (window.location.hash === "#delivery-address") revealAddress();
+    };
+    const initialFrame = window.requestAnimationFrame(() => {
+      if (addressWasConfirmed && window.location.hash !== "#delivery-address") {
+        setIsEditingAddress(false);
+      }
+      handleHash();
+    });
+    window.addEventListener("hashchange", handleHash);
+    window.addEventListener(ADDRESS_REQUEST_EVENT, revealAddress);
+    return () => {
+      window.cancelAnimationFrame(initialFrame);
+      window.removeEventListener("hashchange", handleHash);
+      window.removeEventListener(ADDRESS_REQUEST_EVENT, revealAddress);
+    };
+  }, [revealAddress]);
+
+  const confirmAddress = () => {
+    if (!hasValidAddress) return;
+    window.sessionStorage.setItem("direct-catalog-address-confirmed", "1");
+    setIsEditingAddress(false);
+  };
+
   return (
     <>
       <section
+        id="delivery-address"
         className={`${flowStyles.card} ${flowStyles.catalogAddress} ${showAddressForm ? "" : flowStyles.catalogAddressCollapsed}`}
         aria-labelledby="catalog-address-title"
       >
@@ -51,6 +94,7 @@ export default function ClientCatalogPage() {
               <label className={flowStyles.field}>
                 <span>Улица</span>
                 <select
+                  ref={streetFieldRef}
                   value={state.cart.address.street}
                   onChange={(event) =>
                     updateAddress({ street: event.target.value })
@@ -78,15 +122,14 @@ export default function ClientCatalogPage() {
                 />
               </label>
             </div>
-            {isEditingAddress && hasValidAddress ? (
-              <button
-                className={flowStyles.compactTextButton}
-                type="button"
-                onClick={() => setIsEditingAddress(false)}
-              >
-                Готово
-              </button>
-            ) : null}
+            <button
+              className={flowStyles.compactTextButton}
+              type="button"
+              disabled={!hasValidAddress}
+              onClick={confirmAddress}
+            >
+              Готово
+            </button>
           </>
         ) : (
           <div className={flowStyles.compactAddressLine}>
@@ -94,14 +137,14 @@ export default function ClientCatalogPage() {
             <strong id="catalog-address-title">
               {state.cart.address.street}, дом {state.cart.address.house}
             </strong>
-            <button type="button" onClick={() => setIsEditingAddress(true)}>
+            <button type="button" onClick={revealAddress}>
               Изменить
             </button>
           </div>
         )}
       </section>
 
-      <div className={flowStyles.catalogHeadingRow}>
+      <div className={flowStyles.catalogHeadingRow} id="restaurant-list">
         <h1>Рестораны</h1>
         <label className={flowStyles.field}>
           <span>Сортировка</span>

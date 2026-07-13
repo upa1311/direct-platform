@@ -38,7 +38,7 @@ export default function ClientOrderPage() {
         title={`Заказ ${order.publicNumber}`}
         description={`${order.restaurant.name} · ${orderStatusLabels[order.status]}`}
       />
-      <div className={flowStyles.panelStack}>
+      <div className={flowStyles.panelStack} id="order-status">
         <section className={flowStyles.orderCard}>
           <div className={flowStyles.orderHeader}>
             <div>

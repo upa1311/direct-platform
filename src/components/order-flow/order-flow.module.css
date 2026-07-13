@@ -9,6 +9,7 @@
 .guidedFlow {
   margin-bottom: 26px;
   color: #778079;
+  scroll-margin-top: 24px;
 }
 
 .guidedFlowDesktop {
@@ -20,25 +21,41 @@
   list-style: none;
 }
 
-.guidedFlowDesktop li {
+.guidedStep {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 650;
-  white-space: nowrap;
 }
 
-.guidedFlowDesktop li:not(:last-child)::after {
+.guidedStep:not(:last-child)::after {
   height: 1px;
-  margin-inline: 10px;
+  margin-inline: 8px;
   flex: 1;
   content: "";
   background: #d7dcd8;
 }
 
-.guidedFlowDesktop li > span {
+.guidedStep > a,
+.guidedStep > span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 9px;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 680;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.guidedStep > a {
+  padding: 4px;
+  margin: -4px;
+}
+
+.guidedStepNumber {
   width: 21px;
   height: 21px;
   border: 1px solid #d3d8d4;
@@ -49,31 +66,104 @@
   font-size: 10px;
 }
 
-.guidedFlowDesktop .guidedStepCurrent {
+.guidedStepCurrent {
   color: #8f431c;
   font-weight: 800;
 }
 
-.guidedFlowDesktop .guidedStepCurrent > span {
+.guidedStepCurrent .guidedStepNumber {
   border-color: #b85f2c;
   background: #fff4ed;
 }
 
-.guidedFlowDesktop .guidedStepCompleted {
+.guidedStepCompleted {
   color: #356045;
 }
 
-.guidedFlowDesktop .guidedStepCompleted > span {
+.guidedStepCompleted .guidedStepNumber {
   border-color: #bdd4c4;
   background: #edf6ef;
 }
 
+.guidedStepAvailable {
+  color: #4f5952;
+}
+
+.guidedStepLocked {
+  color: #9aa19c;
+}
+
+.guidedStepLocked .guidedStepNumber {
+  background: #f5f6f5;
+}
+
+.guidedStep > a:hover {
+  color: #8f431c;
+  background: #fff7f1;
+}
+
+.guidedStep > a:focus-visible,
+.guidedFlowMobile a:focus-visible {
+  outline: 2px solid #b85f2c;
+  outline-offset: 3px;
+}
+
 .guidedFlowMobile {
   display: none;
-  margin: 0;
   color: #59625c;
-  font-size: 13px;
-  font-weight: 750;
+}
+
+.guidedFlowMobile > span {
+  color: #858d87;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.guidedFlowMobile a,
+.guidedFlowMobile strong {
+  width: fit-content;
+  color: #8f431c;
+  font-size: 15px;
+  font-weight: 780;
+  text-decoration: none;
+}
+
+:global(#delivery-address),
+:global(#restaurant-list),
+:global(#restaurant-menu),
+:global(#checkout-cart),
+:global(#order-status) {
+  scroll-margin-top: 150px;
+}
+
+.restaurantMenuPage {
+  min-width: 0;
+}
+
+.menuCheckoutCta {
+  min-height: 54px;
+  margin-top: 22px;
+  padding: 0 20px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #b85f2c;
+  color: #fff;
+  text-decoration: none;
+  box-shadow: 0 10px 24px rgb(124 61 28 / 18%);
+}
+
+.menuCheckoutCta:hover {
+  background: #9f4f25;
+}
+
+.menuCheckoutCta:focus-visible {
+  outline: 3px solid rgb(184 95 44 / 35%);
+  outline-offset: 3px;
 }
 
 .catalogGrid {
@@ -953,7 +1043,33 @@
   }
 
   .guidedFlowMobile {
-    display: block;
+    display: grid;
+    gap: 4px;
+  }
+
+  .restaurantMenuPage {
+    padding-bottom: 84px;
+  }
+
+  .menuCheckoutCta {
+    position: fixed;
+    z-index: 25;
+    right: 14px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 14px;
+    min-height: 52px;
+    margin: 0;
+    justify-content: space-between;
+    padding: 0 16px;
+  }
+
+  .menuCheckoutCta span {
+    font-size: 13px;
+    font-weight: 650;
+  }
+
+  .menuCheckoutCta strong {
+    font-size: 14px;
   }
 
   .catalogHeadingRow {
@@ -1007,4 +1123,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .cartFlyToken { display: none; }
+
+  .guidedStep > a,
+  .menuCheckoutCta {
+    transition: none;
+  }
 }

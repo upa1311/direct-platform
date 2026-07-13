@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState, type MouseEvent } from "react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { TEST_RESTAURANT_ID } from "@/prototype/default-state";
@@ -14,6 +14,15 @@ import {
   getRestaurant,
   getRestaurantMenu,
 } from "@/prototype/selectors";
+
+function getProductLabel(quantity: number): string {
+  const lastTwoDigits = quantity % 100;
+  const lastDigit = quantity % 10;
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 14) return "товаров";
+  if (lastDigit === 1) return "товар";
+  if (lastDigit >= 2 && lastDigit <= 4) return "товара";
+  return "товаров";
+}
 
 export default function ClientRestaurantPage() {
   const params = useParams<{ restaurantId: string }>();
@@ -37,6 +46,10 @@ export default function ClientRestaurantPage() {
     restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
     restaurant.paymentMethods.includes("ONLINE");
   const deliveryProviderLabel = getDeliveryProviderLabel(restaurant);
+  const cartQuantity =
+    state.cart.restaurantId === restaurant.id
+      ? state.cart.items.reduce((total, item) => total + item.quantity, 0)
+      : 0;
 
   const getAddFeedback = (result: ReturnType<typeof addItem>) => {
     if (result === "ADDED") {
@@ -48,7 +61,10 @@ export default function ClientRestaurantPage() {
     return "Блюдо сейчас недоступно.";
   };
 
-  const handleAdd = (menuItemId: string, event: MouseEvent<HTMLButtonElement>) => {
+  const handleAdd = (
+    menuItemId: string,
+    event: MouseEvent<HTMLButtonElement>,
+  ) => {
     const result = addItem(menuItemId);
 
     if (result === "RESTAURANT_CONFLICT") {
@@ -73,7 +89,7 @@ export default function ClientRestaurantPage() {
   };
 
   return (
-    <>
+    <div className={flowStyles.restaurantMenuPage}>
       <div className={flowStyles.detailHeader}>
         <Link href="/client/catalog">← Каталог</Link>
         <div>
@@ -97,7 +113,7 @@ export default function ClientRestaurantPage() {
         </div>
       ) : null}
 
-      <div className={flowStyles.buttonRow}>
+      <div className={flowStyles.buttonRow} id="restaurant-menu">
         <h2>Меню</h2>
         <Link href="/client/cart">Открыть корзину →</Link>
       </div>
@@ -122,56 +138,67 @@ export default function ClientRestaurantPage() {
               }`}
               key={menuItem.id}
             >
-            <div>
-              <h2>{menuItem.name}</h2>
-              <p>{menuItem.description}</p>
-              <div className={flowStyles.cardMeta}>
-                <span>{menuItem.category}</span>
-                <span>{menuItem.available ? "В наличии" : "Недоступно"}</span>
+              <div>
+                <h2>{menuItem.name}</h2>
+                <p>{menuItem.description}</p>
+                <div className={flowStyles.cardMeta}>
+                  <span>{menuItem.category}</span>
+                  <span>{menuItem.available ? "В наличии" : "Недоступно"}</span>
+                </div>
               </div>
-            </div>
-            <div className={flowStyles.menuActions}>
-              <span className={flowStyles.price}>
-                {formatMoney(menuItem.priceCents, menuItem.currencyCode)}
-              </span>
-              {quantity > 0 && menuItem.available && canOrder ? (
-                <div
-                  className={flowStyles.menuQuantity}
-                  aria-label={`Количество: ${menuItem.name}`}
-                >
-                  <button
-                    type="button"
-                    aria-label={`Уменьшить количество: ${menuItem.name}`}
-                    onClick={() =>
-                      setItemQuantity(menuItem.id, quantity - 1)
-                    }
+              <div className={flowStyles.menuActions}>
+                <span className={flowStyles.price}>
+                  {formatMoney(menuItem.priceCents, menuItem.currencyCode)}
+                </span>
+                {quantity > 0 && menuItem.available && canOrder ? (
+                  <div
+                    className={flowStyles.menuQuantity}
+                    aria-label={`Количество: ${menuItem.name}`}
                   >
-                    −
-                  </button>
-                  <span aria-live="polite">{quantity}</span>
+                    <button
+                      type="button"
+                      aria-label={`Уменьшить количество: ${menuItem.name}`}
+                      onClick={() =>
+                        setItemQuantity(menuItem.id, quantity - 1)
+                      }
+                    >
+                      −
+                    </button>
+                    <span aria-live="polite">{quantity}</span>
+                    <button
+                      type="button"
+                      aria-label={`Увеличить количество: ${menuItem.name}`}
+                      onClick={(event) => handleAdd(menuItem.id, event)}
+                    >
+                      +
+                    </button>
+                  </div>
+                ) : (
                   <button
+                    className={flowStyles.primaryButton}
                     type="button"
-                    aria-label={`Увеличить количество: ${menuItem.name}`}
+                    disabled={!menuItem.available || !canOrder}
                     onClick={(event) => handleAdd(menuItem.id, event)}
                   >
-                    +
+                    Добавить
                   </button>
-                </div>
-              ) : (
-                <button
-                  className={flowStyles.primaryButton}
-                  type="button"
-                  disabled={!menuItem.available || !canOrder}
-                  onClick={(event) => handleAdd(menuItem.id, event)}
-                >
-                  Добавить
-                </button>
-              )}
-            </div>
+                )}
+              </div>
             </article>
           );
         })}
       </div>
-    </>
+      {cartQuantity > 0 ? (
+        <Link
+          className={flowStyles.menuCheckoutCta}
+          href="/client/cart#checkout-cart"
+        >
+          <span>
+            {cartQuantity} {getProductLabel(cartQuantity)}
+          </span>
+          <strong>Перейти к оформлению</strong>
+        </Link>
+      ) : null}
+    </div>
   );
 }

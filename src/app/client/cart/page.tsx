@@ -77,7 +77,7 @@ export default function ClientCartPage() {
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form id="checkout-cart" onSubmit={handleSubmit}>
       <header className={flowStyles.checkoutHeading}>
         <h1>Ваш заказ</h1>
         <p>{restaurant.name}</p>
