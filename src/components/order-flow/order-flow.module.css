@@ -605,7 +605,7 @@
 
 @keyframes cart-fly {
   from { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-  to { left: calc(100% - 48px); top: 34px; transform: translate(-50%, -50%) scale(.45); opacity: 0; }
+  to { left: var(--fly-end-x); top: var(--fly-end-y); transform: translate(-50%, -50%) scale(.45); opacity: 0; }
 }
 
 .itemComment {

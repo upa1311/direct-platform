@@ -35,6 +35,8 @@ interface ClientCartUiValue {
 interface FlyStyle extends CSSProperties {
   "--fly-x": string;
   "--fly-y": string;
+  "--fly-end-x": string;
+  "--fly-end-y": string;
 }
 
 const ClientCartUiContext = createContext<ClientCartUiValue | null>(null);
@@ -61,14 +63,23 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const notifyItemAdded = useCallback((source: HTMLElement) => {
-    const rect = source.getBoundingClientRect();
-    setFlyStyle({ "--fly-x": `${rect.left + rect.width / 2}px`, "--fly-y": `${rect.top + rect.height / 2}px` });
+    const cartButton = cartButtonRef.current;
+    if (cartButton) {
+      const from = source.getBoundingClientRect();
+      const to = cartButton.getBoundingClientRect();
+      setFlyStyle({
+        "--fly-x": `${from.left + from.width / 2}px`,
+        "--fly-y": `${from.top + from.height / 2}px`,
+        "--fly-end-x": `${to.left + to.width / 2}px`,
+        "--fly-end-y": `${to.top + to.height / 2}px`,
+      });
+      if (flyTimerRef.current) clearTimeout(flyTimerRef.current);
+      flyTimerRef.current = setTimeout(() => setFlyStyle(null), 700);
+    }
     setBadgePulse(false);
     window.requestAnimationFrame(() => setBadgePulse(true));
     if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
-    if (flyTimerRef.current) clearTimeout(flyTimerRef.current);
     pulseTimerRef.current = setTimeout(() => setBadgePulse(false), 650);
-    flyTimerRef.current = setTimeout(() => setFlyStyle(null), 700);
   }, []);
 
   useEffect(() => () => {
