@@ -92,11 +92,11 @@ export default function ClientCatalogPage() {
                 <div className={flowStyles.fulfillmentHeaderRow}>
                   <h2 id="fulfillment-title">Куда доставить заказ?</h2>
                   <button
-                    className={flowStyles.compactTextButton}
+                    className={flowStyles.fulfillmentSwitchButton}
                     type="button"
                     onClick={() => setDeliveryMode("PICKUP")}
                   >
-                    Самовывоз
+                    Забрать самому
                   </button>
                 </div>
                 <p>От адреса зависит стоимость доставки.</p>
@@ -150,12 +150,6 @@ export default function ClientCatalogPage() {
                 <button type="button" onClick={revealAddress}>
                   Изменить
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setDeliveryMode("PICKUP")}
-                >
-                  Самовывоз
-                </button>
               </div>
             )}
           </div>
@@ -164,14 +158,14 @@ export default function ClientCatalogPage() {
             <div className={flowStyles.fulfillmentHeaderRow}>
               <h2 id="fulfillment-title">Самовывоз</h2>
               <button
-                className={flowStyles.compactTextButton}
+                className={flowStyles.fulfillmentSwitchButton}
                 type="button"
                 onClick={() => setDeliveryMode("PLATFORM_DRIVER")}
               >
                 Доставка
               </button>
             </div>
-            <p>Заберёте заказ из выбранного ресторана.</p>
+            <p>Забрать заказ самостоятельно из выбранного ресторана.</p>
           </div>
         )}
       </section>
