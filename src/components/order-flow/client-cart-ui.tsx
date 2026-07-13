@@ -55,6 +55,26 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
   const restaurant = getRestaurant(state, state.cart.restaurantId);
   const pricing = calculateCartPricing(state);
   const cartQuantity = state.cart.items.reduce((sum, item) => sum + item.quantity, 0);
+  const fulfillmentLabel =
+    state.cart.deliveryMode === "PICKUP"
+      ? "Самовывоз"
+      : state.cart.deliveryMode === "PLATFORM_DRIVER"
+        ? "Доставка"
+        : "Получение";
+  const fulfillmentValue =
+    state.cart.deliveryMode === null
+      ? "Выберите способ"
+      : pricing.deliveryFeeCents === null
+        ? "Укажите адрес"
+        : formatMoney(pricing.deliveryFeeCents);
+  const checkoutHref =
+    state.cart.deliveryMode === null
+      ? "/client/cart#fulfillment-method"
+      : "/client/cart#checkout-cart";
+  const checkoutLabel =
+    state.cart.deliveryMode === null
+      ? "Выбрать способ получения"
+      : "Перейти к оформлению";
 
   const closeCart = useCallback(() => setIsOpen(false), []);
   const openCart = useCallback(() => {
@@ -154,11 +174,20 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
                 </div>
                 <dl className={styles.drawerSummary}>
                   <div><dt>Еда</dt><dd>{formatMoney(pricing.foodSubtotalCents)}</dd></div>
-                  <div><dt>Доставка</dt><dd>{pricing.deliveryFeeCents === null ? "Укажите адрес" : formatMoney(pricing.deliveryFeeCents)}</dd></div>
-                  {pricing.smallOrderFeeCents > 0 ? <div><dt>Доплата за небольшой заказ</dt><dd>{formatMoney(pricing.smallOrderFeeCents)}</dd></div> : null}
+                  <div><dt>{fulfillmentLabel}</dt><dd>{fulfillmentValue}</dd></div>
+                  {state.cart.deliveryMode !== null &&
+                  pricing.smallOrderFeeCents > 0 ? (
+                    <div><dt>Доплата за небольшой заказ</dt><dd>{formatMoney(pricing.smallOrderFeeCents)}</dd></div>
+                  ) : null}
                   <div><dt>Итого</dt><dd>{pricing.customerTotalCents === null ? "—" : formatMoney(pricing.customerTotalCents)}</dd></div>
                 </dl>
-                <Link className={styles.primaryLink} href="/client/cart" onClick={closeCart}>Перейти к оформлению</Link>
+                <Link
+                  className={styles.primaryLink}
+                  href={checkoutHref}
+                  onClick={closeCart}
+                >
+                  {checkoutLabel}
+                </Link>
               </>
             )}
           </aside>

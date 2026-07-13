@@ -54,6 +54,14 @@ export default function ClientRestaurantPage() {
   const selectedModeIsSupported = state.cart.deliveryMode
     ? restaurant.deliveryModes.includes(state.cart.deliveryMode)
     : false;
+  const showPlatformDelivery =
+    canOrder &&
+    selectedModeIsSupported &&
+    state.cart.deliveryMode === "PLATFORM_DRIVER";
+  const showPickup =
+    canOrder &&
+    selectedModeIsSupported &&
+    state.cart.deliveryMode === "PICKUP";
   const checkoutHref =
     state.cart.deliveryMode === null
       ? "/client/catalog#fulfillment-method"
@@ -116,12 +124,11 @@ export default function ClientRestaurantPage() {
           <span>{restaurant.address}</span>
           <span>Обычно {restaurant.defaultPreparationMinutes} минут</span>
         </div>
-        {selectedModeIsSupported &&
-        state.cart.deliveryMode === "PLATFORM_DRIVER" ? (
+        {showPlatformDelivery ? (
           <p className={flowStyles.deliveryProvider}>
             Доставит водитель Direct
           </p>
-        ) : selectedModeIsSupported && state.cart.deliveryMode === "PICKUP" ? (
+        ) : showPickup ? (
           <p className={flowStyles.deliveryProvider}>
             Самовывоз из ресторана · {restaurant.address}
           </p>

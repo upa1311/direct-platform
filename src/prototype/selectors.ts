@@ -106,8 +106,8 @@ export function sortPublishedRestaurants(
 
   return [...restaurants].sort((left, right) => {
     if (sort === "DELIVERY") {
-      const leftFee = getDeliveryFeeCents(state, left);
-      const rightFee = getDeliveryFeeCents(state, right);
+      const leftFee = getAvailablePlatformDeliveryFeeCents(state, left);
+      const rightFee = getAvailablePlatformDeliveryFeeCents(state, right);
       if (leftFee === null && rightFee !== null) return 1;
       if (leftFee !== null && rightFee === null) return -1;
       if (leftFee !== null && rightFee !== null && leftFee !== rightFee) {
@@ -230,6 +230,22 @@ export function getDeliveryFeeCents(
     ? state.tariffs[restaurant.zoneId]?.[customerZoneId]
     : undefined;
   return Number.isInteger(cents) && Number(cents) >= 0 ? Number(cents) : null;
+}
+
+export function getAvailablePlatformDeliveryFeeCents(
+  state: PrototypeState,
+  restaurant: Restaurant,
+): number | null {
+  if (
+    restaurant.status !== "PUBLISHED" ||
+    !restaurant.isAcceptingOrders ||
+    !restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
+    !restaurant.paymentMethods.includes("ONLINE")
+  ) {
+    return null;
+  }
+
+  return getDeliveryFeeCents(state, restaurant);
 }
 
 export function calculateCartPricing(state: PrototypeState): CartPricing {

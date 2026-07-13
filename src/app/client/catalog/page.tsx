@@ -11,8 +11,7 @@ import {
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
-  canPlacePrototypeOrder,
-  getDeliveryFeeCents,
+  getAvailablePlatformDeliveryFeeCents,
   getValidatedAddressZoneId,
   sortPublishedRestaurants,
   type CatalogSort,
@@ -41,8 +40,9 @@ export default function ClientCatalogPage() {
   );
   const orderableFees = deliveryPricingReady
     ? restaurants
-        .filter(canPlacePrototypeOrder)
-        .map((restaurant) => getDeliveryFeeCents(state, restaurant))
+        .map((restaurant) =>
+          getAvailablePlatformDeliveryFeeCents(state, restaurant),
+        )
         .filter((fee): fee is number => fee !== null)
     : [];
   const bestFee = orderableFees.length > 0 ? Math.min(...orderableFees) : null;
@@ -206,8 +206,8 @@ export default function ClientCatalogPage() {
       <div className={flowStyles.catalogGrid}>
         {restaurants.map((restaurant) => {
           const deliveryFee =
-            deliveryPricingReady && canPlacePrototypeOrder(restaurant)
-              ? getDeliveryFeeCents(state, restaurant)
+            deliveryPricingReady
+              ? getAvailablePlatformDeliveryFeeCents(state, restaurant)
               : null;
           return (
             <article className={flowStyles.restaurantCard} key={restaurant.id}>
