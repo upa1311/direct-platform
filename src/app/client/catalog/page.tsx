@@ -11,14 +11,16 @@ import {
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
+  formatMoney,
   getAvailablePlatformDeliveryFeeCents,
+  getRestaurantPromotion,
   getValidatedAddressZoneId,
   sortPublishedRestaurants,
   type CatalogSort,
 } from "@/prototype/selectors";
 
 export default function ClientCatalogPage() {
-  const { state, updateAddress, setDeliveryMode } = usePrototype();
+  const { state, updateAddress, setFulfillmentChoice } = usePrototype();
   const {
     isAddressConfirmed,
     confirmAddress,
@@ -28,7 +30,7 @@ export default function ClientCatalogPage() {
   const streetFieldRef = useRef<HTMLSelectElement>(null);
   const hasValidAddress =
     getValidatedAddressZoneId(state.cart.address, state) !== null;
-  const isDelivery = state.cart.deliveryMode !== "PICKUP";
+  const isDelivery = state.cart.fulfillmentChoice === "DELIVERY";
   const deliveryPricingReady =
     isDelivery && isAddressConfirmed && hasValidAddress;
   const showAddressForm = isDelivery && !isAddressConfirmed;
@@ -94,7 +96,7 @@ export default function ClientCatalogPage() {
                   <button
                     className={flowStyles.fulfillmentSwitchButton}
                     type="button"
-                    onClick={() => setDeliveryMode("PICKUP")}
+                    onClick={() => setFulfillmentChoice("PICKUP")}
                   >
                     Забрать самому
                   </button>
@@ -133,7 +135,7 @@ export default function ClientCatalogPage() {
                   </label>
                 </div>
                 <button
-                  className={flowStyles.compactTextButton}
+                  className={`${flowStyles.compactTextButton} ${flowStyles.confirmAddressButton}`}
                   type="button"
                   disabled={!hasValidAddress}
                   onClick={confirmAddress}
@@ -160,7 +162,7 @@ export default function ClientCatalogPage() {
               <button
                 className={flowStyles.fulfillmentSwitchButton}
                 type="button"
-                onClick={() => setDeliveryMode("PLATFORM_DRIVER")}
+                onClick={() => setFulfillmentChoice("DELIVERY")}
               >
                 Доставка
               </button>
@@ -194,6 +196,8 @@ export default function ClientCatalogPage() {
             deliveryPricingReady
               ? getAvailablePlatformDeliveryFeeCents(state, restaurant)
               : null;
+          const promotion = getRestaurantPromotion(state, restaurant.id);
+          const restaurantDelivery = restaurant.restaurantDeliverySettings;
           return (
             <article className={flowStyles.restaurantCard} key={restaurant.id}>
               <Link
@@ -215,6 +219,20 @@ export default function ClientCatalogPage() {
                       ? "Принимает заказы"
                       : "Меню для просмотра"}
                   </span>
+                  {promotion ? (
+                    <p className={flowStyles.promoBadge}>
+                      {promotion.displayText}
+                    </p>
+                  ) : null}
+                  {restaurantDelivery ? (
+                    <p className={flowStyles.deliveryConditions}>
+                      Минимальный заказ{" "}
+                      {formatMoney(restaurantDelivery.minimumOrderCents)}
+                      {restaurantDelivery.freeDeliveryThresholdCents !== null
+                        ? ` · Бесплатная доставка от ${formatMoney(restaurantDelivery.freeDeliveryThresholdCents)}`
+                        : ""}
+                    </p>
+                  ) : null}
                   <p className={flowStyles.preparationTime}>
                     Обычно готовят за {restaurant.defaultPreparationMinutes} минут
                   </p>

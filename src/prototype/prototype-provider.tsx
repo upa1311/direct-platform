@@ -15,40 +15,51 @@ import {
   acceptRestaurantOrder,
   addCartItem,
   createOrderFromCart,
+  createRestaurant,
+  markOrderArriving,
+  markOrderDelivered,
+  markOrderOutForDelivery,
   markOrderPickedUp,
   markOrderReady,
   rejectRestaurantOrder,
   resetPrototypeState,
   restoreDefaultTariffs,
   saveTariffs,
+  setCartFulfillmentChoice,
   setCartItemComment,
   setCartItemQuantity,
-  setCartDeliveryMode,
   setCartPaymentMethod,
+  setPromotionEnabled,
   simulateSuccessfulOnlinePayment,
   updateCartAddress,
   updateCustomerProfile,
+  updateMenuItemVariants,
+  updateRestaurant,
+  upsertPromotion,
   type AddCartItemResult,
   type CreateOrderOptions,
   type CreateOrderResult,
+  type RestaurantFormInput,
 } from "./actions";
 import { createDefaultState } from "./default-state";
 import type {
-  CustomerDeliveryMode,
   DeliveryAddress,
+  FulfillmentChoice,
+  MenuItemVariant,
   PaymentMethod,
+  Promotion,
   PrototypeState,
   TariffMatrix,
 } from "./models";
 import {
   isNewerState,
   isPrototypeState,
-  LEGACY_PROTOTYPE_STORAGE_KEY,
+  LEGACY_V2_PROTOTYPE_STORAGE_KEY,
   LEGACY_V3_PROTOTYPE_STORAGE_KEY,
+  LEGACY_V4_PROTOTYPE_STORAGE_KEY,
   normalizePrototypeState,
   parseLegacyStoredState,
   parseStoredState,
-  parseV3StoredState,
   PROTOTYPE_CHANNEL_NAME,
   PROTOTYPE_STORAGE_KEY,
 } from "./prototype-store";
@@ -58,26 +69,47 @@ interface PrototypeContextValue {
   isHydrated: boolean;
   addItem: (
     menuItemId: string,
+    variantId?: string | null,
     replaceRestaurant?: boolean,
   ) => AddCartItemResult;
-  setItemQuantity: (menuItemId: string, quantity: number) => void;
-  setItemComment: (menuItemId: string, comment: string) => void;
-  updateAddress: (
-    patch: Partial<Omit<DeliveryAddress, "zoneId">>,
+  setItemQuantity: (
+    menuItemId: string,
+    variantId: string | null,
+    quantity: number,
   ) => void;
+  setItemComment: (
+    menuItemId: string,
+    variantId: string | null,
+    comment: string,
+  ) => void;
+  updateAddress: (patch: Partial<Omit<DeliveryAddress, "zoneId">>) => void;
   updateCustomer: (
     patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>,
   ) => void;
   setPaymentMethod: (paymentMethod: PaymentMethod) => void;
-  setDeliveryMode: (deliveryMode: CustomerDeliveryMode | null) => void;
+  setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => void;
   createOrder: (options: CreateOrderOptions) => CreateOrderResult;
   acceptOrder: (orderId: string, preparationMinutes: number) => void;
   rejectOrder: (orderId: string, reason: string) => void;
   simulateOnlinePayment: (orderId: string) => void;
   markReady: (orderId: string) => void;
   markPickedUp: (orderId: string) => void;
+  markOutForDelivery: (orderId: string) => void;
+  markArriving: (orderId: string) => void;
+  markDelivered: (orderId: string) => void;
   saveTariffMatrix: (tariffs: TariffMatrix) => void;
   restoreTariffs: () => void;
+  createRestaurantEntry: (input: RestaurantFormInput) => string;
+  updateRestaurantEntry: (
+    restaurantId: string,
+    patch: Partial<RestaurantFormInput>,
+  ) => void;
+  setMenuItemVariants: (
+    menuItemId: string,
+    variants: MenuItemVariant[] | null,
+  ) => void;
+  savePromotion: (promotion: Promotion) => void;
+  togglePromotion: (promotionId: string, enabled: boolean) => void;
   resetPrototype: () => void;
 }
 
@@ -103,16 +135,16 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     sourceIdRef.current = crypto.randomUUID();
 
-    const storedV4State = parseStoredState(
-      window.localStorage.getItem(PROTOTYPE_STORAGE_KEY),
-    );
     const storedState =
-      storedV4State ??
-      parseV3StoredState(
+      parseStoredState(window.localStorage.getItem(PROTOTYPE_STORAGE_KEY)) ??
+      parseLegacyStoredState(
+        window.localStorage.getItem(LEGACY_V4_PROTOTYPE_STORAGE_KEY),
+      ) ??
+      parseLegacyStoredState(
         window.localStorage.getItem(LEGACY_V3_PROTOTYPE_STORAGE_KEY),
       ) ??
       parseLegacyStoredState(
-        window.localStorage.getItem(LEGACY_PROTOTYPE_STORAGE_KEY),
+        window.localStorage.getItem(LEGACY_V2_PROTOTYPE_STORAGE_KEY),
       );
     let isActive = true;
 
@@ -140,7 +172,6 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       if (event.key !== PROTOTYPE_STORAGE_KEY) {
         return;
       }
-
       const incomingState = parseStoredState(event.newValue);
       if (incomingState) {
         handleIncomingState(incomingState);
@@ -170,7 +201,6 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     if (!isHydrated) {
       return;
     }
-
     window.localStorage.setItem(PROTOTYPE_STORAGE_KEY, JSON.stringify(state));
     channelRef.current?.postMessage({
       sourceId: sourceIdRef.current,
@@ -179,10 +209,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }, [isHydrated, state]);
 
   const addItem = useCallback(
-    (menuItemId: string, replaceRestaurant = false) => {
+    (
+      menuItemId: string,
+      variantId: string | null = null,
+      replaceRestaurant = false,
+    ) => {
       const action = addCartItem(
         stateRef.current,
         menuItemId,
+        variantId,
         replaceRestaurant,
       );
       if (action.state !== stateRef.current) {
@@ -194,17 +229,19 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const setItemQuantity = useCallback(
-    (menuItemId: string, quantity: number) => {
+    (menuItemId: string, variantId: string | null, quantity: number) => {
       replaceState(
-        setCartItemQuantity(stateRef.current, menuItemId, quantity),
+        setCartItemQuantity(stateRef.current, menuItemId, variantId, quantity),
       );
     },
     [replaceState],
   );
 
   const setItemComment = useCallback(
-    (menuItemId: string, comment: string) => {
-      replaceState(setCartItemComment(stateRef.current, menuItemId, comment));
+    (menuItemId: string, variantId: string | null, comment: string) => {
+      replaceState(
+        setCartItemComment(stateRef.current, menuItemId, variantId, comment),
+      );
     },
     [replaceState],
   );
@@ -230,29 +267,30 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
-  const setDeliveryMode = useCallback(
-    (deliveryMode: CustomerDeliveryMode | null) => {
-      replaceState(setCartDeliveryMode(stateRef.current, deliveryMode));
+  const setFulfillmentChoice = useCallback(
+    (fulfillmentChoice: FulfillmentChoice) => {
+      replaceState(
+        setCartFulfillmentChoice(stateRef.current, fulfillmentChoice),
+      );
     },
     [replaceState],
   );
 
-  const createOrder = useCallback((options: CreateOrderOptions) => {
-    const action = createOrderFromCart(stateRef.current, options);
-    if (action.state !== stateRef.current) {
-      replaceState(action.state);
-    }
-    return action.result;
-  }, [replaceState]);
+  const createOrder = useCallback(
+    (options: CreateOrderOptions) => {
+      const action = createOrderFromCart(stateRef.current, options);
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
+    },
+    [replaceState],
+  );
 
   const acceptOrder = useCallback(
     (orderId: string, preparationMinutes: number) => {
       replaceState(
-        acceptRestaurantOrder(
-          stateRef.current,
-          orderId,
-          preparationMinutes,
-        ),
+        acceptRestaurantOrder(stateRef.current, orderId, preparationMinutes),
       );
     },
     [replaceState],
@@ -288,6 +326,27 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
+  const markOutForDelivery = useCallback(
+    (orderId: string) => {
+      replaceState(markOrderOutForDelivery(stateRef.current, orderId));
+    },
+    [replaceState],
+  );
+
+  const markArriving = useCallback(
+    (orderId: string) => {
+      replaceState(markOrderArriving(stateRef.current, orderId));
+    },
+    [replaceState],
+  );
+
+  const markDelivered = useCallback(
+    (orderId: string) => {
+      replaceState(markOrderDelivered(stateRef.current, orderId));
+    },
+    [replaceState],
+  );
+
   const saveTariffMatrix = useCallback(
     (tariffs: TariffMatrix) => {
       replaceState(saveTariffs(stateRef.current, tariffs));
@@ -298,6 +357,45 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   const restoreTariffs = useCallback(() => {
     replaceState(restoreDefaultTariffs(stateRef.current));
   }, [replaceState]);
+
+  const createRestaurantEntry = useCallback(
+    (input: RestaurantFormInput) => {
+      const action = createRestaurant(stateRef.current, input);
+      replaceState(action.state);
+      return action.result.restaurantId;
+    },
+    [replaceState],
+  );
+
+  const updateRestaurantEntry = useCallback(
+    (restaurantId: string, patch: Partial<RestaurantFormInput>) => {
+      replaceState(updateRestaurant(stateRef.current, restaurantId, patch));
+    },
+    [replaceState],
+  );
+
+  const setMenuItemVariants = useCallback(
+    (menuItemId: string, variants: MenuItemVariant[] | null) => {
+      replaceState(
+        updateMenuItemVariants(stateRef.current, menuItemId, variants),
+      );
+    },
+    [replaceState],
+  );
+
+  const savePromotion = useCallback(
+    (promotion: Promotion) => {
+      replaceState(upsertPromotion(stateRef.current, promotion));
+    },
+    [replaceState],
+  );
+
+  const togglePromotion = useCallback(
+    (promotionId: string, enabled: boolean) => {
+      replaceState(setPromotionEnabled(stateRef.current, promotionId, enabled));
+    },
+    [replaceState],
+  );
 
   const resetPrototype = useCallback(() => {
     replaceState(resetPrototypeState(stateRef.current));
@@ -313,15 +411,23 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       updateAddress,
       updateCustomer,
       setPaymentMethod,
-      setDeliveryMode,
+      setFulfillmentChoice,
       createOrder,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,
       markReady,
       markPickedUp,
+      markOutForDelivery,
+      markArriving,
+      markDelivered,
       saveTariffMatrix,
       restoreTariffs,
+      createRestaurantEntry,
+      updateRestaurantEntry,
+      setMenuItemVariants,
+      savePromotion,
+      togglePromotion,
       resetPrototype,
     }),
     [
@@ -333,15 +439,23 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       updateAddress,
       updateCustomer,
       setPaymentMethod,
-      setDeliveryMode,
+      setFulfillmentChoice,
       createOrder,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,
       markReady,
       markPickedUp,
+      markOutForDelivery,
+      markArriving,
+      markDelivered,
       saveTariffMatrix,
       restoreTariffs,
+      createRestaurantEntry,
+      updateRestaurantEntry,
+      setMenuItemVariants,
+      savePromotion,
+      togglePromotion,
       resetPrototype,
     ],
   );

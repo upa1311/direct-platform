@@ -11,11 +11,14 @@ import {
   calculateCartPricing,
   formatMoney,
   getCartItemViews,
+  getDeliveryModeProviderLabel,
   getRestaurant,
   getSmallOrderMissingAmountCents,
   isAddressReady,
   isCustomerNameValid,
   isCustomerPhoneValid,
+  pluralizePizza,
+  pluralizePizzaNominative,
 } from "@/prototype/selectors";
 
 export default function ClientCartPage() {
@@ -26,7 +29,7 @@ export default function ClientCartPage() {
     state,
     setItemQuantity,
     setItemComment,
-    setDeliveryMode,
+    setFulfillmentChoice,
     updateAddress,
     updateCustomer,
     createOrder,
@@ -42,21 +45,29 @@ export default function ClientCartPage() {
   const addressIsReady = isAddressReady(state.cart.address, state);
   const customerNameIsValid = isCustomerNameValid(state.customer.name);
   const customerPhoneIsValid = isCustomerPhoneValid(state.customer.phone);
-  const isDelivery = state.cart.deliveryMode === "PLATFORM_DRIVER";
-  const isPickup = state.cart.deliveryMode === "PICKUP";
-  const selectedModeIsSupported = state.cart.deliveryMode
-    ? restaurant?.deliveryModes.includes(state.cart.deliveryMode) === true
-    : false;
+  const isPickup = state.cart.fulfillmentChoice === "PICKUP";
+  const isDelivery = !isPickup;
+  const deliveryMode = pricing.deliveryMode;
+  const isRestaurantDelivery = deliveryMode === "RESTAURANT_DELIVERY";
+  const providerLabel = deliveryMode
+    ? getDeliveryModeProviderLabel(deliveryMode)
+    : null;
+  const restaurantDeliveryReady =
+    !isRestaurantDelivery || pricing.restaurantDeliveryStatus === "OK";
+  const selectedModeIsSupported =
+    deliveryMode !== null &&
+    restaurant?.deliveryModes.includes(deliveryMode) === true;
   const canSubmitOrder =
-    state.cart.deliveryMode !== null &&
     selectedModeIsSupported &&
     (!isDelivery || (isAddressConfirmed && addressIsReady)) &&
+    restaurantDeliveryReady &&
     customerNameIsValid &&
     customerPhoneIsValid &&
     itemViews.length > 0 &&
     state.cart.paymentMethod === "ONLINE" &&
     restaurant?.isAcceptingOrders === true &&
     restaurant.paymentMethods.includes("ONLINE") &&
+    pricing.customerTotalCents !== null &&
     itemViews.every(({ menuItem }) => menuItem.available);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -82,6 +93,19 @@ export default function ClientCartPage() {
     );
   }
 
+  const deliveryValue =
+    isPickup || pricing.deliveryFeeCents !== null
+      ? formatMoney(pricing.deliveryFeeCents ?? 0)
+      : isRestaurantDelivery
+        ? "—"
+        : "Укажите адрес";
+
+  const promoProgress =
+    pricing.promotionEligibleUnits > 0 &&
+    pricing.promotionUnitsToNextFree !== null
+      ? `Добавьте ещё ${pricing.promotionUnitsToNextFree} ${pluralizePizza(pricing.promotionUnitsToNextFree)} — следующая будет в подарок`
+      : null;
+
   return (
     <form id="checkout-cart" onSubmit={handleSubmit}>
       <header className={flowStyles.checkoutHeading}>
@@ -102,11 +126,19 @@ export default function ClientCartPage() {
           <section className={flowStyles.card}>
             <h2>Состав заказа</h2>
             <div className={flowStyles.cartItems}>
-              {itemViews.map(({ cartItem, menuItem, lineTotalCents }) => (
-                <div className={flowStyles.cartLine} key={menuItem.id}>
+              {itemViews.map(({ cartItem, menuItem, variant, lineTotalCents }) => (
+                <div
+                  className={flowStyles.cartLine}
+                  key={`${menuItem.id}-${cartItem.variantId ?? "base"}`}
+                >
                   <div className={flowStyles.cartLineTop}>
                     <div>
-                      <strong>{menuItem.name}</strong>
+                      <strong>
+                        {menuItem.name}
+                        {variant && !variant.isDefault
+                          ? ` · ${variant.name}`
+                          : ""}
+                      </strong>
                       <p>{formatMoney(lineTotalCents)}</p>
                     </div>
                     <div className={flowStyles.quantityControls}>
@@ -115,7 +147,11 @@ export default function ClientCartPage() {
                         type="button"
                         aria-label={`Уменьшить количество: ${menuItem.name}`}
                         onClick={() =>
-                          setItemQuantity(menuItem.id, cartItem.quantity - 1)
+                          setItemQuantity(
+                            menuItem.id,
+                            cartItem.variantId,
+                            cartItem.quantity - 1,
+                          )
                         }
                       >
                         −
@@ -126,7 +162,11 @@ export default function ClientCartPage() {
                         type="button"
                         aria-label={`Увеличить количество: ${menuItem.name}`}
                         onClick={() =>
-                          setItemQuantity(menuItem.id, cartItem.quantity + 1)
+                          setItemQuantity(
+                            menuItem.id,
+                            cartItem.variantId,
+                            cartItem.quantity + 1,
+                          )
                         }
                       >
                         +
@@ -134,7 +174,9 @@ export default function ClientCartPage() {
                       <button
                         className={flowStyles.removeButton}
                         type="button"
-                        onClick={() => setItemQuantity(menuItem.id, 0)}
+                        onClick={() =>
+                          setItemQuantity(menuItem.id, cartItem.variantId, 0)
+                        }
                       >
                         Удалить
                       </button>
@@ -145,7 +187,11 @@ export default function ClientCartPage() {
                     <input
                       value={cartItem.cookingComment}
                       onChange={(event) =>
-                        setItemComment(menuItem.id, event.target.value)
+                        setItemComment(
+                          menuItem.id,
+                          cartItem.variantId,
+                          event.target.value,
+                        )
                       }
                       placeholder="Например: без лука"
                     />
@@ -153,6 +199,16 @@ export default function ClientCartPage() {
                 </div>
               ))}
             </div>
+            {pricing.appliedPromotion ? (
+              <div className={flowStyles.zoneNotice}>
+                Подарок применён: {pricing.promotionFreeUnitCount}{" "}
+                {pluralizePizzaNominative(pricing.promotionFreeUnitCount)}{" "}
+                бесплатно
+                {promoProgress ? `. ${promoProgress}` : ""}
+              </div>
+            ) : promoProgress ? (
+              <div className={flowStyles.zoneNotice}>{promoProgress}</div>
+            ) : null}
           </section>
 
           <section className={flowStyles.card}>
@@ -204,68 +260,76 @@ export default function ClientCartPage() {
             <section className={flowStyles.card}>
               <h2>Адрес доставки</h2>
               <div className={flowStyles.fieldGrid}>
-              <label className={`${flowStyles.field} ${flowStyles.fieldFull}`}>
-                <span>Улица</span>
-                <select
-                  required
-                  value={state.cart.address.street}
-                  onChange={(event) =>
-                    updateAddress({ street: event.target.value })
-                  }
+                <label
+                  className={`${flowStyles.field} ${flowStyles.fieldFull}`}
                 >
-                  <option value="">Выберите улицу</option>
-                  {state.zones.flatMap((zone) =>
-                    zone.streets.map((street) => (
-                      <option value={street} key={street}>
-                        {street}
-                      </option>
-                    )),
-                  )}
-                </select>
-              </label>
-              <label className={flowStyles.field}>
-                <span>Дом</span>
-                <input
-                  required
-                  value={state.cart.address.house}
-                  onChange={(event) => updateAddress({ house: event.target.value })}
-                />
-              </label>
-              <label className={flowStyles.field}>
-                <span>Квартира</span>
-                <input
-                  value={state.cart.address.apartment}
-                  onChange={(event) =>
-                    updateAddress({ apartment: event.target.value })
-                  }
-                />
-              </label>
-              <label className={flowStyles.field}>
-                <span>Подъезд</span>
-                <input
-                  value={state.cart.address.entrance}
-                  onChange={(event) =>
-                    updateAddress({ entrance: event.target.value })
-                  }
-                />
-              </label>
-              <label className={flowStyles.field}>
-                <span>Этаж</span>
-                <input
-                  value={state.cart.address.floor}
-                  onChange={(event) => updateAddress({ floor: event.target.value })}
-                />
-              </label>
-              <label className={`${flowStyles.field} ${flowStyles.fieldFull}`}>
-                <span>Комментарий к доставке</span>
-                <textarea
-                  value={state.cart.address.comment}
-                  onChange={(event) =>
-                    updateAddress({ comment: event.target.value })
-                  }
-                  placeholder="Домофон, ориентир или пожелание"
-                />
-              </label>
+                  <span>Улица</span>
+                  <select
+                    required
+                    value={state.cart.address.street}
+                    onChange={(event) =>
+                      updateAddress({ street: event.target.value })
+                    }
+                  >
+                    <option value="">Выберите улицу</option>
+                    {state.zones.flatMap((zone) =>
+                      zone.streets.map((street) => (
+                        <option value={street} key={street}>
+                          {street}
+                        </option>
+                      )),
+                    )}
+                  </select>
+                </label>
+                <label className={flowStyles.field}>
+                  <span>Дом</span>
+                  <input
+                    required
+                    value={state.cart.address.house}
+                    onChange={(event) =>
+                      updateAddress({ house: event.target.value })
+                    }
+                  />
+                </label>
+                <label className={flowStyles.field}>
+                  <span>Квартира</span>
+                  <input
+                    value={state.cart.address.apartment}
+                    onChange={(event) =>
+                      updateAddress({ apartment: event.target.value })
+                    }
+                  />
+                </label>
+                <label className={flowStyles.field}>
+                  <span>Подъезд</span>
+                  <input
+                    value={state.cart.address.entrance}
+                    onChange={(event) =>
+                      updateAddress({ entrance: event.target.value })
+                    }
+                  />
+                </label>
+                <label className={flowStyles.field}>
+                  <span>Этаж</span>
+                  <input
+                    value={state.cart.address.floor}
+                    onChange={(event) =>
+                      updateAddress({ floor: event.target.value })
+                    }
+                  />
+                </label>
+                <label
+                  className={`${flowStyles.field} ${flowStyles.fieldFull}`}
+                >
+                  <span>Комментарий к доставке</span>
+                  <textarea
+                    value={state.cart.address.comment}
+                    onChange={(event) =>
+                      updateAddress({ comment: event.target.value })
+                    }
+                    placeholder="Домофон, ориентир или пожелание"
+                  />
+                </label>
               </div>
               {hasAddressInput && !addressIsReady ? (
                 <div className={flowStyles.warningNotice} role="alert">
@@ -273,7 +337,7 @@ export default function ClientCartPage() {
                 </div>
               ) : null}
             </section>
-          ) : isPickup ? (
+          ) : (
             <section className={flowStyles.card}>
               <h2>Точка самовывоза</h2>
               <p className={flowStyles.fulfillmentSummary}>
@@ -281,7 +345,7 @@ export default function ClientCartPage() {
                 <span>{restaurant.address}</span>
               </p>
             </section>
-          ) : null}
+          )}
 
           <section className={flowStyles.card}>
             <h2>Оплата</h2>
@@ -306,7 +370,7 @@ export default function ClientCartPage() {
                   type="radio"
                   name="checkout-delivery-mode"
                   checked={isDelivery}
-                  onChange={() => setDeliveryMode("PLATFORM_DRIVER")}
+                  onChange={() => setFulfillmentChoice("DELIVERY")}
                 />
                 <span>Доставка</span>
               </label>
@@ -315,55 +379,47 @@ export default function ClientCartPage() {
                   type="radio"
                   name="checkout-delivery-mode"
                   checked={isPickup}
-                  onChange={() => setDeliveryMode("PICKUP")}
+                  onChange={() => setFulfillmentChoice("PICKUP")}
                 />
                 <span>Самовывоз</span>
               </label>
             </fieldset>
-            {isDelivery ? (
-              <p className={flowStyles.summaryFulfillmentNote}>
-                Доставит водитель Direct
-              </p>
-            ) : isPickup ? (
+            {isPickup ? (
               <p className={flowStyles.summaryFulfillmentNote}>
                 Самовывоз из ресторана
               </p>
-            ) : (
+            ) : providerLabel ? (
               <p className={flowStyles.summaryFulfillmentNote}>
-                Выберите доставку или самовывоз
+                {providerLabel}
               </p>
-            )}
+            ) : null}
           </div>
+
           <h2>Итого</h2>
           <dl className={flowStyles.summaryList}>
             <div className={flowStyles.summaryRow}>
               <dt>Еда</dt>
-              <dd>{formatMoney(pricing.foodSubtotalCents)}</dd>
+              <dd>{formatMoney(pricing.foodSubtotalBeforeDiscountsCents)}</dd>
             </div>
+            {pricing.appliedPromotion ? (
+              <div className={flowStyles.summaryRow}>
+                <dt>Акция 3+1</dt>
+                <dd>−{formatMoney(pricing.promotionDiscountCents)}</dd>
+              </div>
+            ) : null}
             <div className={flowStyles.summaryRow}>
-              <dt>
-                {isPickup
-                  ? "Самовывоз"
-                  : isDelivery
-                    ? "Доставка"
-                    : "Получение"}
-              </dt>
-              <dd>
-                {state.cart.deliveryMode === null
-                  ? "Выберите способ"
-                  : pricing.deliveryFeeCents === null
-                    ? "Укажите адрес"
-                  : formatMoney(pricing.deliveryFeeCents)}
-              </dd>
+              <dt>{isPickup ? "Самовывоз" : "Доставка"}</dt>
+              <dd>{deliveryValue}</dd>
             </div>
-            {state.cart.deliveryMode !== null &&
-            pricing.smallOrderFeeCents > 0 ? (
+            {pricing.smallOrderFeeCents > 0 ? (
               <div className={flowStyles.summaryRow}>
                 <dt>Доплата за небольшой заказ</dt>
                 <dd>{formatMoney(pricing.smallOrderFeeCents)}</dd>
               </div>
             ) : null}
-            <div className={`${flowStyles.summaryRow} ${flowStyles.summaryTotal}`}>
+            <div
+              className={`${flowStyles.summaryRow} ${flowStyles.summaryTotal}`}
+            >
               <dt>К оплате</dt>
               <dd>
                 {pricing.customerTotalCents === null
@@ -372,13 +428,38 @@ export default function ClientCartPage() {
               </dd>
             </div>
           </dl>
-          {state.cart.deliveryMode !== null &&
-          pricing.smallOrderFeeCents > 0 ? (
+
+          {isRestaurantDelivery &&
+          pricing.restaurantDeliveryStatus === "ZONE_NOT_SERVED" ? (
+            <div className={flowStyles.warningNotice}>
+              Ресторан пока не доставляет по этому адресу. Доступен самовывоз.
+            </div>
+          ) : null}
+          {isRestaurantDelivery &&
+          pricing.restaurantDeliveryStatus === "BELOW_MINIMUM" &&
+          pricing.restaurantDeliveryMissingCents !== null ? (
+            <div className={flowStyles.warningNotice}>
+              До минимальной суммы заказа не хватает{" "}
+              {formatMoney(pricing.restaurantDeliveryMissingCents)}. Добавьте
+              блюда, чтобы оформить доставку.
+            </div>
+          ) : null}
+          {isRestaurantDelivery &&
+          pricing.restaurantDeliveryStatus === "OK" &&
+          pricing.freeDeliveryRemainingCents !== null &&
+          pricing.freeDeliveryRemainingCents > 0 ? (
+            <div className={flowStyles.zoneNotice}>
+              До бесплатной доставки осталось{" "}
+              {formatMoney(pricing.freeDeliveryRemainingCents)}.
+            </div>
+          ) : null}
+          {pricing.smallOrderFeeCents > 0 ? (
             <div className={flowStyles.warningNotice}>
               Добавьте товаров ещё на {formatMoney(smallOrderMissingCents)},
               чтобы доплата исчезла.
             </div>
           ) : null}
+
           <div className={flowStyles.submitArea}>
             <button
               className={flowStyles.primaryButton}

@@ -4,13 +4,11 @@ import { useEffect, useState } from "react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
-import { TEST_RESTAURANT_ID } from "@/prototype/default-state";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatMoney,
-  getRestaurant,
-  getRestaurantOrders,
+  getWorkingRestaurantOrders,
   orderStatusLabels,
   paymentStatusLabels,
 } from "@/prototype/selectors";
@@ -22,7 +20,6 @@ function formatCountdown(expectedReadyAt: string | null, now: number) {
   if (now === 0) {
     return "—";
   }
-
   const remainingSeconds = Math.max(
     0,
     Math.ceil((new Date(expectedReadyAt).getTime() - now) / 1000),
@@ -33,14 +30,22 @@ function formatCountdown(expectedReadyAt: string | null, now: number) {
 }
 
 export default function RestaurantActiveOrdersPage() {
-  const { state, markReady, markPickedUp } = usePrototype();
-  const currentRestaurant = getRestaurant(state, TEST_RESTAURANT_ID);
+  const {
+    state,
+    markReady,
+    markPickedUp,
+    markOutForDelivery,
+    markArriving,
+    markDelivered,
+  } = usePrototype();
   const [now, setNow] = useState(0);
-  const orders = getRestaurantOrders(state, TEST_RESTAURANT_ID, [
+  const orders = getWorkingRestaurantOrders(state, [
     "AWAITING_PAYMENT",
     "PREPARING",
     "READY",
     "READY_FOR_PICKUP",
+    "OUT_FOR_DELIVERY",
+    "ARRIVING",
   ]);
 
   useEffect(() => {
@@ -51,9 +56,9 @@ export default function RestaurantActiveOrdersPage() {
   return (
     <>
       <PageHeading
-        eyebrow={currentRestaurant?.name ?? "Ресторан 1"}
+        eyebrow="Рестораны 1–3"
         title="Активные заказы"
-        description="Принятые заказы, ожидание оплаты и приготовление."
+        description="Принятые заказы, ожидание оплаты, приготовление и доставка."
       />
       {orders.length === 0 ? (
         <div className={flowStyles.emptyState}>Активных заказов пока нет.</div>
@@ -66,6 +71,7 @@ export default function RestaurantActiveOrdersPage() {
                   <h2 className={flowStyles.orderNumber}>
                     {order.publicNumber}
                   </h2>
+                  <p>{order.restaurant.name}</p>
                   <p>{orderStatusLabels[order.status]}</p>
                   <p>{deliveryModeLabels[order.deliveryMode]}</p>
                 </div>
@@ -75,9 +81,14 @@ export default function RestaurantActiveOrdersPage() {
               </div>
               <ul className={flowStyles.orderItemList}>
                 {order.items.map((item) => (
-                  <li key={item.menuItemId}>
+                  <li key={`${item.menuItemId}-${item.selectedVariantId ?? "base"}`}>
                     <span>
-                      {item.name} × {item.quantity}
+                      {item.name}
+                      {item.selectedVariantName &&
+                      item.variantPriceDeltaCents !== 0
+                        ? ` · ${item.selectedVariantName}`
+                        : ""}{" "}
+                      × {item.quantity}
                     </span>
                     <span>{formatMoney(item.lineTotalCents)}</span>
                   </li>
@@ -101,7 +112,9 @@ export default function RestaurantActiveOrdersPage() {
                     >
                       {order.deliveryMode === "PICKUP"
                         ? "Готов к выдаче"
-                        : "Готово и упаковано"}
+                        : order.deliveryMode === "RESTAURANT_DELIVERY"
+                          ? "Готово"
+                          : "Готово и упаковано"}
                     </button>
                   </div>
                 </>
@@ -114,6 +127,40 @@ export default function RestaurantActiveOrdersPage() {
                     onClick={() => markPickedUp(order.id)}
                   >
                     Выдать заказ
+                  </button>
+                </div>
+              ) : null}
+              {order.deliveryMode === "RESTAURANT_DELIVERY" &&
+              order.status === "READY" ? (
+                <div className={flowStyles.submitArea}>
+                  <button
+                    className={flowStyles.primaryButton}
+                    type="button"
+                    onClick={() => markOutForDelivery(order.id)}
+                  >
+                    Курьер выехал
+                  </button>
+                </div>
+              ) : null}
+              {order.status === "OUT_FOR_DELIVERY" ? (
+                <div className={flowStyles.submitArea}>
+                  <button
+                    className={flowStyles.primaryButton}
+                    type="button"
+                    onClick={() => markArriving(order.id)}
+                  >
+                    Курьер скоро будет
+                  </button>
+                </div>
+              ) : null}
+              {order.status === "ARRIVING" ? (
+                <div className={flowStyles.submitArea}>
+                  <button
+                    className={flowStyles.primaryButton}
+                    type="button"
+                    onClick={() => markDelivered(order.id)}
+                  >
+                    Заказ доставлен
                   </button>
                 </div>
               ) : null}

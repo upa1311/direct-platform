@@ -5,14 +5,16 @@ import { useParams } from "next/navigation";
 import { useState, type MouseEvent } from "react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
-import { TEST_RESTAURANT_ID } from "@/prototype/default-state";
 import { useClientAddressConfirmation } from "@/components/order-flow/client-address-confirmation";
 import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
+  canPlacePrototypeOrder,
   formatMoney,
   getRestaurant,
   getRestaurantMenu,
+  getRestaurantPromotion,
+  resolveVariant,
 } from "@/prototype/selectors";
 
 function getProductLabel(quantity: number): string {
@@ -30,6 +32,9 @@ export default function ClientRestaurantPage() {
   const { isAddressConfirmed } = useClientAddressConfirmation();
   const { notifyItemAdded } = useClientCartUi();
   const [feedback, setFeedback] = useState("");
+  const [selectedVariants, setSelectedVariants] = useState<
+    Record<string, string>
+  >({});
   const restaurant = getRestaurant(state, params.restaurantId);
 
   if (!restaurant || restaurant.status !== "PUBLISHED") {
@@ -41,28 +46,21 @@ export default function ClientRestaurantPage() {
   }
 
   const menuItems = getRestaurantMenu(state, restaurant.id);
-  const canOrder =
-    restaurant.id === TEST_RESTAURANT_ID &&
-    restaurant.isAcceptingOrders &&
-    (restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
-      restaurant.deliveryModes.includes("PICKUP")) &&
-    restaurant.paymentMethods.includes("ONLINE");
+  const promotion = getRestaurantPromotion(state, restaurant.id);
+  const canOrder = canPlacePrototypeOrder(restaurant);
   const cartQuantity =
     state.cart.restaurantId === restaurant.id
       ? state.cart.items.reduce((total, item) => total + item.quantity, 0)
       : 0;
+  const isPickup = state.cart.fulfillmentChoice === "PICKUP";
   const checkoutHref =
-    state.cart.deliveryMode === null
-      ? "/client/catalog#fulfillment-method"
-      : state.cart.deliveryMode === "PLATFORM_DRIVER" && !isAddressConfirmed
-        ? "/client/catalog#delivery-address"
-        : "/client/cart#checkout-cart";
+    !isPickup && !isAddressConfirmed
+      ? "/client/catalog#delivery-address"
+      : "/client/cart#checkout-cart";
   const checkoutLabel =
-    state.cart.deliveryMode === null
-      ? "Выбрать способ получения"
-      : state.cart.deliveryMode === "PLATFORM_DRIVER" && !isAddressConfirmed
-        ? "Указать адрес"
-        : "Перейти к оформлению";
+    !isPickup && !isAddressConfirmed
+      ? "Указать адрес"
+      : "Перейти к оформлению";
 
   const getAddFeedback = (result: ReturnType<typeof addItem>) => {
     if (result === "ADDED") {
@@ -76,9 +74,10 @@ export default function ClientRestaurantPage() {
 
   const handleAdd = (
     menuItemId: string,
+    variantId: string | null,
     event: MouseEvent<HTMLButtonElement>,
   ) => {
-    const result = addItem(menuItemId);
+    const result = addItem(menuItemId, variantId);
 
     if (result === "RESTAURANT_CONFLICT") {
       const confirmed = window.confirm(
@@ -87,7 +86,7 @@ export default function ClientRestaurantPage() {
       if (!confirmed) {
         return;
       }
-      const replacementResult = addItem(menuItemId, true);
+      const replacementResult = addItem(menuItemId, variantId, true);
       setFeedback(
         replacementResult === "ADDED"
           ? "Предыдущая корзина очищена. Блюдо добавлено."
@@ -113,6 +112,27 @@ export default function ClientRestaurantPage() {
           <span>{restaurant.address}</span>
           <span>Обычно {restaurant.defaultPreparationMinutes} минут</span>
         </div>
+        {promotion ? (
+          <div className={flowStyles.restaurantPromo}>
+            <strong>{promotion.title}</strong>
+            <span>Акция повторяется: при 8 пиццах две бесплатно</span>
+          </div>
+        ) : null}
+        {restaurant.restaurantDeliverySettings ? (
+          <div className={flowStyles.restaurantPromo}>
+            <strong>
+              Минимальный заказ{" "}
+              {formatMoney(
+                restaurant.restaurantDeliverySettings.minimumOrderCents,
+              )}
+              {restaurant.restaurantDeliverySettings
+                .freeDeliveryThresholdCents !== null
+                ? ` · Бесплатная доставка от ${formatMoney(restaurant.restaurantDeliverySettings.freeDeliveryThresholdCents)}`
+                : ""}
+            </strong>
+            <span>Стоимость доставки зависит от вашего адреса</span>
+          </div>
+        ) : null}
       </div>
 
       {!canOrder ? (
@@ -130,13 +150,27 @@ export default function ClientRestaurantPage() {
 
       <div className={flowStyles.menuList}>
         {menuItems.map((menuItem) => {
+          const variants = menuItem.variants ?? [];
+          const hasVariants = variants.length > 0;
+          const defaultVariant = resolveVariant(menuItem, null);
+          const selectedVariantId = hasVariants
+            ? (selectedVariants[menuItem.id] ?? defaultVariant?.id ?? null)
+            : null;
+          const selectedVariant = resolveVariant(menuItem, selectedVariantId);
+          const unitPriceCents =
+            menuItem.priceCents + (selectedVariant?.priceDeltaCents ?? 0);
+          const lineVariantId = selectedVariant?.id ?? null;
           const cartItem =
             state.cart.restaurantId === restaurant.id
               ? state.cart.items.find(
-                  (item) => item.menuItemId === menuItem.id,
+                  (item) =>
+                    item.menuItemId === menuItem.id &&
+                    item.variantId === lineVariantId,
                 )
               : undefined;
           const quantity = cartItem?.quantity ?? 0;
+          const isEligible =
+            promotion?.eligibleMenuItemIds.includes(menuItem.id) ?? false;
 
           return (
             <article
@@ -152,10 +186,43 @@ export default function ClientRestaurantPage() {
                   <span>{menuItem.category}</span>
                   <span>{menuItem.available ? "В наличии" : "Недоступно"}</span>
                 </div>
+                {isEligible ? (
+                  <p className={flowStyles.itemPromoTag}>
+                    Участвует в акции 3+1
+                  </p>
+                ) : null}
+                {hasVariants ? (
+                  <div
+                    className={flowStyles.sizeSelector}
+                    role="group"
+                    aria-label={`Размер: ${menuItem.name}`}
+                  >
+                    {variants.map((variant) => (
+                      <label
+                        className={flowStyles.sizeOption}
+                        key={variant.id}
+                      >
+                        <input
+                          type="radio"
+                          name={`size-${menuItem.id}`}
+                          checked={variant.id === lineVariantId}
+                          disabled={!variant.available}
+                          onChange={() =>
+                            setSelectedVariants((current) => ({
+                              ...current,
+                              [menuItem.id]: variant.id,
+                            }))
+                          }
+                        />
+                        <span>{variant.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
               </div>
               <div className={flowStyles.menuActions}>
                 <span className={flowStyles.price}>
-                  {formatMoney(menuItem.priceCents, menuItem.currencyCode)}
+                  {formatMoney(unitPriceCents, menuItem.currencyCode)}
                 </span>
                 {quantity > 0 && menuItem.available && canOrder ? (
                   <div
@@ -166,7 +233,7 @@ export default function ClientRestaurantPage() {
                       type="button"
                       aria-label={`Уменьшить количество: ${menuItem.name}`}
                       onClick={() =>
-                        setItemQuantity(menuItem.id, quantity - 1)
+                        setItemQuantity(menuItem.id, lineVariantId, quantity - 1)
                       }
                     >
                       −
@@ -175,7 +242,9 @@ export default function ClientRestaurantPage() {
                     <button
                       type="button"
                       aria-label={`Увеличить количество: ${menuItem.name}`}
-                      onClick={(event) => handleAdd(menuItem.id, event)}
+                      onClick={(event) =>
+                        handleAdd(menuItem.id, lineVariantId, event)
+                      }
                     >
                       +
                     </button>
@@ -185,7 +254,9 @@ export default function ClientRestaurantPage() {
                     className={flowStyles.primaryButton}
                     type="button"
                     disabled={!menuItem.available || !canOrder}
-                    onClick={(event) => handleAdd(menuItem.id, event)}
+                    onClick={(event) =>
+                      handleAdd(menuItem.id, lineVariantId, event)
+                    }
                   >
                     Добавить
                   </button>
@@ -196,16 +267,11 @@ export default function ClientRestaurantPage() {
         })}
       </div>
       {cartQuantity > 0 ? (
-        <Link
-          className={flowStyles.menuCheckoutCta}
-          href={checkoutHref}
-        >
+        <Link className={flowStyles.menuCheckoutCta} href={checkoutHref}>
           <span>
             {cartQuantity} {getProductLabel(cartQuantity)} ·
           </span>
-          <strong>
-            {checkoutLabel}
-          </strong>
+          <strong>{checkoutLabel}</strong>
         </Link>
       ) : null}
     </div>

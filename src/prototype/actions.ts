@@ -2,24 +2,35 @@ import {
   createDefaultState,
   createDefaultTariffs,
   createEmptyCart,
-  TEST_RESTAURANT_ID,
 } from "./default-state";
 import type {
-  CustomerDeliveryMode,
+  AppliedPromotionSnapshot,
   DeliveryAddress,
+  DeliveryMode,
+  FulfillmentChoice,
+  MenuItemVariant,
   Order,
+  OrderItemSnapshot,
   PaymentMethod,
+  Promotion,
   PrototypeState,
+  Restaurant,
+  RestaurantDeliveryProvider,
+  RestaurantDeliverySnapshot,
+  RestaurantDeliverySettings,
   TariffMatrix,
 } from "./models";
 import {
   calculateCartPricing,
+  canPlacePrototypeOrder,
   detectZoneId,
+  getCartDeliveryMode,
   getCartItemViews,
   getRestaurant,
   isAddressReady,
   isCustomerNameValid,
   isCustomerPhoneValid,
+  WORKING_RESTAURANT_IDS,
 } from "./selectors";
 import { finalizeMutation } from "./prototype-store";
 
@@ -43,9 +54,18 @@ export interface CreateOrderOptions {
   isAddressConfirmed: boolean;
 }
 
+function sameLine(
+  item: { menuItemId: string; variantId: string | null },
+  menuItemId: string,
+  variantId: string | null,
+): boolean {
+  return item.menuItemId === menuItemId && item.variantId === variantId;
+}
+
 export function addCartItem(
   state: PrototypeState,
   menuItemId: string,
+  variantId: string | null = null,
   replaceRestaurant = false,
 ): ActionResult<AddCartItemResult> {
   const menuItem = state.menuItems.find((item) => item.id === menuItemId);
@@ -55,15 +75,7 @@ export function addCartItem(
   }
 
   const restaurant = getRestaurant(state, menuItem.restaurantId);
-  if (
-    !restaurant ||
-    restaurant.id !== TEST_RESTAURANT_ID ||
-    restaurant.status !== "PUBLISHED" ||
-    !restaurant.isAcceptingOrders ||
-    (!restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
-      !restaurant.deliveryModes.includes("PICKUP")) ||
-    !restaurant.paymentMethods.includes("ONLINE")
-  ) {
+  if (!restaurant || !canPlacePrototypeOrder(restaurant)) {
     return { state, result: "RESTAURANT_UNAVAILABLE" };
   }
 
@@ -79,18 +91,18 @@ export function addCartItem(
     state.cart.restaurantId && state.cart.restaurantId !== menuItem.restaurantId
       ? createEmptyCart(state.cart.address)
       : state.cart;
-  const existingItem = baseCart.items.find(
-    (item) => item.menuItemId === menuItemId,
+  const existingItem = baseCart.items.find((item) =>
+    sameLine(item, menuItemId, variantId),
   );
   const items = existingItem
     ? baseCart.items.map((item) =>
-        item.menuItemId === menuItemId
+        sameLine(item, menuItemId, variantId)
           ? { ...item, quantity: item.quantity + 1 }
           : item,
       )
     : [
         ...baseCart.items,
-        { menuItemId, quantity: 1, cookingComment: "" },
+        { menuItemId, variantId, quantity: 1, cookingComment: "" },
       ];
 
   const nextState = finalizeMutation(state, {
@@ -108,44 +120,34 @@ export function addCartItem(
 export function setCartItemQuantity(
   state: PrototypeState,
   menuItemId: string,
+  variantId: string | null,
   quantity: number,
 ): PrototypeState {
   const items = state.cart.items
     .map((item) =>
-      item.menuItemId === menuItemId
+      sameLine(item, menuItemId, variantId)
         ? { ...item, quantity: Math.max(0, Math.trunc(quantity)) }
         : item,
     )
     .filter((item) => item.quantity > 0);
-  const foodSubtotalCents = items.reduce((total, item) => {
-    const menuItem = state.menuItems.find(
-      (candidate) => candidate.id === item.menuItemId,
-    );
-    return total + (menuItem?.priceCents ?? 0) * item.quantity;
-  }, 0);
-  const paymentMethod =
-    state.cart.paymentMethod === "CASH" &&
-    (!state.platformSettings.platformDriverCashEnabled ||
-      foodSubtotalCents < state.platformSettings.cashMinimumFoodSubtotalCents)
-      ? "ONLINE"
-      : state.cart.paymentMethod;
+
+  if (items.length === 0) {
+    return finalizeMutation(state, {
+      ...state,
+      cart: createEmptyCart(state.cart.address),
+    });
+  }
 
   return finalizeMutation(state, {
     ...state,
-    cart: {
-      ...state.cart,
-      restaurantId: items.length > 0 ? state.cart.restaurantId : null,
-      items,
-      deliveryMode:
-        items.length > 0 ? state.cart.deliveryMode : "PLATFORM_DRIVER",
-      paymentMethod,
-    },
+    cart: { ...state.cart, items },
   });
 }
 
 export function setCartItemComment(
   state: PrototypeState,
   menuItemId: string,
+  variantId: string | null,
   cookingComment: string,
 ): PrototypeState {
   return finalizeMutation(state, {
@@ -153,7 +155,7 @@ export function setCartItemComment(
     cart: {
       ...state.cart,
       items: state.cart.items.map((item) =>
-        item.menuItemId === menuItemId
+        sameLine(item, menuItemId, variantId)
           ? { ...item, cookingComment }
           : item,
       ),
@@ -205,26 +207,24 @@ export function setCartPaymentMethod(
   if (paymentMethod === "CASH") {
     return state;
   }
-
   return finalizeMutation(state, {
     ...state,
     cart: { ...state.cart, paymentMethod },
   });
 }
 
-export function setCartDeliveryMode(
+export function setCartFulfillmentChoice(
   state: PrototypeState,
-  deliveryMode: CustomerDeliveryMode | null,
+  fulfillmentChoice: FulfillmentChoice,
 ): PrototypeState {
-  if (state.cart.deliveryMode === deliveryMode) {
+  if (state.cart.fulfillmentChoice === fulfillmentChoice) {
     return state;
   }
-
   return finalizeMutation(state, {
     ...state,
     cart: {
       ...state.cart,
-      deliveryMode,
+      fulfillmentChoice,
       paymentMethod: "ONLINE",
     },
   });
@@ -268,110 +268,49 @@ export function createOrderFromCart(
   options: CreateOrderOptions,
 ): ActionResult<CreateOrderResult> {
   const restaurant = getRestaurant(state, state.cart.restaurantId);
-  const deliveryMode = state.cart.deliveryMode;
+  const deliveryMode = getCartDeliveryMode(state);
+  const fail = (error: string): ActionResult<CreateOrderResult> => ({
+    state,
+    result: { orderId: null, error },
+  });
 
   if (!isCustomerNameValid(state.customer.name)) {
-    return {
-      state,
-      result: { orderId: null, error: "Укажите имя получателя." },
-    };
+    return fail("Укажите имя получателя.");
   }
-
   if (!isCustomerPhoneValid(state.customer.phone)) {
-    return {
-      state,
-      result: { orderId: null, error: "Укажите телефон минимум с 7 цифрами." },
-    };
+    return fail("Укажите телефон минимум с 7 цифрами.");
   }
-
   if (state.cart.items.length === 0) {
-    return {
-      state,
-      result: { orderId: null, error: "Корзина пуста." },
-    };
+    return fail("Корзина пуста.");
   }
-
-  if (!restaurant) {
-    return {
-      state,
-      result: {
-        orderId: null,
-        error:
-          "Корзина содержит некорректные позиции. Удалите их и добавьте блюда заново.",
-      },
-    };
+  if (!restaurant || !deliveryMode) {
+    return fail(
+      "Корзина содержит некорректные позиции. Удалите их и добавьте блюда заново.",
+    );
   }
-
-  if (!deliveryMode) {
-    return {
-      state,
-      result: {
-        orderId: null,
-        error: "Выберите доставку или самовывоз.",
-      },
-    };
+  if (!canPlacePrototypeOrder(restaurant)) {
+    return fail(
+      "Ресторан сейчас не принимает заказы. Выберите другой ресторан или повторите позже.",
+    );
   }
-
-  if (
-    restaurant.id !== TEST_RESTAURANT_ID ||
-    restaurant.status !== "PUBLISHED" ||
-    !restaurant.isAcceptingOrders ||
-    !restaurant.deliveryModes.includes(deliveryMode) ||
-    !restaurant.paymentMethods.includes("ONLINE")
-  ) {
-    return {
-      state,
-      result: {
-        orderId: null,
-        error:
-          "Ресторан сейчас не принимает заказы. Выберите другой ресторан или повторите позже.",
-      },
-    };
+  if (!restaurant.deliveryModes.includes(deliveryMode)) {
+    return fail("Этот способ получения недоступен для ресторана.");
   }
-
-  if (state.cart.paymentMethod === "CASH") {
-    return {
-      state,
-      result: {
-        orderId: null,
-        error: "Наличные сейчас отключены. Выберите оплату онлайн.",
-      },
-    };
-  }
-
   if (state.cart.paymentMethod !== "ONLINE") {
-    return {
-      state,
-      result: {
-        orderId: null,
-        error: "Выберите оплату онлайн.",
-      },
-    };
+    return fail("Выберите оплату онлайн.");
   }
 
-  const hasMissingItem = state.cart.items.some(
-    (cartItem) =>
-      !state.menuItems.some(
-        (menuItem) => menuItem.id === cartItem.menuItemId,
-      ),
-  );
-  const hasUnavailableItem = state.cart.items.some((cartItem) => {
+  const hasMissingOrUnavailable = state.cart.items.some((cartItem) => {
     const menuItem = state.menuItems.find(
       (candidate) => candidate.id === cartItem.menuItemId,
     );
-    return Boolean(menuItem && !menuItem.available);
+    return !menuItem || !menuItem.available;
   });
-
-  if (hasMissingItem || hasUnavailableItem) {
-    return {
-      state,
-      result: {
-        orderId: null,
-        error: "Некоторые блюда больше недоступны. Обновите корзину.",
-      },
-    };
+  if (hasMissingOrUnavailable) {
+    return fail("Некоторые блюда больше недоступны. Обновите корзину.");
   }
 
+  const itemViews = getCartItemViews(state);
   const hasCorruptedItem = state.cart.items.some((cartItem) => {
     const menuItem = state.menuItems.find(
       (candidate) => candidate.id === cartItem.menuItemId,
@@ -382,50 +321,36 @@ export function createOrderFromCart(
       cartItem.quantity <= 0
     );
   });
-  const itemViews = getCartItemViews(state);
-
   if (hasCorruptedItem || itemViews.length !== state.cart.items.length) {
-    return {
-      state,
-      result: {
-        orderId: null,
-        error:
-          "Корзина содержит некорректные позиции. Удалите их и добавьте блюда заново.",
-      },
-    };
+    return fail(
+      "Корзина содержит некорректные позиции. Удалите их и добавьте блюда заново.",
+    );
+  }
+
+  const isDelivery = deliveryMode !== "PICKUP";
+  const customerZoneId = isDelivery
+    ? detectZoneId(state.cart.address.street, state, state.cart.address.house)
+    : null;
+
+  if (isDelivery && !options.isAddressConfirmed) {
+    return fail("Подтвердите адрес доставки.");
+  }
+  if (
+    isDelivery &&
+    (!isAddressReady(state.cart.address, state) || !customerZoneId)
+  ) {
+    return fail("Укажите улицу из справочника и номер дома.");
   }
 
   const pricing = calculateCartPricing(state);
-  const customerZoneId =
-    deliveryMode === "PLATFORM_DRIVER"
-      ? detectZoneId(
-          state.cart.address.street,
-          state,
-          state.cart.address.house,
-        )
-      : null;
 
-  if (deliveryMode === "PLATFORM_DRIVER" && !options.isAddressConfirmed) {
-    return {
-      state,
-      result: {
-        orderId: null,
-        error: "Подтвердите адрес доставки.",
-      },
-    };
-  }
-
-  if (
-    deliveryMode === "PLATFORM_DRIVER" &&
-    (!isAddressReady(state.cart.address, state) || !customerZoneId)
-  ) {
-    return {
-      state,
-      result: {
-        orderId: null,
-        error: "Укажите улицу из справочника и номер дома.",
-      },
-    };
+  if (deliveryMode === "RESTAURANT_DELIVERY") {
+    if (pricing.restaurantDeliveryStatus === "ZONE_NOT_SERVED") {
+      return fail("Ресторан пока не доставляет по этому адресу.");
+    }
+    if (pricing.restaurantDeliveryStatus === "BELOW_MINIMUM") {
+      return fail("Стоимость еды меньше минимальной суммы заказа.");
+    }
   }
 
   if (
@@ -433,11 +358,46 @@ export function createOrderFromCart(
     pricing.driverPayoutCents === null ||
     pricing.customerTotalCents === null
   ) {
-    return {
-      state,
-      result: { orderId: null, error: "Не удалось рассчитать заказ." },
-    };
+    return fail("Не удалось рассчитать заказ.");
   }
+
+  const settings = restaurant.restaurantDeliverySettings;
+  const restaurantDeliverySnapshot: RestaurantDeliverySnapshot | null =
+    deliveryMode === "RESTAURANT_DELIVERY" && settings
+      ? {
+          minimumOrderCents: settings.minimumOrderCents,
+          freeDeliveryThresholdCents: settings.freeDeliveryThresholdCents,
+          standardDeliveryFeeCents:
+            pricing.standardRestaurantDeliveryFeeCents ??
+            pricing.deliveryFeeCents,
+          appliedDeliveryFeeCents: pricing.deliveryFeeCents,
+          freeDeliveryApplied:
+            settings.freeDeliveryThresholdCents !== null &&
+            pricing.deliveryFeeCents === 0,
+        }
+      : null;
+
+  const appliedPromotion: AppliedPromotionSnapshot | null =
+    pricing.appliedPromotion;
+
+  const items: OrderItemSnapshot[] = itemViews.map((view) => ({
+    menuItemId: view.menuItem.id,
+    name: view.menuItem.name,
+    description: view.menuItem.description,
+    quantity: view.quantity,
+    baseUnitPriceCents: view.baseUnitPriceCents,
+    selectedVariantId: view.variant?.id ?? null,
+    selectedVariantName: view.variant?.name ?? null,
+    variantPriceDeltaCents: view.variantDeltaCents,
+    finalUnitPriceCents: view.finalUnitPriceCents,
+    lineSubtotalBeforeDiscountCents: view.lineTotalCents,
+    promotionDiscountCents: view.promotionDiscountCents,
+    finalLineTotalCents: view.lineTotalCents - view.promotionDiscountCents,
+    currencyCode: view.menuItem.currencyCode,
+    cookingComment: view.cartItem.cookingComment,
+    unitPriceCents: view.finalUnitPriceCents,
+    lineTotalCents: view.lineTotalCents - view.promotionDiscountCents,
+  }));
 
   const now = new Date().toISOString();
   const orderId = `order-${state.nextOrderNumber}`;
@@ -458,10 +418,9 @@ export function createOrderFromCart(
       address: restaurant.address,
       zoneId: restaurant.zoneId,
     },
-    address:
-      deliveryMode === "PLATFORM_DRIVER"
-        ? { ...state.cart.address, zoneId: customerZoneId }
-        : null,
+    address: isDelivery
+      ? { ...state.cart.address, zoneId: customerZoneId }
+      : null,
     deliveryMode,
     paymentMethod: "ONLINE",
     paymentStatus: "NOT_STARTED",
@@ -470,32 +429,33 @@ export function createOrderFromCart(
     preparationMinutes: null,
     expectedReadyAt: null,
     cancellationReason: null,
-    items: itemViews.map(({ cartItem, menuItem, lineTotalCents }) => ({
-      menuItemId: menuItem.id,
-      name: menuItem.name,
-      description: menuItem.description,
-      unitPriceCents: menuItem.priceCents,
-      quantity: cartItem.quantity,
-      lineTotalCents,
-      currencyCode: menuItem.currencyCode,
-      cookingComment: cartItem.cookingComment,
-    })),
+    items,
     financials: {
       currencyCode: state.platformSettings.currencyCode,
       deliveryMode,
-      restaurantCommissionRateBps:
-        state.platformSettings.restaurantCommissionRateBps,
+      deliveryProvider: restaurant.deliveryProvider,
+      restaurantCommissionRateBps: restaurant.commissionRateBps,
       restaurantCommissionCents: pricing.restaurantCommissionCents,
+      foodSubtotalBeforeDiscountsCents:
+        pricing.foodSubtotalBeforeDiscountsCents,
+      variantSurchargeSubtotalCents: pricing.variantSurchargeSubtotalCents,
+      promotionDiscountCents: pricing.promotionDiscountCents,
       foodSubtotalCents: pricing.foodSubtotalCents,
       deliveryFeeCents: pricing.deliveryFeeCents,
+      standardRestaurantDeliveryFeeCents:
+        pricing.standardRestaurantDeliveryFeeCents,
+      freeDeliveryThresholdCents: pricing.freeDeliveryThresholdCents,
+      minimumOrderCents: pricing.minimumOrderCents,
       smallOrderFeeCents: pricing.smallOrderFeeCents,
       platformGrossRevenueCents: pricing.platformGrossRevenueCents,
       driverPayoutCents: pricing.driverPayoutCents,
       restaurantPayoutBeforeBankFeeCents:
         pricing.restaurantPayoutBeforeBankFeeCents,
-      customerTotalCents: pricing.customerTotalCents ?? 0,
+      customerTotalCents: pricing.customerTotalCents,
       restaurantZoneId: restaurant.zoneId,
       customerZoneId,
+      appliedPromotion,
+      restaurantDelivery: restaurantDeliverySnapshot,
     },
     history: [
       {
@@ -545,6 +505,15 @@ function replaceOrder(
   );
 }
 
+function isWorkingRestaurantOrder(order: Order | undefined): boolean {
+  return Boolean(
+    order &&
+      (WORKING_RESTAURANT_IDS as readonly string[]).includes(
+        order.restaurant.id,
+      ),
+  );
+}
+
 export function acceptRestaurantOrder(
   state: PrototypeState,
   orderId: string,
@@ -559,7 +528,7 @@ export function acceptRestaurantOrder(
   if (
     !targetOrder ||
     targetOrder.status !== "RESTAURANT_REVIEW" ||
-    targetOrder.restaurant.id !== TEST_RESTAURANT_ID ||
+    !isWorkingRestaurantOrder(targetOrder) ||
     targetOrder.paymentMethod !== "ONLINE"
   ) {
     return state;
@@ -570,28 +539,26 @@ export function acceptRestaurantOrder(
   return replaceOrder(
     state,
     orderId,
-    (order) => {
-      return {
-        ...order,
-        status: "AWAITING_PAYMENT",
-        paymentStatus: "AWAITING_PAYMENT",
-        preparationMinutes,
-        expectedReadyAt: null,
-        updatedAt: now,
-        history: [
-          ...order.history,
-          {
-            id: `${order.id}-history-${order.history.length + 1}`,
-            occurredAt: now,
-            actor: "RESTAURANT",
-            type: "STATUS",
-            fromStatus: "RESTAURANT_REVIEW",
-            toStatus: "AWAITING_PAYMENT",
-            message: `Ресторан принял заказ. Время приготовления — ${preparationMinutes} минут. Ожидается онлайн-оплата.`,
-          },
-        ],
-      };
-    },
+    (order) => ({
+      ...order,
+      status: "AWAITING_PAYMENT",
+      paymentStatus: "AWAITING_PAYMENT",
+      preparationMinutes,
+      expectedReadyAt: null,
+      updatedAt: now,
+      history: [
+        ...order.history,
+        {
+          id: `${order.id}-history-${order.history.length + 1}`,
+          occurredAt: now,
+          actor: "RESTAURANT",
+          type: "STATUS",
+          fromStatus: "RESTAURANT_REVIEW",
+          toStatus: "AWAITING_PAYMENT",
+          message: `Ресторан принял заказ. Время приготовления — ${preparationMinutes} минут. Ожидается онлайн-оплата.`,
+        },
+      ],
+    }),
     now,
   );
 }
@@ -615,7 +582,6 @@ export function rejectRestaurantOrder(
       if (order.status !== "RESTAURANT_REVIEW") {
         return order;
       }
-
       return {
         ...order,
         status: "CANCELED",
@@ -713,6 +679,12 @@ export function markOrderReady(
 
       const nextStatus =
         order.deliveryMode === "PICKUP" ? "READY_FOR_PICKUP" : "READY";
+      const message =
+        order.deliveryMode === "PICKUP"
+          ? "Заказ готов к выдаче клиенту."
+          : order.deliveryMode === "RESTAURANT_DELIVERY"
+            ? "Заказ готов, ожидает курьера ресторана."
+            : "Ресторан отметил заказ как готовый и упакованный.";
 
       return {
         ...order,
@@ -727,15 +699,91 @@ export function markOrderReady(
             type: "STATUS",
             fromStatus: "PREPARING",
             toStatus: nextStatus,
-            message:
-              order.deliveryMode === "PICKUP"
-                ? "Заказ готов к выдаче клиенту."
-                : "Ресторан отметил заказ как готовый и упакованный.",
+            message,
           },
         ],
       };
     },
     now,
+  );
+}
+
+function advanceCourierStatus(
+  state: PrototypeState,
+  orderId: string,
+  fromStatus: Order["status"],
+  toStatus: Order["status"],
+  message: string,
+): PrototypeState {
+  const targetOrder = state.orders.find((order) => order.id === orderId);
+  if (
+    !targetOrder ||
+    targetOrder.deliveryMode !== "RESTAURANT_DELIVERY" ||
+    targetOrder.status !== fromStatus
+  ) {
+    return state;
+  }
+  const now = new Date().toISOString();
+  return replaceOrder(
+    state,
+    orderId,
+    (order) => ({
+      ...order,
+      status: toStatus,
+      updatedAt: now,
+      history: [
+        ...order.history,
+        {
+          id: `${order.id}-history-${order.history.length + 1}`,
+          occurredAt: now,
+          actor: "RESTAURANT",
+          type: "STATUS",
+          fromStatus,
+          toStatus,
+          message,
+        },
+      ],
+    }),
+    now,
+  );
+}
+
+export function markOrderOutForDelivery(
+  state: PrototypeState,
+  orderId: string,
+): PrototypeState {
+  return advanceCourierStatus(
+    state,
+    orderId,
+    "READY",
+    "OUT_FOR_DELIVERY",
+    "Курьер ресторана выехал.",
+  );
+}
+
+export function markOrderArriving(
+  state: PrototypeState,
+  orderId: string,
+): PrototypeState {
+  return advanceCourierStatus(
+    state,
+    orderId,
+    "OUT_FOR_DELIVERY",
+    "ARRIVING",
+    "Курьер ресторана скоро будет.",
+  );
+}
+
+export function markOrderDelivered(
+  state: PrototypeState,
+  orderId: string,
+): PrototypeState {
+  return advanceCourierStatus(
+    state,
+    orderId,
+    "ARRIVING",
+    "DELIVERED",
+    "Заказ доставлен клиенту.",
   );
 }
 
@@ -775,6 +823,198 @@ export function markOrderPickedUp(
     }),
     now,
   );
+}
+
+// --- Административные действия ---------------------------------------------
+
+const ZONE_IDS = ["zone-1", "zone-2", "zone-3", "zone-4"] as const;
+
+function defaultRestaurantDeliverySettings(): RestaurantDeliverySettings {
+  return {
+    minimumOrderCents: 1000,
+    freeDeliveryThresholdCents: 2500,
+    servedZoneIds: [...ZONE_IDS],
+    zoneFeesCents: { "zone-1": 300, "zone-2": 350, "zone-3": 400, "zone-4": 450 },
+  };
+}
+
+function deliveryModesForProvider(
+  provider: RestaurantDeliveryProvider,
+  pickupEnabled: boolean,
+): DeliveryMode[] {
+  const base: DeliveryMode =
+    provider === "RESTAURANT" ? "RESTAURANT_DELIVERY" : "PLATFORM_DRIVER";
+  return pickupEnabled ? [base, "PICKUP"] : [base];
+}
+
+function nextRestaurantId(state: PrototypeState): string {
+  const max = state.restaurants.reduce((acc, restaurant) => {
+    const match = /^restaurant-(\d+)$/.exec(restaurant.id);
+    return match ? Math.max(acc, Number(match[1])) : acc;
+  }, 0);
+  return `restaurant-${max + 1}`;
+}
+
+export interface RestaurantFormInput {
+  name: string;
+  description: string;
+  address: string;
+  zoneId: Restaurant["zoneId"];
+  deliveryProvider: RestaurantDeliveryProvider;
+  commissionRateBps: number;
+  defaultPreparationMinutes: number;
+  pickupEnabled: boolean;
+  status: Restaurant["status"];
+  isAcceptingOrders: boolean;
+  restaurantDeliverySettings: RestaurantDeliverySettings | null;
+}
+
+export function createRestaurant(
+  state: PrototypeState,
+  input: RestaurantFormInput,
+): ActionResult<{ restaurantId: string }> {
+  const id = nextRestaurantId(state);
+  const restaurant: Restaurant = {
+    id,
+    name: input.name.trim() || id,
+    description: input.description,
+    address: input.address,
+    zoneId: input.zoneId,
+    status: input.status,
+    isAcceptingOrders: input.isAcceptingOrders,
+    deliveryModes: deliveryModesForProvider(
+      input.deliveryProvider,
+      input.pickupEnabled,
+    ),
+    paymentMethods: ["ONLINE"],
+    defaultPreparationMinutes: input.defaultPreparationMinutes,
+    recommendationRank: state.restaurants.length + 1,
+    deliveryProvider: input.deliveryProvider,
+    pickupEnabled: input.pickupEnabled,
+    commissionRateBps: input.commissionRateBps,
+    restaurantDeliverySettings:
+      input.deliveryProvider === "RESTAURANT"
+        ? (input.restaurantDeliverySettings ??
+          defaultRestaurantDeliverySettings())
+        : input.restaurantDeliverySettings,
+  };
+  const nextState = finalizeMutation(state, {
+    ...state,
+    restaurants: [...state.restaurants, restaurant],
+  });
+  return { state: nextState, result: { restaurantId: id } };
+}
+
+export function updateRestaurant(
+  state: PrototypeState,
+  restaurantId: string,
+  patch: Partial<RestaurantFormInput>,
+): PrototypeState {
+  const target = state.restaurants.find((r) => r.id === restaurantId);
+  if (!target) {
+    return state;
+  }
+  const deliveryProvider = patch.deliveryProvider ?? target.deliveryProvider;
+  const pickupEnabled = patch.pickupEnabled ?? target.pickupEnabled;
+  const settings =
+    patch.restaurantDeliverySettings !== undefined
+      ? patch.restaurantDeliverySettings
+      : target.restaurantDeliverySettings;
+
+  const nextRestaurant: Restaurant = {
+    ...target,
+    name: patch.name ?? target.name,
+    description: patch.description ?? target.description,
+    address: patch.address ?? target.address,
+    zoneId: patch.zoneId ?? target.zoneId,
+    status: patch.status ?? target.status,
+    isAcceptingOrders: patch.isAcceptingOrders ?? target.isAcceptingOrders,
+    defaultPreparationMinutes:
+      patch.defaultPreparationMinutes ?? target.defaultPreparationMinutes,
+    commissionRateBps: patch.commissionRateBps ?? target.commissionRateBps,
+    deliveryProvider,
+    pickupEnabled,
+    deliveryModes: deliveryModesForProvider(deliveryProvider, pickupEnabled),
+    restaurantDeliverySettings:
+      deliveryProvider === "RESTAURANT"
+        ? (settings ?? defaultRestaurantDeliverySettings())
+        : settings,
+  };
+
+  return finalizeMutation(state, {
+    ...state,
+    restaurants: state.restaurants.map((restaurant) =>
+      restaurant.id === restaurantId ? nextRestaurant : restaurant,
+    ),
+  });
+}
+
+export function updateMenuItemVariants(
+  state: PrototypeState,
+  menuItemId: string,
+  variants: MenuItemVariant[] | null,
+): PrototypeState {
+  const normalized =
+    variants && variants.length > 0
+      ? variants.map((variant, index) => ({
+          ...variant,
+          isDefault: variant.isDefault && index === variants.findIndex((v) => v.isDefault),
+        }))
+      : undefined;
+  const withDefault =
+    normalized && !normalized.some((v) => v.isDefault) && normalized.length > 0
+      ? normalized.map((v, i) => ({ ...v, isDefault: i === 0 }))
+      : normalized;
+
+  return finalizeMutation(state, {
+    ...state,
+    menuItems: state.menuItems.map((menuItem) =>
+      menuItem.id === menuItemId
+        ? { ...menuItem, variants: withDefault }
+        : menuItem,
+    ),
+  });
+}
+
+export function upsertPromotion(
+  state: PrototypeState,
+  promotion: Promotion,
+): PrototypeState {
+  // Участвовать могут только блюда того же ресторана.
+  const eligibleMenuItemIds = promotion.eligibleMenuItemIds.filter((id) =>
+    state.menuItems.some(
+      (item) => item.id === id && item.restaurantId === promotion.restaurantId,
+    ),
+  );
+  const now = new Date().toISOString();
+  const exists = state.promotions.some((p) => p.id === promotion.id);
+  const nextPromotion: Promotion = {
+    ...promotion,
+    eligibleMenuItemIds,
+    updatedAt: now,
+  };
+  const promotions = exists
+    ? state.promotions.map((p) =>
+        p.id === promotion.id ? nextPromotion : p,
+      )
+    : [...state.promotions, { ...nextPromotion, createdAt: now }];
+
+  return finalizeMutation(state, { ...state, promotions });
+}
+
+export function setPromotionEnabled(
+  state: PrototypeState,
+  promotionId: string,
+  enabled: boolean,
+): PrototypeState {
+  return finalizeMutation(state, {
+    ...state,
+    promotions: state.promotions.map((promotion) =>
+      promotion.id === promotionId
+        ? { ...promotion, enabled, updatedAt: new Date().toISOString() }
+        : promotion,
+    ),
+  });
 }
 
 export function resetPrototypeState(state: PrototypeState): PrototypeState {

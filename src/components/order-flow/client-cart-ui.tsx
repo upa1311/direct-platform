@@ -55,26 +55,14 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
   const restaurant = getRestaurant(state, state.cart.restaurantId);
   const pricing = calculateCartPricing(state);
   const cartQuantity = state.cart.items.reduce((sum, item) => sum + item.quantity, 0);
-  const fulfillmentLabel =
-    state.cart.deliveryMode === "PICKUP"
-      ? "Самовывоз"
-      : state.cart.deliveryMode === "PLATFORM_DRIVER"
-        ? "Доставка"
-        : "Получение";
+  const isPickup = state.cart.fulfillmentChoice === "PICKUP";
+  const fulfillmentLabel = isPickup ? "Самовывоз" : "Доставка";
   const fulfillmentValue =
-    state.cart.deliveryMode === null
-      ? "Выберите способ"
-      : pricing.deliveryFeeCents === null
-        ? "Укажите адрес"
-        : formatMoney(pricing.deliveryFeeCents);
-  const checkoutHref =
-    state.cart.deliveryMode === null
-      ? "/client/cart#fulfillment-method"
-      : "/client/cart#checkout-cart";
-  const checkoutLabel =
-    state.cart.deliveryMode === null
-      ? "Выбрать способ получения"
-      : "Перейти к оформлению";
+    pricing.deliveryFeeCents === null
+      ? "Укажите адрес"
+      : formatMoney(pricing.deliveryFeeCents);
+  const checkoutHref = "/client/cart#checkout-cart";
+  const checkoutLabel = "Перейти к оформлению";
 
   const closeCart = useCallback(() => setIsOpen(false), []);
   const openCart = useCallback(() => {
@@ -160,23 +148,31 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
             ) : (
               <>
                 <div className={styles.cartDrawerItems}>
-                  {itemViews.map(({ cartItem, menuItem, lineTotalCents }) => (
-                    <article key={menuItem.id}>
-                      <div><strong>{menuItem.name}</strong><span>{formatMoney(lineTotalCents)}</span></div>
+                  {itemViews.map(({ cartItem, menuItem, variant, lineTotalCents }) => (
+                    <article key={`${menuItem.id}-${cartItem.variantId ?? "base"}`}>
+                      <div>
+                        <strong>
+                          {menuItem.name}
+                          {variant && !variant.isDefault ? ` · ${variant.name}` : ""}
+                        </strong>
+                        <span>{formatMoney(lineTotalCents)}</span>
+                      </div>
                       <div className={styles.drawerQuantity}>
-                        <button type="button" aria-label={`Уменьшить количество: ${menuItem.name}`} onClick={() => setItemQuantity(menuItem.id, cartItem.quantity - 1)}><Minus aria-hidden="true" /></button>
+                        <button type="button" aria-label={`Уменьшить количество: ${menuItem.name}`} onClick={() => setItemQuantity(menuItem.id, cartItem.variantId, cartItem.quantity - 1)}><Minus aria-hidden="true" /></button>
                         <span>{cartItem.quantity}</span>
-                        <button type="button" aria-label={`Увеличить количество: ${menuItem.name}`} onClick={() => setItemQuantity(menuItem.id, cartItem.quantity + 1)}><Plus aria-hidden="true" /></button>
-                        <button type="button" aria-label={`Удалить: ${menuItem.name}`} onClick={() => setItemQuantity(menuItem.id, 0)}><Trash2 aria-hidden="true" /></button>
+                        <button type="button" aria-label={`Увеличить количество: ${menuItem.name}`} onClick={() => setItemQuantity(menuItem.id, cartItem.variantId, cartItem.quantity + 1)}><Plus aria-hidden="true" /></button>
+                        <button type="button" aria-label={`Удалить: ${menuItem.name}`} onClick={() => setItemQuantity(menuItem.id, cartItem.variantId, 0)}><Trash2 aria-hidden="true" /></button>
                       </div>
                     </article>
                   ))}
                 </div>
                 <dl className={styles.drawerSummary}>
-                  <div><dt>Еда</dt><dd>{formatMoney(pricing.foodSubtotalCents)}</dd></div>
+                  <div><dt>Еда</dt><dd>{formatMoney(pricing.foodSubtotalBeforeDiscountsCents)}</dd></div>
+                  {pricing.appliedPromotion ? (
+                    <div><dt>Акция 3+1</dt><dd>−{formatMoney(pricing.promotionDiscountCents)}</dd></div>
+                  ) : null}
                   <div><dt>{fulfillmentLabel}</dt><dd>{fulfillmentValue}</dd></div>
-                  {state.cart.deliveryMode !== null &&
-                  pricing.smallOrderFeeCents > 0 ? (
+                  {pricing.smallOrderFeeCents > 0 ? (
                     <div><dt>Доплата за небольшой заказ</dt><dd>{formatMoney(pricing.smallOrderFeeCents)}</dd></div>
                   ) : null}
                   <div><dt>Итого</dt><dd>{pricing.customerTotalCents === null ? "—" : formatMoney(pricing.customerTotalCents)}</dd></div>

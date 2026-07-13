@@ -1,14 +1,16 @@
 import type {
+  AppliedPromotionSnapshot,
   CartItem,
   CartPricing,
   DeliveryAddress,
   DeliveryMode,
   MenuItem,
+  MenuItemVariant,
   Order,
   OrderHistoryEvent,
   OrderStatus,
   PaymentMethod,
-  PaymentStatus,
+  Promotion,
   PrototypeState,
   PublicationStatus,
   Restaurant,
@@ -18,6 +20,14 @@ import {
   getDefaultRecommendationRank,
   TEST_RESTAURANT_ID,
 } from "./default-state";
+import {
+  computeDirectFinancials,
+  computeFreeUnitCount,
+  computeRestaurantDeliveryFinancials,
+  computeRestaurantDeliveryQuote,
+  computeVariantUnitPriceCents,
+  resolveDeliveryMode,
+} from "./pricing-engine";
 
 export type CatalogSort =
   | "RECOMMENDED"
@@ -28,7 +38,14 @@ export type CatalogSort =
 export interface CartItemView {
   cartItem: CartItem;
   menuItem: MenuItem;
+  variant: MenuItemVariant | null;
+  baseUnitPriceCents: number;
+  variantDeltaCents: number;
+  finalUnitPriceCents: number;
+  quantity: number;
+  /** Стоимость строки до скидки по акции, с учётом размера. */
   lineTotalCents: number;
+  promotionDiscountCents: number;
 }
 
 export const deliveryModeLabels: Record<DeliveryMode, string> = {
@@ -46,13 +63,19 @@ export const orderStatusLabels: Record<OrderStatus, string> = {
   RESTAURANT_REVIEW: "Ресторан проверяет заказ",
   AWAITING_PAYMENT: "Ожидается оплата",
   PREPARING: "Готовится",
-  READY: "Готово и упаковано",
+  READY: "Готов",
   READY_FOR_PICKUP: "Готов к выдаче",
   PICKED_UP: "Выдан",
+  OUT_FOR_DELIVERY: "Курьер ресторана выехал",
+  ARRIVING: "Курьер скоро будет",
+  DELIVERED: "Доставлен",
   CANCELED: "Отменён",
 };
 
-export const paymentStatusLabels: Record<PaymentStatus, string> = {
+export const paymentStatusLabels: Record<
+  Order["paymentStatus"],
+  string
+> = {
   NOT_STARTED: "Оплата ещё не начата",
   AWAITING_PAYMENT: "Ожидается оплата",
   PAID: "Оплачено",
@@ -73,6 +96,16 @@ export const publicationStatusLabels: Record<PublicationStatus, string> = {
   ARCHIVED: "Архив",
 };
 
+/** Безопасный парсинг «12.50» → 1250 центов. Хранилище всегда целые центы. */
+export function parseDollarsToCents(value: string): number {
+  const normalized = value.replace(",", ".").trim();
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return Math.round(parsed * 100);
+}
+
 export function getZoneName(
   state: Pick<PrototypeState, "zones">,
   zoneId: ZoneId,
@@ -88,13 +121,37 @@ export function formatMoney(cents: number, currencyCode = "USD"): string {
 }
 
 export function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
   return new Intl.DateTimeFormat("ru-RU", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
+}
+
+/** Винительный падеж: «добавьте 1 пиццу / 2 пиццы / 5 пицц». */
+export function pluralizePizza(count: number): string {
+  const lastTwo = count % 100;
+  const last = count % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return "пицц";
+  if (last === 1) return "пиццу";
+  if (last >= 2 && last <= 4) return "пиццы";
+  return "пицц";
+}
+
+/** Именительный падеж: «1 пицца / 2 пиццы / 5 пицц бесплатно». */
+export function pluralizePizzaNominative(count: number): string {
+  const lastTwo = count % 100;
+  const last = count % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return "пицц";
+  if (last === 1) return "пицца";
+  if (last >= 2 && last <= 4) return "пиццы";
+  return "пицц";
 }
 
 export function getRestaurant(
@@ -104,7 +161,6 @@ export function getRestaurant(
   if (!restaurantId) {
     return null;
   }
-
   return (
     state.restaurants.find((restaurant) => restaurant.id === restaurantId) ??
     null
@@ -161,26 +217,23 @@ export function sortPublishedRestaurants(
   });
 }
 
-export function getDeliveryProviderLabel(
-  restaurant: Restaurant,
+/** Публичная подпись фактического исполнителя доставки (для оформления/заказа). */
+export function getDeliveryModeProviderLabel(
+  deliveryMode: DeliveryMode,
 ): string | null {
-  if (restaurant.deliveryModes.includes("PLATFORM_DRIVER")) {
-    return "Доставит водитель Direct";
-  }
-  if (restaurant.deliveryModes.includes("RESTAURANT_DELIVERY")) {
-    return "Доставит курьер ресторана";
-  }
+  if (deliveryMode === "PLATFORM_DRIVER") return "Доставит водитель Direct";
+  if (deliveryMode === "RESTAURANT_DELIVERY") return "Доставит курьер ресторана";
   return null;
 }
 
 export function canPlacePrototypeOrder(restaurant: Restaurant): boolean {
   return (
-    restaurant.id === TEST_RESTAURANT_ID &&
     restaurant.status === "PUBLISHED" &&
     restaurant.isAcceptingOrders &&
+    restaurant.paymentMethods.includes("ONLINE") &&
     (restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
-      restaurant.deliveryModes.includes("PICKUP")) &&
-    restaurant.paymentMethods.includes("ONLINE")
+      restaurant.deliveryModes.includes("RESTAURANT_DELIVERY") ||
+      restaurant.deliveryModes.includes("PICKUP"))
   );
 }
 
@@ -201,24 +254,124 @@ export function getRestaurantMenu(
   );
 }
 
+/** Разрешает вариант размера позиции: по id, иначе вариант по умолчанию. */
+export function resolveVariant(
+  menuItem: MenuItem,
+  variantId: string | null,
+): MenuItemVariant | null {
+  if (!menuItem.variants || menuItem.variants.length === 0) {
+    return null;
+  }
+  const byId = variantId
+    ? menuItem.variants.find((variant) => variant.id === variantId)
+    : undefined;
+  return (
+    byId ??
+    menuItem.variants.find((variant) => variant.isDefault) ??
+    menuItem.variants[0]
+  );
+}
+
+export function getRestaurantPromotion(
+  state: PrototypeState,
+  restaurantId: string | null,
+): Promotion | null {
+  if (!restaurantId) return null;
+  return (
+    state.promotions.find(
+      (promotion) =>
+        promotion.restaurantId === restaurantId && promotion.enabled,
+    ) ?? null
+  );
+}
+
+/**
+ * Строки корзины с разрешёнными размерами и распределённой по строкам
+ * скидкой акции. Бесплатной становится базовая стоимость самых дешёвых
+ * участвующих единиц; доплата за размер в скидку не входит.
+ */
 export function getCartItemViews(state: PrototypeState): CartItemView[] {
-  return state.cart.items.flatMap((cartItem) => {
+  const views: CartItemView[] = state.cart.items.flatMap((cartItem) => {
     const menuItem = state.menuItems.find(
       (candidate) => candidate.id === cartItem.menuItemId,
     );
-
     if (!menuItem) {
       return [];
     }
-
+    const variant = resolveVariant(menuItem, cartItem.variantId);
+    const variantDeltaCents = variant?.priceDeltaCents ?? 0;
+    const finalUnitPriceCents = computeVariantUnitPriceCents(
+      menuItem.priceCents,
+      variantDeltaCents,
+    );
     return [
       {
         cartItem,
         menuItem,
-        lineTotalCents: menuItem.priceCents * cartItem.quantity,
+        variant,
+        baseUnitPriceCents: menuItem.priceCents,
+        variantDeltaCents,
+        finalUnitPriceCents,
+        quantity: cartItem.quantity,
+        lineTotalCents: finalUnitPriceCents * cartItem.quantity,
+        promotionDiscountCents: 0,
       },
     ];
   });
+
+  const promotion = getRestaurantPromotion(state, state.cart.restaurantId);
+  if (!promotion) {
+    return views;
+  }
+
+  const eligibleUnits: { viewIndex: number; basePriceCents: number }[] = [];
+  views.forEach((view, viewIndex) => {
+    if (promotion.eligibleMenuItemIds.includes(view.menuItem.id)) {
+      for (let unit = 0; unit < view.quantity; unit += 1) {
+        eligibleUnits.push({
+          viewIndex,
+          basePriceCents: view.baseUnitPriceCents,
+        });
+      }
+    }
+  });
+
+  const freeCount = computeFreeUnitCount(eligibleUnits.length, promotion);
+  if (freeCount <= 0) {
+    return views;
+  }
+
+  const freedByView = new Map<number, number>();
+  [...eligibleUnits]
+    .sort((a, b) => a.basePriceCents - b.basePriceCents)
+    .slice(0, freeCount)
+    .forEach((unit) => {
+      freedByView.set(
+        unit.viewIndex,
+        (freedByView.get(unit.viewIndex) ?? 0) + 1,
+      );
+    });
+
+  return views.map((view, viewIndex) => {
+    const freedUnits = freedByView.get(viewIndex) ?? 0;
+    return {
+      ...view,
+      promotionDiscountCents: freedUnits * view.baseUnitPriceCents,
+    };
+  });
+}
+
+export function getCartDeliveryMode(
+  state: PrototypeState,
+): DeliveryMode | null {
+  const restaurant = getRestaurant(state, state.cart.restaurantId);
+  if (!restaurant) {
+    return state.cart.fulfillmentChoice === "PICKUP" ? "PICKUP" : null;
+  }
+  return resolveDeliveryMode(
+    restaurant.deliveryProvider,
+    state.cart.fulfillmentChoice,
+  );
 }
 
 export function detectZoneId(
@@ -227,11 +380,9 @@ export function detectZoneId(
   house = "",
 ): ZoneId | null {
   const normalizedStreet = street.trim().toLocaleLowerCase("ru-RU");
-
   if (!normalizedStreet || !house.trim()) {
     return null;
   }
-
   return (
     state.zones.find((zone) =>
       zone.streets.some(
@@ -263,6 +414,7 @@ export function getDeliveryFeeCents(
   return Number.isInteger(cents) && Number(cents) >= 0 ? Number(cents) : null;
 }
 
+/** Тариф Direct для каталога/сортировки. Только рестораны типа DIRECT. */
 export function getAvailablePlatformDeliveryFeeCents(
   state: PrototypeState,
   restaurant: Restaurant,
@@ -270,76 +422,242 @@ export function getAvailablePlatformDeliveryFeeCents(
   if (
     restaurant.status !== "PUBLISHED" ||
     !restaurant.isAcceptingOrders ||
+    restaurant.deliveryProvider !== "DIRECT" ||
     !restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
     !restaurant.paymentMethods.includes("ONLINE")
   ) {
     return null;
   }
-
   return getDeliveryFeeCents(state, restaurant);
+}
+
+function emptyPricing(
+  deliveryMode: DeliveryMode | null,
+  deliveryProvider: Restaurant["deliveryProvider"] | null,
+): CartPricing {
+  return {
+    deliveryMode,
+    deliveryProvider,
+    foodSubtotalBeforeDiscountsCents: 0,
+    variantSurchargeSubtotalCents: 0,
+    promotionDiscountCents: 0,
+    foodSubtotalCents: 0,
+    deliveryFeeCents: deliveryMode === "PICKUP" ? 0 : null,
+    standardRestaurantDeliveryFeeCents: null,
+    restaurantCommissionCents: 0,
+    smallOrderFeeCents: 0,
+    platformGrossRevenueCents: 0,
+    driverPayoutCents: deliveryMode === null ? null : 0,
+    restaurantPayoutBeforeBankFeeCents: 0,
+    customerTotalCents: null,
+    appliedPromotion: null,
+    promotionUnitsToNextFree: null,
+    promotionFreeUnitCount: 0,
+    promotionEligibleUnits: 0,
+    restaurantDeliveryStatus: null,
+    restaurantDeliveryMissingCents: null,
+    freeDeliveryRemainingCents: null,
+    minimumOrderCents: null,
+    freeDeliveryThresholdCents: null,
+  };
 }
 
 export function calculateCartPricing(state: PrototypeState): CartPricing {
   const restaurant = getRestaurant(state, state.cart.restaurantId);
-  const foodSubtotalCents = getCartItemViews(state).reduce(
-    (total, line) => total + line.lineTotalCents,
+  const deliveryMode = getCartDeliveryMode(state);
+  const provider = restaurant?.deliveryProvider ?? null;
+
+  if (!restaurant) {
+    return emptyPricing(deliveryMode, provider);
+  }
+
+  const views = getCartItemViews(state);
+  const foodSubtotalBeforeDiscountsCents = views.reduce(
+    (total, view) => total + view.lineTotalCents,
     0,
   );
-  const restaurantCommissionCents = Math.round(
-    (foodSubtotalCents *
-      state.platformSettings.restaurantCommissionRateBps) /
-      10_000,
+  const variantSurchargeSubtotalCents = views.reduce(
+    (total, view) => total + view.variantDeltaCents * view.quantity,
+    0,
   );
-  const smallOrderFeeCents =
-    state.cart.paymentMethod === "ONLINE"
-      ? Math.max(
-          0,
-          state.platformSettings.minimumPlatformGrossRevenueCents -
-            restaurantCommissionCents,
-        )
-      : 0;
-  const deliveryFeeCents =
-    state.cart.deliveryMode === "PICKUP"
-      ? 0
-      : state.cart.deliveryMode === "PLATFORM_DRIVER" && restaurant
-        ? getDeliveryFeeCents(state, restaurant)
-        : null;
-  const platformGrossRevenueCents =
-    restaurantCommissionCents + smallOrderFeeCents;
-  const restaurantPayoutBeforeBankFeeCents =
-    foodSubtotalCents - restaurantCommissionCents;
+  const promotionDiscountCents = views.reduce(
+    (total, view) => total + view.promotionDiscountCents,
+    0,
+  );
+  const foodSubtotalCents =
+    foodSubtotalBeforeDiscountsCents - promotionDiscountCents;
 
-  return {
+  // Снимок применённой акции и прогресс до следующего подарка.
+  const promotion = getRestaurantPromotion(state, restaurant.id);
+  let appliedPromotion: AppliedPromotionSnapshot | null = null;
+  let promotionFreeUnitCount = 0;
+  let promotionUnitsToNextFree: number | null = null;
+  let promotionEligibleUnits = 0;
+  if (promotion) {
+    const eligibleUnits = views.reduce(
+      (total, view) =>
+        promotion.eligibleMenuItemIds.includes(view.menuItem.id)
+          ? total + view.quantity
+          : total,
+      0,
+    );
+    promotionEligibleUnits = eligibleUnits;
+    promotionFreeUnitCount = computeFreeUnitCount(eligibleUnits, promotion);
+    const groupSize = promotion.buyQuantity + promotion.freeQuantity;
+    const remainder = eligibleUnits % groupSize;
+    promotionUnitsToNextFree =
+      remainder === 0 && eligibleUnits > 0 ? groupSize : groupSize - remainder;
+    if (promotionFreeUnitCount > 0) {
+      appliedPromotion = {
+        promotionId: promotion.id,
+        title: promotion.title,
+        type: promotion.type,
+        freeUnitCount: promotionFreeUnitCount,
+        discountCents: promotionDiscountCents,
+      };
+    }
+  }
+
+  const isPickup = state.cart.fulfillmentChoice === "PICKUP";
+  const customerZoneId = getValidatedAddressZoneId(state.cart.address, state);
+
+  const base = emptyPricing(deliveryMode, provider);
+  base.foodSubtotalBeforeDiscountsCents = foodSubtotalBeforeDiscountsCents;
+  base.variantSurchargeSubtotalCents = variantSurchargeSubtotalCents;
+  base.promotionDiscountCents = promotionDiscountCents;
+  base.foodSubtotalCents = foodSubtotalCents;
+  base.appliedPromotion = appliedPromotion;
+  base.promotionFreeUnitCount = promotionFreeUnitCount;
+  base.promotionUnitsToNextFree = promotionUnitsToNextFree;
+  base.promotionEligibleUnits = promotionEligibleUnits;
+
+  if (provider === "RESTAURANT") {
+    const settings = restaurant.restaurantDeliverySettings;
+    if (isPickup || !settings) {
+      const financials = computeRestaurantDeliveryFinancials({
+        foodSubtotalCents,
+        commissionRateBps: restaurant.commissionRateBps,
+        deliveryFeeCents: 0,
+        isPickup: true,
+      });
+      return { ...base, ...applyFinancials(base, financials, 0) };
+    }
+
+    base.minimumOrderCents = settings.minimumOrderCents;
+    base.freeDeliveryThresholdCents = settings.freeDeliveryThresholdCents;
+
+    const quote = computeRestaurantDeliveryQuote(
+      foodSubtotalCents,
+      settings,
+      customerZoneId,
+    );
+    base.restaurantDeliveryStatus = quote.status;
+
+    if (quote.status !== "OK") {
+      base.restaurantDeliveryMissingCents =
+        quote.status === "BELOW_MINIMUM" ? quote.missingCents : null;
+      const commission = computeRestaurantDeliveryFinancials({
+        foodSubtotalCents,
+        commissionRateBps: restaurant.commissionRateBps,
+        deliveryFeeCents: 0,
+        isPickup: false,
+      });
+      base.restaurantCommissionCents = commission.restaurantCommissionCents;
+      base.platformGrossRevenueCents = commission.platformGrossRevenueCents;
+      base.restaurantPayoutBeforeBankFeeCents =
+        foodSubtotalCents - commission.restaurantCommissionCents;
+      base.deliveryFeeCents = null;
+      base.driverPayoutCents = 0;
+      base.customerTotalCents = null;
+      return base;
+    }
+
+    base.standardRestaurantDeliveryFeeCents = quote.standardFeeCents;
+    base.freeDeliveryRemainingCents =
+      settings.freeDeliveryThresholdCents !== null && !quote.freeDelivery
+        ? Math.max(0, settings.freeDeliveryThresholdCents - foodSubtotalCents)
+        : null;
+    const financials = computeRestaurantDeliveryFinancials({
+      foodSubtotalCents,
+      commissionRateBps: restaurant.commissionRateBps,
+      deliveryFeeCents: quote.deliveryFeeCents,
+      isPickup: false,
+    });
+    return { ...base, ...applyFinancials(base, financials, quote.deliveryFeeCents) };
+  }
+
+  // provider === "DIRECT"
+  const matrixFeeCents = getDeliveryFeeCents(state, restaurant);
+  if (!isPickup && matrixFeeCents === null) {
+    const financials = computeDirectFinancials({
+      foodSubtotalCents,
+      commissionRateBps: restaurant.commissionRateBps,
+      minimumPlatformGrossRevenueCents:
+        state.platformSettings.minimumPlatformGrossRevenueCents,
+      deliveryFeeCents: 0,
+      isPickup: false,
+    });
+    base.restaurantCommissionCents = financials.restaurantCommissionCents;
+    base.smallOrderFeeCents = financials.smallOrderFeeCents;
+    base.platformGrossRevenueCents = financials.platformGrossRevenueCents;
+    base.restaurantPayoutBeforeBankFeeCents =
+      financials.restaurantPayoutBeforeBankFeeCents;
+    base.deliveryFeeCents = null;
+    base.driverPayoutCents = null;
+    base.customerTotalCents = null;
+    return base;
+  }
+
+  const financials = computeDirectFinancials({
     foodSubtotalCents,
-    deliveryFeeCents,
-    restaurantCommissionCents,
-    smallOrderFeeCents,
-    platformGrossRevenueCents,
-    driverPayoutCents:
-      state.cart.deliveryMode === null ? null : deliveryFeeCents,
-    restaurantPayoutBeforeBankFeeCents,
-    customerTotalCents:
-      deliveryFeeCents === null
-        ? null
-        : foodSubtotalCents + deliveryFeeCents + smallOrderFeeCents,
+    commissionRateBps: restaurant.commissionRateBps,
+    minimumPlatformGrossRevenueCents:
+      state.platformSettings.minimumPlatformGrossRevenueCents,
+    deliveryFeeCents: isPickup ? 0 : (matrixFeeCents ?? 0),
+    isPickup,
+  });
+  return {
+    ...base,
+    ...applyFinancials(base, financials, financials.deliveryFeeCents),
   };
 }
 
-export function getCashMissingAmountCents(state: PrototypeState): number {
-  const { foodSubtotalCents } = calculateCartPricing(state);
-  return Math.max(
-    0,
-    state.platformSettings.cashMinimumFoodSubtotalCents - foodSubtotalCents,
-  );
+function applyFinancials(
+  base: CartPricing,
+  financials: {
+    restaurantCommissionCents: number;
+    smallOrderFeeCents: number;
+    deliveryFeeCents: number;
+    platformGrossRevenueCents: number;
+    driverPayoutCents: number;
+    restaurantPayoutBeforeBankFeeCents: number;
+    customerTotalCents: number;
+  },
+  deliveryFeeCents: number,
+): CartPricing {
+  return {
+    ...base,
+    restaurantCommissionCents: financials.restaurantCommissionCents,
+    smallOrderFeeCents: financials.smallOrderFeeCents,
+    deliveryFeeCents,
+    platformGrossRevenueCents: financials.platformGrossRevenueCents,
+    driverPayoutCents: financials.driverPayoutCents,
+    restaurantPayoutBeforeBankFeeCents:
+      financials.restaurantPayoutBeforeBankFeeCents,
+    customerTotalCents: financials.customerTotalCents,
+  };
 }
 
 export function getSmallOrderMissingAmountCents(
   state: PrototypeState,
 ): number {
+  const restaurant = getRestaurant(state, state.cart.restaurantId);
+  const rateBps =
+    restaurant?.commissionRateBps ??
+    state.platformSettings.restaurantCommissionRateBps;
   const { foodSubtotalCents } = calculateCartPricing(state);
   const minimumFoodSubtotalCents = Math.ceil(
-    (state.platformSettings.minimumPlatformGrossRevenueCents * 10_000) /
-      state.platformSettings.restaurantCommissionRateBps,
+    (state.platformSettings.minimumPlatformGrossRevenueCents * 10_000) / rateBps,
   );
   return Math.max(0, minimumFoodSubtotalCents - foodSubtotalCents);
 }
@@ -368,7 +686,9 @@ export function getActiveCustomerOrder(state: PrototypeState): Order | null {
   return (
     getCurrentCustomerOrders(state).find(
       (order) =>
-        order.status !== "CANCELED" && order.status !== "PICKED_UP",
+        order.status !== "CANCELED" &&
+        order.status !== "PICKED_UP" &&
+        order.status !== "DELIVERED",
     ) ?? null
   );
 }
@@ -384,9 +704,30 @@ export function getRestaurantOrders(
   );
 }
 
+/** Заказы для ресторанного кабинета: рабочие рестораны 1–3. */
+export const WORKING_RESTAURANT_IDS = [
+  "restaurant-1",
+  "restaurant-2",
+  "restaurant-3",
+] as const;
+
+export function getWorkingRestaurantOrders(
+  state: PrototypeState,
+  statuses: readonly OrderStatus[],
+): Order[] {
+  return state.orders.filter(
+    (order) =>
+      (WORKING_RESTAURANT_IDS as readonly string[]).includes(
+        order.restaurant.id,
+      ) && statuses.includes(order.status),
+  );
+}
+
 export function isAddressReady(
   address: DeliveryAddress,
   state: Pick<PrototypeState, "zones">,
 ): boolean {
   return getValidatedAddressZoneId(address, state) !== null;
 }
+
+export { TEST_RESTAURANT_ID };

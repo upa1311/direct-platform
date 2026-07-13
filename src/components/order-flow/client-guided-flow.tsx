@@ -70,21 +70,16 @@ export function ClientGuidedFlow() {
     state.cart.restaurantId ??
     null;
   const hasCartItems = state.cart.items.length > 0;
-  const deliveryMode = existingOrder?.deliveryMode ?? state.cart.deliveryMode;
+  const isPickupChoice = existingOrder
+    ? existingOrder.deliveryMode === "PICKUP"
+    : state.cart.fulfillmentChoice === "PICKUP";
   const firstStepComplete = existingOrder
     ? true
-    : deliveryMode === "PICKUP" ||
-      (deliveryMode === "PLATFORM_DRIVER" && isAddressConfirmed);
-  const firstStepLabel =
-    deliveryMode === "PICKUP"
-      ? "Самовывоз"
-      : deliveryMode === "PLATFORM_DRIVER"
-        ? "Куда доставить"
-        : "Способ получения";
-  const firstStepHref =
-    deliveryMode === "PLATFORM_DRIVER"
-      ? "/client/catalog#delivery-address"
-      : "/client/catalog#fulfillment-method";
+    : isPickupChoice || isAddressConfirmed;
+  const firstStepLabel = isPickupChoice ? "Самовывоз" : "Куда доставить";
+  const firstStepHref = isPickupChoice
+    ? "/client/catalog#fulfillment-method"
+    : "/client/catalog#delivery-address";
 
   if (
     !isHydrated ||

@@ -1,4 +1,16 @@
-export const PROTOTYPE_SCHEMA_VERSION = 4 as const;
+import type {
+  FulfillmentChoice,
+  RestaurantDeliveryProvider,
+  RestaurantDeliverySettings,
+} from "./pricing-engine";
+
+export const PROTOTYPE_SCHEMA_VERSION = 5 as const;
+
+export type {
+  FulfillmentChoice,
+  RestaurantDeliveryProvider,
+  RestaurantDeliverySettings,
+};
 
 export type CurrencyCode = "USD";
 export type ZoneId = "zone-1" | "zone-2" | "zone-3" | "zone-4";
@@ -12,6 +24,7 @@ export type DeliveryMode =
   | "PLATFORM_DRIVER"
   | "RESTAURANT_DELIVERY"
   | "PICKUP";
+/** Историческое клиентское понятие v4. Сохранено для совместимости миграции. */
 export type CustomerDeliveryMode = "PLATFORM_DRIVER" | "PICKUP";
 export type PaymentMethod = "ONLINE" | "CASH";
 export type OrderStatus =
@@ -21,12 +34,17 @@ export type OrderStatus =
   | "READY"
   | "READY_FOR_PICKUP"
   | "PICKED_UP"
+  | "OUT_FOR_DELIVERY"
+  | "ARRIVING"
+  | "DELIVERED"
   | "CANCELED";
 export type PaymentStatus =
   | "NOT_STARTED"
   | "AWAITING_PAYMENT"
   | "PAID"
   | "CASH_ON_DELIVERY";
+
+export type PromotionType = "BUY_N_GET_M_CHEAPEST_FREE";
 
 export interface PlatformSettings {
   currencyCode: CurrencyCode;
@@ -56,6 +74,20 @@ export interface Restaurant {
   paymentMethods: PaymentMethod[];
   defaultPreparationMinutes: number;
   recommendationRank?: number;
+  /** Кто фактически доставляет заказ — единый источник истины. */
+  deliveryProvider: RestaurantDeliveryProvider;
+  pickupEnabled: boolean;
+  commissionRateBps: number;
+  /** Собственные условия доставки для ресторана типа RESTAURANT. */
+  restaurantDeliverySettings: RestaurantDeliverySettings | null;
+}
+
+export interface MenuItemVariant {
+  id: string;
+  name: string;
+  priceDeltaCents: number;
+  available: boolean;
+  isDefault: boolean;
 }
 
 export interface MenuItem {
@@ -67,6 +99,23 @@ export interface MenuItem {
   priceCents: number;
   currencyCode: CurrencyCode;
   available: boolean;
+  /** Варианты размеров. Пусто/undefined — товар без размеров (старый flow). */
+  variants?: MenuItemVariant[];
+}
+
+export interface Promotion {
+  id: string;
+  restaurantId: string;
+  title: string;
+  enabled: boolean;
+  type: PromotionType;
+  buyQuantity: number;
+  freeQuantity: number;
+  repeat: boolean;
+  eligibleMenuItemIds: string[];
+  displayText: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface DeliveryAddress {
@@ -100,6 +149,7 @@ export interface DriverProfile {
 
 export interface CartItem {
   menuItemId: string;
+  variantId: string | null;
   quantity: number;
   cookingComment: string;
 }
@@ -107,7 +157,7 @@ export interface CartItem {
 export interface Cart {
   restaurantId: string | null;
   items: CartItem[];
-  deliveryMode: CustomerDeliveryMode | null;
+  fulfillmentChoice: FulfillmentChoice;
   paymentMethod: PaymentMethod;
   address: DeliveryAddress;
 }
@@ -116,11 +166,20 @@ export interface OrderItemSnapshot {
   menuItemId: string;
   name: string;
   description: string;
-  unitPriceCents: number;
   quantity: number;
-  lineTotalCents: number;
+  baseUnitPriceCents: number;
+  selectedVariantId: string | null;
+  selectedVariantName: string | null;
+  variantPriceDeltaCents: number;
+  finalUnitPriceCents: number;
+  lineSubtotalBeforeDiscountCents: number;
+  promotionDiscountCents: number;
+  finalLineTotalCents: number;
   currencyCode: CurrencyCode;
   cookingComment: string;
+  /** Совместимость с прежними представлениями заказа. */
+  unitPriceCents: number;
+  lineTotalCents: number;
 }
 
 export interface OrderCustomerSnapshot {
@@ -136,13 +195,36 @@ export interface OrderRestaurantSnapshot {
   zoneId: ZoneId;
 }
 
+export interface AppliedPromotionSnapshot {
+  promotionId: string;
+  title: string;
+  type: PromotionType;
+  freeUnitCount: number;
+  discountCents: number;
+}
+
+export interface RestaurantDeliverySnapshot {
+  minimumOrderCents: number;
+  freeDeliveryThresholdCents: number | null;
+  standardDeliveryFeeCents: number;
+  appliedDeliveryFeeCents: number;
+  freeDeliveryApplied: boolean;
+}
+
 export interface FinancialSnapshot {
   currencyCode: CurrencyCode;
-  deliveryMode: CustomerDeliveryMode;
+  deliveryMode: DeliveryMode;
+  deliveryProvider: RestaurantDeliveryProvider;
   restaurantCommissionRateBps: number;
   restaurantCommissionCents: number;
+  foodSubtotalBeforeDiscountsCents: number;
+  variantSurchargeSubtotalCents: number;
+  promotionDiscountCents: number;
   foodSubtotalCents: number;
   deliveryFeeCents: number;
+  standardRestaurantDeliveryFeeCents: number | null;
+  freeDeliveryThresholdCents: number | null;
+  minimumOrderCents: number | null;
   smallOrderFeeCents: number;
   platformGrossRevenueCents: number;
   driverPayoutCents: number;
@@ -150,6 +232,8 @@ export interface FinancialSnapshot {
   customerTotalCents: number;
   restaurantZoneId: ZoneId;
   customerZoneId: ZoneId | null;
+  appliedPromotion: AppliedPromotionSnapshot | null;
+  restaurantDelivery: RestaurantDeliverySnapshot | null;
 }
 
 export interface OrderHistoryEvent {
@@ -170,7 +254,7 @@ export interface Order {
   customer: OrderCustomerSnapshot;
   restaurant: OrderRestaurantSnapshot;
   address: DeliveryAddress | null;
-  deliveryMode: CustomerDeliveryMode;
+  deliveryMode: DeliveryMode;
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   paidAt: string | null;
@@ -193,19 +277,42 @@ export interface PrototypeState {
   tariffs: TariffMatrix;
   restaurants: Restaurant[];
   menuItems: MenuItem[];
+  promotions: Promotion[];
   customer: CustomerProfile;
   drivers: DriverProfile[];
   cart: Cart;
   orders: Order[];
 }
 
+/** Результат расчёта корзины для клиентского оформления. */
 export interface CartPricing {
+  deliveryMode: DeliveryMode | null;
+  deliveryProvider: RestaurantDeliveryProvider | null;
+  foodSubtotalBeforeDiscountsCents: number;
+  variantSurchargeSubtotalCents: number;
+  promotionDiscountCents: number;
   foodSubtotalCents: number;
   deliveryFeeCents: number | null;
+  standardRestaurantDeliveryFeeCents: number | null;
   restaurantCommissionCents: number;
   smallOrderFeeCents: number;
   platformGrossRevenueCents: number;
   driverPayoutCents: number | null;
   restaurantPayoutBeforeBankFeeCents: number;
   customerTotalCents: number | null;
+  appliedPromotion: AppliedPromotionSnapshot | null;
+  /** Прогресс до следующего подарка по акции (единиц), null если акции нет. */
+  promotionUnitsToNextFree: number | null;
+  promotionFreeUnitCount: number;
+  promotionEligibleUnits: number;
+  /** Состояние собственной доставки ресторана. */
+  restaurantDeliveryStatus:
+    | "OK"
+    | "BELOW_MINIMUM"
+    | "ZONE_NOT_SERVED"
+    | null;
+  restaurantDeliveryMissingCents: number | null;
+  freeDeliveryRemainingCents: number | null;
+  minimumOrderCents: number | null;
+  freeDeliveryThresholdCents: number | null;
 }

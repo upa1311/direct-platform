@@ -1,72 +1,34 @@
 import {
   PROTOTYPE_SCHEMA_VERSION,
   type Cart,
-  type CustomerDeliveryMode,
-  type DeliveryAddress,
+  type DeliveryMode,
   type FinancialSnapshot,
   type Order,
-  type PaymentMethod,
+  type OrderItemSnapshot,
   type PrototypeState,
-  type Restaurant,
-  type ZoneId,
+  type RestaurantDeliveryProvider,
 } from "./models";
-import {
-  createDefaultTariffs,
-  getDefaultRecommendationRank,
-} from "./default-state";
+import { createDefaultState, createEmptyCart } from "./default-state";
+import { migrateFulfillmentChoice } from "./pricing-engine";
 
-export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v4";
-export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v4";
+export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v5";
+export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v5";
+export const LEGACY_V4_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v4";
 export const LEGACY_V3_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v3";
-export const LEGACY_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v2";
+export const LEGACY_V2_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v2";
 
-interface LegacyV3Cart extends Omit<Cart, "deliveryMode"> {
-  deliveryMode: "PLATFORM_DRIVER";
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
 }
 
-interface LegacyV3FinancialSnapshot
-  extends Omit<FinancialSnapshot, "deliveryMode" | "customerZoneId"> {
-  deliveryMode: "PLATFORM_DRIVER";
-  customerZoneId: ZoneId;
+function num(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : fallback;
 }
 
-interface LegacyV3Order
-  extends Omit<Order, "address" | "deliveryMode" | "financials"> {
-  address: DeliveryAddress;
-  deliveryMode: "PLATFORM_DRIVER";
-  financials: LegacyV3FinancialSnapshot;
-}
-
-interface LegacyV3PrototypeState
-  extends Omit<PrototypeState, "schemaVersion" | "cart" | "orders"> {
-  schemaVersion: 3;
-  cart: LegacyV3Cart;
-  orders: LegacyV3Order[];
-}
-
-type LegacyPaymentMethod = "QR" | "CASH";
-
-interface LegacyCart extends Omit<LegacyV3Cart, "paymentMethod"> {
-  paymentMethod: LegacyPaymentMethod;
-}
-
-interface LegacyRestaurant extends Omit<Restaurant, "paymentMethods"> {
-  paymentMethods: LegacyPaymentMethod[];
-}
-
-interface LegacyOrder extends Omit<LegacyV3Order, "paymentMethod"> {
-  paymentMethod: LegacyPaymentMethod;
-}
-
-interface LegacyPrototypeState
-  extends Omit<
-    LegacyV3PrototypeState,
-    "schemaVersion" | "cart" | "restaurants" | "orders"
-  > {
-  schemaVersion: 2;
-  cart: LegacyCart;
-  restaurants: LegacyRestaurant[];
-  orders: LegacyOrder[];
+function str(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
 }
 
 export function finalizeMutation(
@@ -86,286 +48,325 @@ function hasPrototypeStateShape(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-
-  const candidate = value as Partial<PrototypeState>;
-
   return (
-    typeof candidate.revision === "number" &&
-    typeof candidate.updatedAt === "string" &&
-    typeof candidate.nextOrderNumber === "number" &&
-    Array.isArray(candidate.zones) &&
-    candidate.zones.every(
-      (zone) => isRecord(zone) && Array.isArray(zone.streets),
-    ) &&
-    isRecord(candidate.platformSettings) &&
-    isRecord(candidate.tariffs) &&
-    Array.isArray(candidate.restaurants) &&
-    candidate.restaurants.every(
-      (restaurant) =>
-        isRecord(restaurant) && Array.isArray(restaurant.paymentMethods),
-    ) &&
-    Array.isArray(candidate.menuItems) &&
-    candidate.menuItems.every(isRecord) &&
-    isRecord(candidate.customer) &&
-    isRecord(candidate.cart) &&
-    Array.isArray(candidate.cart.items) &&
-    isRecord(candidate.cart.address) &&
-    Array.isArray(candidate.orders) &&
-    candidate.orders.every(
-      (order) => isRecord(order) && Array.isArray(order.history),
-    ) &&
-    Array.isArray(candidate.drivers)
+    typeof value.revision === "number" &&
+    typeof value.updatedAt === "string" &&
+    typeof value.nextOrderNumber === "number" &&
+    Array.isArray(value.zones) &&
+    isRecord(value.platformSettings) &&
+    isRecord(value.tariffs) &&
+    Array.isArray(value.restaurants) &&
+    Array.isArray(value.menuItems) &&
+    isRecord(value.customer) &&
+    isRecord(value.cart) &&
+    Array.isArray((value.cart as { items?: unknown }).items) &&
+    Array.isArray(value.orders) &&
+    Array.isArray(value.drivers)
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object";
 }
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
   return (
     hasPrototypeStateShape(value) &&
     (value as { schemaVersion?: unknown }).schemaVersion ===
-      PROTOTYPE_SCHEMA_VERSION
+      PROTOTYPE_SCHEMA_VERSION &&
+    Array.isArray((value as { promotions?: unknown }).promotions)
   );
 }
 
-function isLegacyPrototypeState(
+function normalizeDeliveryMode(value: unknown): DeliveryMode {
+  return value === "PICKUP" ||
+    value === "RESTAURANT_DELIVERY" ||
+    value === "PLATFORM_DRIVER"
+    ? value
+    : "PLATFORM_DRIVER";
+}
+
+function providerForMode(mode: DeliveryMode): RestaurantDeliveryProvider {
+  return mode === "RESTAURANT_DELIVERY" ? "RESTAURANT" : "DIRECT";
+}
+
+/** Заполняет недостающие поля снимка позиции нейтральными значениями. */
+function normalizeOrderItem(value: unknown): OrderItemSnapshot {
+  const raw = isRecord(value) ? value : {};
+  const unitPriceCents = num(raw.unitPriceCents, num(raw.finalUnitPriceCents, 0));
+  const quantity = num(raw.quantity, 1);
+  const lineTotalCents = num(
+    raw.lineTotalCents,
+    num(raw.finalLineTotalCents, unitPriceCents * quantity),
+  );
+  return {
+    menuItemId: str(raw.menuItemId, ""),
+    name: str(raw.name, ""),
+    description: str(raw.description, ""),
+    quantity,
+    baseUnitPriceCents: num(raw.baseUnitPriceCents, unitPriceCents),
+    selectedVariantId:
+      typeof raw.selectedVariantId === "string" ? raw.selectedVariantId : null,
+    selectedVariantName:
+      typeof raw.selectedVariantName === "string"
+        ? raw.selectedVariantName
+        : null,
+    variantPriceDeltaCents: num(raw.variantPriceDeltaCents, 0),
+    finalUnitPriceCents: num(raw.finalUnitPriceCents, unitPriceCents),
+    lineSubtotalBeforeDiscountCents: num(
+      raw.lineSubtotalBeforeDiscountCents,
+      lineTotalCents,
+    ),
+    promotionDiscountCents: num(raw.promotionDiscountCents, 0),
+    finalLineTotalCents: num(raw.finalLineTotalCents, lineTotalCents),
+    currencyCode: "USD",
+    cookingComment: str(raw.cookingComment, ""),
+    unitPriceCents,
+    lineTotalCents,
+  };
+}
+
+/** Заполняет недостающие поля финансового снимка нейтральными значениями. */
+function normalizeFinancials(
   value: unknown,
-): value is LegacyPrototypeState {
-  return (
-    hasPrototypeStateShape(value) &&
-    (value as { schemaVersion?: unknown }).schemaVersion === 2
-  );
+  deliveryMode: DeliveryMode,
+): FinancialSnapshot {
+  const raw = isRecord(value) ? value : {};
+  const foodSubtotalCents = num(raw.foodSubtotalCents, 0);
+  const isPickup = deliveryMode === "PICKUP";
+  return {
+    currencyCode: "USD",
+    deliveryMode,
+    deliveryProvider:
+      raw.deliveryProvider === "RESTAURANT" || raw.deliveryProvider === "DIRECT"
+        ? raw.deliveryProvider
+        : providerForMode(deliveryMode),
+    restaurantCommissionRateBps: num(raw.restaurantCommissionRateBps, 1500),
+    restaurantCommissionCents: num(raw.restaurantCommissionCents, 0),
+    foodSubtotalBeforeDiscountsCents: num(
+      raw.foodSubtotalBeforeDiscountsCents,
+      foodSubtotalCents,
+    ),
+    variantSurchargeSubtotalCents: num(raw.variantSurchargeSubtotalCents, 0),
+    promotionDiscountCents: num(raw.promotionDiscountCents, 0),
+    foodSubtotalCents,
+    deliveryFeeCents: isPickup ? 0 : num(raw.deliveryFeeCents, 0),
+    standardRestaurantDeliveryFeeCents:
+      typeof raw.standardRestaurantDeliveryFeeCents === "number"
+        ? raw.standardRestaurantDeliveryFeeCents
+        : null,
+    freeDeliveryThresholdCents:
+      typeof raw.freeDeliveryThresholdCents === "number"
+        ? raw.freeDeliveryThresholdCents
+        : null,
+    minimumOrderCents:
+      typeof raw.minimumOrderCents === "number" ? raw.minimumOrderCents : null,
+    smallOrderFeeCents: num(raw.smallOrderFeeCents, 0),
+    platformGrossRevenueCents: num(raw.platformGrossRevenueCents, 0),
+    driverPayoutCents: isPickup ? 0 : num(raw.driverPayoutCents, 0),
+    restaurantPayoutBeforeBankFeeCents: num(
+      raw.restaurantPayoutBeforeBankFeeCents,
+      0,
+    ),
+    customerTotalCents: num(raw.customerTotalCents, foodSubtotalCents),
+    restaurantZoneId: (raw.restaurantZoneId ?? "zone-1") as
+      FinancialSnapshot["restaurantZoneId"],
+    customerZoneId: isPickup
+      ? null
+      : ((raw.customerZoneId ?? null) as FinancialSnapshot["customerZoneId"]),
+    appliedPromotion: isRecord(raw.appliedPromotion)
+      ? (raw.appliedPromotion as unknown as FinancialSnapshot["appliedPromotion"])
+      : null,
+    restaurantDelivery: isRecord(raw.restaurantDelivery)
+      ? (raw.restaurantDelivery as unknown as FinancialSnapshot["restaurantDelivery"])
+      : null,
+  };
 }
 
-function isLegacyV3PrototypeState(
+function normalizeOrder(value: unknown): Order {
+  const raw = isRecord(value) ? value : {};
+  const deliveryMode = normalizeDeliveryMode(raw.deliveryMode);
+  const wasCashOrder =
+    raw.paymentMethod === "CASH" || raw.paymentStatus === "CASH_ON_DELIVERY";
+  const rawStatus = str(raw.status, "RESTAURANT_REVIEW") as Order["status"];
+  const safeStatus =
+    wasCashOrder && (rawStatus === "PREPARING" || rawStatus === "READY")
+      ? "AWAITING_PAYMENT"
+      : rawStatus;
+  const history = Array.isArray(raw.history)
+    ? (raw.history as Order["history"]).map((event) => ({ ...event }))
+    : [];
+  const restaurant = isRecord(raw.restaurant) ? raw.restaurant : {};
+  const customer = isRecord(raw.customer) ? raw.customer : {};
+
+  return {
+    id: str(raw.id, ""),
+    publicNumber: str(raw.publicNumber, ""),
+    createdAt: str(raw.createdAt, new Date(0).toISOString()),
+    updatedAt: str(raw.updatedAt, new Date(0).toISOString()),
+    customer: {
+      id: str(customer.id, "customer-1"),
+      name: str(customer.name, ""),
+      phone: str(customer.phone, ""),
+    },
+    restaurant: {
+      id: str(restaurant.id, ""),
+      name: str(restaurant.name, ""),
+      address: str(restaurant.address, ""),
+      zoneId: (restaurant.zoneId ?? "zone-1") as Order["restaurant"]["zoneId"],
+    },
+    address:
+      deliveryMode === "PICKUP"
+        ? null
+        : isRecord(raw.address)
+          ? (raw.address as unknown as Order["address"])
+          : null,
+    deliveryMode,
+    paymentMethod: "ONLINE",
+    paymentStatus: wasCashOrder
+      ? safeStatus === "AWAITING_PAYMENT"
+        ? "AWAITING_PAYMENT"
+        : "NOT_STARTED"
+      : (str(raw.paymentStatus, "NOT_STARTED") as Order["paymentStatus"]),
+    paidAt: wasCashOrder
+      ? null
+      : typeof raw.paidAt === "string"
+        ? raw.paidAt
+        : null,
+    status: safeStatus,
+    preparationMinutes:
+      typeof raw.preparationMinutes === "number"
+        ? raw.preparationMinutes
+        : null,
+    expectedReadyAt:
+      wasCashOrder
+        ? null
+        : typeof raw.expectedReadyAt === "string"
+          ? raw.expectedReadyAt
+          : null,
+    cancellationReason:
+      typeof raw.cancellationReason === "string"
+        ? raw.cancellationReason
+        : null,
+    items: Array.isArray(raw.items) ? raw.items.map(normalizeOrderItem) : [],
+    financials: normalizeFinancials(raw.financials, deliveryMode),
+    history,
+  };
+}
+
+function normalizeCart(value: unknown, fallback: Cart): Cart {
+  const raw = isRecord(value) ? value : {};
+  const address = isRecord(raw.address)
+    ? (raw.address as unknown as Cart["address"])
+    : fallback.address;
+  const items = Array.isArray(raw.items)
+    ? raw.items.flatMap((item) => {
+        if (!isRecord(item) || typeof item.menuItemId !== "string") {
+          return [];
+        }
+        return [
+          {
+            menuItemId: item.menuItemId,
+            variantId:
+              typeof item.variantId === "string" ? item.variantId : null,
+            quantity: num(item.quantity, 1),
+            cookingComment: str(item.cookingComment, ""),
+          },
+        ];
+      })
+    : [];
+  return {
+    restaurantId:
+      typeof raw.restaurantId === "string" ? raw.restaurantId : null,
+    items,
+    fulfillmentChoice:
+      raw.fulfillmentChoice === "PICKUP" || raw.fulfillmentChoice === "DELIVERY"
+        ? raw.fulfillmentChoice
+        : migrateFulfillmentChoice(raw.deliveryMode),
+    paymentMethod: "ONLINE",
+    address,
+  };
+}
+
+function normalizeRestaurantV5(
   value: unknown,
-): value is LegacyV3PrototypeState {
-  return (
-    hasPrototypeStateShape(value) &&
-    (value as { schemaVersion?: unknown }).schemaVersion === 3
-  );
+): PrototypeState["restaurants"][number] {
+  const raw = isRecord(value) ? value : {};
+  const provider =
+    raw.deliveryProvider === "RESTAURANT" ? "RESTAURANT" : "DIRECT";
+  return {
+    ...(raw as unknown as PrototypeState["restaurants"][number]),
+    deliveryProvider: provider,
+    pickupEnabled:
+      typeof raw.pickupEnabled === "boolean" ? raw.pickupEnabled : true,
+    commissionRateBps: num(
+      raw.commissionRateBps,
+      provider === "RESTAURANT" ? 700 : 1500,
+    ),
+    restaurantDeliverySettings: isRecord(raw.restaurantDeliverySettings)
+      ? (raw.restaurantDeliverySettings as unknown as PrototypeState["restaurants"][number]["restaurantDeliverySettings"])
+      : null,
+  };
 }
 
-function normalizePaymentMethod(value: unknown): PaymentMethod {
-  if (value === "CASH" || value === "QR") {
-    return "ONLINE";
-  }
-  return "ONLINE";
-}
-
-function normalizePaymentMethods(values: unknown): PaymentMethod[] {
-  if (!Array.isArray(values)) {
-    return ["ONLINE"];
-  }
-
-  const methods = values.map(normalizePaymentMethod);
-  return [...new Set(methods)];
-}
-
-function normalizeCartDeliveryMode(value: unknown): CustomerDeliveryMode {
-  // Доставка — режим по умолчанию: неизвестный или отсутствующий (в т.ч.
-  // сохранённый ранее `null`, а также миграции v2/v3) режим корзины
-  // приводится к `PLATFORM_DRIVER` без потери адреса, блюд и заказов.
-  return value === "PICKUP" ? "PICKUP" : "PLATFORM_DRIVER";
-}
-
-function normalizeOrderDeliveryMode(value: unknown): CustomerDeliveryMode {
-  return value === "PICKUP" ? "PICKUP" : "PLATFORM_DRIVER";
-}
-
-function normalizeHistoryMessage(message: string): string {
-  return message
-    .replaceAll("QR-оплата", "онлайн-оплата")
-    .replaceAll("QR-оплаты", "онлайн-оплаты")
-    .replaceAll("QR-заказ", "онлайн-заказ");
-}
-
+/**
+ * Приведение уже v5-совместимого состояния к корректному виду. Сохраняет
+ * пользовательские и админские данные (рестораны, меню, акции, тарифы, зоны,
+ * настройки, корзину, заказы) и лишь мягко дозаполняет недостающие поля.
+ */
 export function normalizePrototypeState(
   state: PrototypeState,
 ): PrototypeState {
-  const defaultTariffs = createDefaultTariffs();
-  const zoneIds = ["zone-1", "zone-2", "zone-3", "zone-4"] as const;
-  const tariffs = Object.fromEntries(
-    zoneIds.map((fromZoneId) => [
-      fromZoneId,
-      Object.fromEntries(
-        zoneIds.map((toZoneId) => {
-          const saved = state.tariffs[fromZoneId]?.[toZoneId];
-          return [
-            toZoneId,
-            Number.isInteger(saved) && Number(saved) >= 0
-              ? saved
-              : defaultTariffs[fromZoneId][toZoneId],
-          ];
-        }),
-      ),
-    ]),
-  ) as PrototypeState["tariffs"];
-  const platformDriverCashEnabled = false;
-  const cartPaymentMethod = normalizePaymentMethod(
-    state.cart.paymentMethod,
-  );
-  const cartDeliveryMode = normalizeCartDeliveryMode(
-    state.cart.deliveryMode,
-  );
-
+  const defaults = createDefaultState();
   return {
     ...state,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
     platformSettings: {
-      ...state.platformSettings,
-      platformDriverCashEnabled,
+      ...(isRecord(state.platformSettings)
+        ? state.platformSettings
+        : defaults.platformSettings),
+      platformDriverCashEnabled: false,
     },
-    tariffs,
-    restaurants: state.restaurants.map((restaurant) => ({
-      ...restaurant,
-      recommendationRank:
-        Number.isFinite(restaurant.recommendationRank) &&
-        Number(restaurant.recommendationRank) >= 0
-          ? Number(restaurant.recommendationRank)
-          : getDefaultRecommendationRank(restaurant.id),
-      status:
-        restaurant.id === "restaurant-1" ||
-        restaurant.id === "restaurant-2" ||
-        restaurant.id === "restaurant-3"
-          ? "PUBLISHED"
-          : restaurant.status,
-      isAcceptingOrders:
-        restaurant.id === "restaurant-1"
-          ? true
-          : restaurant.id === "restaurant-2" || restaurant.id === "restaurant-3"
-            ? false
-            : restaurant.isAcceptingOrders,
-      paymentMethods: normalizePaymentMethods(restaurant.paymentMethods),
-    })),
-    cart: {
-      ...state.cart,
-      deliveryMode: cartDeliveryMode,
-      paymentMethod: cartPaymentMethod,
-    },
-    orders: state.orders.map((order) => {
-      const deliveryMode = normalizeOrderDeliveryMode(order.deliveryMode);
-      const isPickup = deliveryMode === "PICKUP";
-      const wasCashOrder =
-        order.paymentMethod === "CASH" ||
-        order.paymentStatus === "CASH_ON_DELIVERY";
-      const safeStatus =
-        wasCashOrder &&
-        (order.status === "PREPARING" || order.status === "READY")
-          ? "AWAITING_PAYMENT"
-          : order.status;
-
-      return {
-        ...order,
-        address: isPickup ? null : order.address,
-        deliveryMode,
-        paymentMethod: "ONLINE",
-        status: safeStatus,
-        paymentStatus: wasCashOrder
-          ? safeStatus === "AWAITING_PAYMENT"
-            ? "AWAITING_PAYMENT"
-            : "NOT_STARTED"
-          : order.paymentStatus,
-        paidAt: wasCashOrder ? null : order.paidAt,
-        expectedReadyAt: wasCashOrder ? null : order.expectedReadyAt,
-        financials: {
-          ...order.financials,
-          deliveryMode,
-          deliveryFeeCents: isPickup
-            ? 0
-            : order.financials.deliveryFeeCents,
-          driverPayoutCents: isPickup
-            ? 0
-            : order.financials.driverPayoutCents,
-          customerTotalCents: isPickup
-            ? order.financials.foodSubtotalCents +
-              order.financials.smallOrderFeeCents
-            : order.financials.customerTotalCents,
-          customerZoneId: isPickup
-            ? null
-            : order.financials.customerZoneId,
-        },
-        history: order.history.map((event) => ({ ...event })),
-      };
-    }),
+    zones: Array.isArray(state.zones) ? state.zones : defaults.zones,
+    tariffs: isRecord(state.tariffs) ? state.tariffs : defaults.tariffs,
+    restaurants: Array.isArray(state.restaurants)
+      ? state.restaurants.map(normalizeRestaurantV5)
+      : defaults.restaurants,
+    menuItems: Array.isArray(state.menuItems)
+      ? state.menuItems
+      : defaults.menuItems,
+    promotions: Array.isArray(state.promotions)
+      ? state.promotions
+      : defaults.promotions,
+    customer: isRecord(state.customer) ? state.customer : defaults.customer,
+    drivers: Array.isArray(state.drivers) ? state.drivers : defaults.drivers,
+    cart: normalizeCart(state.cart, defaults.cart),
+    orders: Array.isArray(state.orders)
+      ? state.orders.map(normalizeOrder)
+      : [],
   };
 }
 
-export function migrateV3PrototypeState(
-  legacyState: LegacyV3PrototypeState,
-): PrototypeState {
-  const migratedState = {
-    ...legacyState,
-    schemaVersion: PROTOTYPE_SCHEMA_VERSION,
-    cart: {
-      ...legacyState.cart,
-      deliveryMode: null,
-      paymentMethod: normalizePaymentMethod(legacyState.cart.paymentMethod),
-    },
-    orders: legacyState.orders.map((order) => ({
-      ...order,
-      deliveryMode: "PLATFORM_DRIVER" as const,
-      paymentMethod: normalizePaymentMethod(order.paymentMethod),
-      financials: {
-        ...order.financials,
-        deliveryMode: "PLATFORM_DRIVER" as const,
-      },
-      history: order.history.map((event) => ({ ...event })),
-    })),
-  } as PrototypeState;
-
-  return normalizePrototypeState(migratedState);
-}
-
-export function migrateLegacyPrototypeState(
-  legacyState: LegacyPrototypeState,
-): PrototypeState {
-  const migratedState = {
-    ...legacyState,
-    schemaVersion: PROTOTYPE_SCHEMA_VERSION,
-    restaurants: legacyState.restaurants.map((restaurant) => ({
-      ...restaurant,
-      isAcceptingOrders:
-        restaurant.id === "restaurant-1"
-          ? true
-          : restaurant.id === "restaurant-2" ||
-              restaurant.id === "restaurant-3"
-            ? false
-            : restaurant.isAcceptingOrders,
-      paymentMethods: normalizePaymentMethods(restaurant.paymentMethods),
-    })),
-    cart: {
-      ...legacyState.cart,
-      deliveryMode: null,
-      paymentMethod: normalizePaymentMethod(legacyState.cart.paymentMethod),
-    },
-    orders: legacyState.orders.map((order) => ({
-      ...order,
-      deliveryMode: "PLATFORM_DRIVER" as const,
-      paymentMethod: normalizePaymentMethod(order.paymentMethod),
-      financials: {
-        ...order.financials,
-        deliveryMode: "PLATFORM_DRIVER" as const,
-      },
-      history: order.history.map((event) => ({
-        ...event,
-        message: normalizeHistoryMessage(event.message),
-      })),
-    })),
-  } as PrototypeState;
-
-  return normalizePrototypeState(migratedState);
+export function upgradeToV5(raw: unknown): PrototypeState {
+  const source = isRecord(raw) ? raw : {};
+  const defaults = createDefaultState();
+  return normalizePrototypeState({
+    ...defaults,
+    revision: num(source.revision, 0),
+    nextOrderNumber: num(source.nextOrderNumber, defaults.nextOrderNumber),
+    customer: isRecord(source.customer)
+      ? (source.customer as unknown as PrototypeState["customer"])
+      : defaults.customer,
+    drivers: Array.isArray(source.drivers)
+      ? (source.drivers as PrototypeState["drivers"])
+      : defaults.drivers,
+    cart: normalizeCart(source.cart, defaults.cart) as PrototypeState["cart"],
+    orders: Array.isArray(source.orders)
+      ? (source.orders as unknown[]).map(normalizeOrder)
+      : [],
+  });
 }
 
 export function parseStoredState(
   serialized: string | null,
 ): PrototypeState | null {
-  if (!serialized) {
-    return null;
-  }
-
+  if (!serialized) return null;
   try {
     const parsed: unknown = JSON.parse(serialized);
     return isPrototypeState(parsed) ? normalizePrototypeState(parsed) : null;
@@ -374,35 +375,17 @@ export function parseStoredState(
   }
 }
 
+/** Загружает и мигрирует любую предыдущую версию (v4/v3/v2) в v5. */
 export function parseLegacyStoredState(
   serialized: string | null,
 ): PrototypeState | null {
-  if (!serialized) {
-    return null;
-  }
-
+  if (!serialized) return null;
   try {
     const parsed: unknown = JSON.parse(serialized);
-    return isLegacyPrototypeState(parsed)
-      ? migrateLegacyPrototypeState(parsed)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-export function parseV3StoredState(
-  serialized: string | null,
-): PrototypeState | null {
-  if (!serialized) {
-    return null;
-  }
-
-  try {
-    const parsed: unknown = JSON.parse(serialized);
-    return isLegacyV3PrototypeState(parsed)
-      ? migrateV3PrototypeState(parsed)
-      : null;
+    if (!isRecord(parsed) || !Array.isArray(parsed.orders)) {
+      return null;
+    }
+    return upgradeToV5(parsed);
   } catch {
     return null;
   }
@@ -418,3 +401,5 @@ export function isNewerState(
       candidate.updatedAt > current.updatedAt)
   );
 }
+
+export { createEmptyCart };

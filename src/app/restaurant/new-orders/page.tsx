@@ -4,13 +4,12 @@ import { useState } from "react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
-import { TEST_RESTAURANT_ID } from "@/prototype/default-state";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatMoney,
   getRestaurant,
-  getRestaurantOrders,
+  getWorkingRestaurantOrders,
   paymentMethodLabels,
 } from "@/prototype/selectors";
 
@@ -26,19 +25,16 @@ function getDefaultPreparationMinutes(value: number | undefined): number {
 
 export default function RestaurantNewOrdersPage() {
   const { state, acceptOrder, rejectOrder } = usePrototype();
-  const currentRestaurant = getRestaurant(state, TEST_RESTAURANT_ID);
   const [preparationByOrder, setPreparationByOrder] = useState<
     Record<string, number>
   >({});
   const [reasonByOrder, setReasonByOrder] = useState<Record<string, string>>({});
-  const orders = getRestaurantOrders(state, TEST_RESTAURANT_ID, [
-    "RESTAURANT_REVIEW",
-  ]);
+  const orders = getWorkingRestaurantOrders(state, ["RESTAURANT_REVIEW"]);
 
   return (
     <>
       <PageHeading
-        eyebrow={currentRestaurant?.name ?? "Ресторан 1"}
+        eyebrow="Рестораны 1–3"
         title="Новые заказы"
         description="Заказы, которые ресторан должен проверить и принять либо отклонить."
       />
@@ -50,7 +46,8 @@ export default function RestaurantNewOrdersPage() {
             const preparationMinutes =
               preparationByOrder[order.id] ??
               getDefaultPreparationMinutes(
-                currentRestaurant?.defaultPreparationMinutes,
+                getRestaurant(state, order.restaurant.id)
+                  ?.defaultPreparationMinutes,
               );
             const rejectionReason = reasonByOrder[order.id] ?? "";
 
@@ -61,6 +58,7 @@ export default function RestaurantNewOrdersPage() {
                     <h2 className={flowStyles.orderNumber}>
                       {order.publicNumber}
                     </h2>
+                    <p>{order.restaurant.name}</p>
                     <div className={flowStyles.inlineMeta}>
                       <span>{deliveryModeLabels[order.deliveryMode]}</span>
                       <span>{paymentMethodLabels[order.paymentMethod]}</span>

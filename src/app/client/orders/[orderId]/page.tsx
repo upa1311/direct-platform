@@ -10,6 +10,7 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatMoney,
+  getDeliveryModeProviderLabel,
   getOrder,
   orderStatusLabels,
   paymentMethodLabels,
@@ -55,7 +56,7 @@ export default function ClientOrderPage() {
               <dt>Способ получения</dt>
               <dd>{deliveryModeLabels[order.deliveryMode]}</dd>
             </div>
-            {order.deliveryMode === "PLATFORM_DRIVER" ? (
+            {order.deliveryMode !== "PICKUP" ? (
               <>
                 <div className={flowStyles.summaryRow}>
                   <dt>Адрес доставки</dt>
@@ -67,7 +68,9 @@ export default function ClientOrderPage() {
                 </div>
                 <div className={flowStyles.summaryRow}>
                   <dt>Исполнитель</dt>
-                  <dd>Доставит водитель Direct</dd>
+                  <dd>
+                    {getDeliveryModeProviderLabel(order.deliveryMode) ?? "—"}
+                  </dd>
                 </div>
               </>
             ) : (
@@ -90,18 +93,44 @@ export default function ClientOrderPage() {
           <h3>Состав заказа</h3>
           <div className={flowStyles.orderItemList}>
             {order.items.map((item) => (
-              <div key={item.menuItemId}>
-                <span><strong>{item.name}</strong> × {item.quantity}{item.cookingComment ? <small>Комментарий: {item.cookingComment}</small> : null}</span>
-                <span>{formatMoney(item.lineTotalCents, item.currencyCode)}</span>
+              <div key={`${item.menuItemId}-${item.selectedVariantId ?? "base"}`}>
+                <span>
+                  <strong>
+                    {item.name}
+                    {item.selectedVariantName && item.variantPriceDeltaCents !== 0
+                      ? ` · ${item.selectedVariantName}`
+                      : ""}
+                  </strong>{" "}
+                  × {item.quantity}
+                  {item.cookingComment ? (
+                    <small>Комментарий: {item.cookingComment}</small>
+                  ) : null}
+                </span>
+                <span>{formatMoney(item.finalLineTotalCents, item.currencyCode)}</span>
               </div>
             ))}
           </div>
           <dl className={flowStyles.summaryList}>
-            <div className={flowStyles.summaryRow}><dt>Еда</dt><dd>{formatMoney(order.financials.foodSubtotalCents)}</dd></div>
+            <div className={flowStyles.summaryRow}><dt>Еда</dt><dd>{formatMoney(order.financials.foodSubtotalBeforeDiscountsCents)}</dd></div>
+            {order.financials.appliedPromotion ? (
+              <div className={flowStyles.summaryRow}>
+                <dt>{order.financials.appliedPromotion.title}</dt>
+                <dd>−{formatMoney(order.financials.promotionDiscountCents)}</dd>
+              </div>
+            ) : null}
             <div className={flowStyles.summaryRow}><dt>{order.deliveryMode === "PICKUP" ? "Самовывоз" : "Доставка"}</dt><dd>{formatMoney(order.financials.deliveryFeeCents)}</dd></div>
             {order.financials.smallOrderFeeCents > 0 ? <div className={flowStyles.summaryRow}><dt>Доплата за небольшой заказ</dt><dd>{formatMoney(order.financials.smallOrderFeeCents)}</dd></div> : null}
             <div className={`${flowStyles.summaryRow} ${flowStyles.summaryTotal}`}><dt>Итого</dt><dd>{formatMoney(order.financials.customerTotalCents)}</dd></div>
           </dl>
+          {order.financials.restaurantDelivery ? (
+            <div className={flowStyles.zoneNotice}>
+              Минимальный заказ{" "}
+              {formatMoney(order.financials.restaurantDelivery.minimumOrderCents)}
+              {order.financials.restaurantDelivery.freeDeliveryApplied
+                ? " · Доставка бесплатно"
+                : ` · Доставка ${formatMoney(order.financials.restaurantDelivery.appliedDeliveryFeeCents)}`}
+            </div>
+          ) : null}
           {order.status === "AWAITING_PAYMENT" &&
           order.paymentMethod === "ONLINE" ? (
             <div className={flowStyles.submitArea}>

@@ -345,6 +345,111 @@ ADMIN RESTAURANT MANAGEMENT одновременно требует редакт
 
 Также не определено, кто вправе переопределять ставку и нужна ли обязательная причина. Существующие заказы в любом случае должны сохранять применённую ставку и правило в неизменяемом снимке.
 
+## Прототип schema v5: два типа ресторанов, размеры и акция 3+1
+
+Раздел фиксирует реализованные правила текущего прототипа (schema v5). Чистые
+формулы вынесены в `src/prototype/pricing-engine.ts` и покрыты
+детерминированными тестами (`npm run test`).
+
+### Клиентский выбор и фактический режим
+
+Клиент выбирает только `FulfillmentChoice = "DELIVERY" | "PICKUP"` и никогда не
+выбирает исполнителя. Фактический режим определяет система функцией
+`resolveDeliveryMode(deliveryProvider, fulfillmentChoice)`:
+
+- `DELIVERY` + `deliveryProvider = DIRECT` → `PLATFORM_DRIVER`;
+- `DELIVERY` + `deliveryProvider = RESTAURANT` → `RESTAURANT_DELIVERY`;
+- `PICKUP` → `PICKUP`.
+
+### Два типа ресторанов
+
+Ресторан хранит `deliveryProvider: "DIRECT" | "RESTAURANT"` — единый источник
+истины.
+
+DIRECT (Ресторан 1, Ресторан 2):
+
+- глобальная матрица тарифов Direct;
+- комиссия по умолчанию 1500 bps (15%);
+- действует доплата за небольшой заказ (минимум валового дохода $1);
+- заказ доступен водителям Direct.
+
+RESTAURANT (Ресторан 3):
+
+- собственная зональная сетка тарифов ресторана (не копия матрицы Direct);
+- комиссия по умолчанию 700 bps (7%);
+- доплата Direct за небольшой заказ и минимум $1 не применяются;
+- заказ недоступен водителям Direct; `driverPayoutCents = 0`
+  (это означает, что Direct не платит курьеру, а не что курьер работает
+  бесплатно — его расчёты вне платформы).
+
+### Размеры блюд
+
+У блюда могут быть варианты размеров `MenuItemVariant`. Итоговая цена единицы:
+
+    finalUnitPriceCents = baseUnitPriceCents + variantPriceDeltaCents
+
+Тестовые данные: «Стандартная» = базовая цена (delta 0, isDefault), «Большая» =
++200 (+$2.00). Товар без вариантов работает как раньше.
+
+### Структурированная акция «3 пиццы + четвёртая в подарок»
+
+Тип `BUY_N_GET_M_CHEAPEST_FREE`, параметры `buyQuantity = 3`,
+`freeQuantity = 1`, `repeat = true`, участвуют выбранные пиццы Ресторана 2.
+
+    freeCount = floor(totalEligiblePizzaUnits / 4)
+
+Бесплатной становится только БАЗОВАЯ стоимость самых дешёвых участвующих единиц.
+Доплата за размер «Большая» остаётся платной и никогда не обнуляется акцией.
+
+Раздельные значения:
+
+- `foodSubtotalBeforeDiscountsCents` — базовые цены + доплаты за размер;
+- `promotionDiscountCents` — сумма базовых цен подарочных единиц;
+- `foodSubtotalCents` = `foodSubtotalBeforeDiscountsCents − promotionDiscountCents`.
+
+**Правило прототипа для этой акции:** комиссия Direct рассчитывается от
+`foodSubtotalCents` ПОСЛЕ применённой акции. Это осознанное решение текущего
+прототипа для данного структурированного типа акции; оно не распространяется
+автоматически на другие типы акций (см. «Зафиксированная неоднозначность» выше).
+
+### Ресторан 3: собственная доставка
+
+`RestaurantDeliverySettings { minimumOrderCents, freeDeliveryThresholdCents,
+servedZoneIds, zoneFeesCents }`. Тестовые значения: минимум $10 (1000),
+бесплатная доставка от $25 (2500), зоны 1–4 с тарифами 300/350/400/450.
+
+Минимум и порог считаются только от `foodSubtotalCents` (после скидок), без
+доставки. Правило (`computeRestaurantDeliveryQuote`):
+
+- зона не обслуживается → доставка заблокирована, самовывоз остаётся доступным;
+- `foodSubtotal < minimumOrder` → оформить доставку нельзя, показать нехватку,
+  искусственная доплата НЕ добавляется;
+- `minimumOrder ≤ foodSubtotal < freeThreshold` → `deliveryFee = zoneFee`;
+- `foodSubtotal ≥ freeThreshold` → `deliveryFee = 0`.
+
+Минимум собственной доставки НЕ применяется к PICKUP.
+
+Финансы RESTAURANT_DELIVERY:
+
+    restaurantCommissionCents  = round(foodSubtotalCents * rate)
+    smallOrderFeeCents         = 0
+    platformGrossRevenueCents  = restaurantCommissionCents
+    driverPayoutCents          = 0
+    restaurantPayoutBeforeBankFeeCents =
+        foodSubtotalCents − restaurantCommissionCents + deliveryFeeCents
+    customerTotalCents         = foodSubtotalCents + deliveryFeeCents
+
+### Инварианты снимка
+
+`FinancialSnapshot` заказа расширен полями `deliveryProvider`,
+`foodSubtotalBeforeDiscountsCents`, `variantSurchargeSubtotalCents`,
+`promotionDiscountCents`, `standardRestaurantDeliveryFeeCents`,
+`freeDeliveryThresholdCents`, `minimumOrderCents`, снимком акции и условий
+доставки. Изменение администратором комиссии, минимума, порога, зональных
+тарифов, размеров, цены или акции НЕ пересчитывает существующие заказы.
+Старые заказы (v4) сохраняют свой `deliveryMode` и получают нейтральные
+snapshot-значения новых полей.
+
 ## Нерешённые вопросы
 
 - Округление процентных комиссий в минимальные единицы.

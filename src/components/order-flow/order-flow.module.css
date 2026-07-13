@@ -217,6 +217,25 @@
   font-size: 13px;
 }
 
+.promoBadge {
+  width: fit-content;
+  margin: 10px 0 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #fff4ed;
+  border: 1px solid #ead0be;
+  color: #8f431c;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.deliveryConditions {
+  margin: 8px 0 0;
+  color: #59625c;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .deliveryProvider {
   width: fit-content;
   margin: 0;
@@ -225,6 +244,73 @@
   color: #4f5852;
   font-size: 14px;
   font-weight: 700;
+}
+
+.restaurantPromo {
+  display: grid;
+  gap: 3px;
+  width: fit-content;
+  padding: 10px 14px;
+  border: 1px solid #ead0be;
+  border-radius: 12px;
+  background: #fff7f1;
+}
+
+.restaurantPromo strong {
+  color: #8f431c;
+  font-size: 15px;
+}
+
+.restaurantPromo span {
+  color: #7b6a5c;
+  font-size: 13px;
+}
+
+.itemPromoTag {
+  width: fit-content;
+  margin: 10px 0 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #fff4ed;
+  border: 1px solid #ead0be;
+  color: #8f431c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sizeSelector {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.sizeOption {
+  min-height: 34px;
+  padding: 5px 12px;
+  border: 1px solid #d8ddd8;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: #fff;
+  color: #39413c;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sizeOption:has(input:checked) {
+  border-color: #c66a36;
+  background: #fff7f1;
+  color: #7f3d1c;
+}
+
+.sizeOption input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #b85f2c;
 }
 
 .deliveryQuote {
@@ -480,6 +566,12 @@
   color: #8f9691;
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.confirmAddressButton {
+  margin-top: -6px;
+  margin-left: 0;
+  justify-self: start;
 }
 
 .catalogAddressFields {
