@@ -58,10 +58,6 @@ export interface CreateOrderResult {
   error: string | null;
 }
 
-export interface CreateOrderOptions {
-  isAddressConfirmed: boolean;
-}
-
 function sameLine(
   item: { menuItemId: string; variantId: string | null },
   menuItemId: string,
@@ -273,7 +269,6 @@ export function restoreDefaultTariffs(state: PrototypeState): PrototypeState {
 
 export function createOrderFromCart(
   state: PrototypeState,
-  options: CreateOrderOptions,
 ): ActionResult<CreateOrderResult> {
   const restaurant = getRestaurant(state, state.cart.restaurantId);
   const deliveryMode = getCartDeliveryMode(state);
@@ -340,14 +335,14 @@ export function createOrderFromCart(
     ? detectZoneId(state.cart.address.street, state, state.cart.address.house)
     : null;
 
-  if (isDelivery && !options.isAddressConfirmed) {
-    return fail("Подтвердите адрес доставки.");
-  }
+  // Единственный источник истины для доставки — корректно выбранная улица и
+  // заполненный дом (isAddressReady). Отдельное sessionStorage-подтверждение
+  // адреса больше не требуется (см. §3): заказ не блокируется молча.
   if (
     isDelivery &&
     (!isAddressReady(state.cart.address, state) || !customerZoneId)
   ) {
-    return fail("Укажите улицу из справочника и номер дома.");
+    return fail("Введите адрес доставки");
   }
 
   const pricing = calculateCartPricing(state);
@@ -389,6 +384,7 @@ export function createOrderFromCart(
     pricing.appliedPromotion;
 
   const isPickup = deliveryMode === "PICKUP";
+  const isRestaurantDelivery = deliveryMode === "RESTAURANT_DELIVERY";
   // Самовывоз: отдельная финансовая модель (клиент платит ресторану на точке).
   const pickup = isPickup
     ? computePickupSettlement({
@@ -397,24 +393,60 @@ export function createOrderFromCart(
         smallOrderFeeCents: pricing.smallOrderFeeCents,
       })
     : null;
+  // Способ и статус оплаты определяются фактическим режимом:
+  // PICKUP — оплата в ресторане; RESTAURANT_DELIVERY — наличные курьеру
+  // ресторана (Direct деньги клиента не удерживает); PLATFORM_DRIVER — онлайн.
   const paymentMethod: PaymentMethod = isPickup
     ? "PAY_AT_RESTAURANT"
-    : "ONLINE";
+    : isRestaurantDelivery
+      ? "CASH_TO_RESTAURANT_COURIER"
+      : "ONLINE";
   const paymentStatus: PaymentStatus = isPickup
     ? "DUE_AT_PICKUP"
-    : "NOT_STARTED";
+    : isRestaurantDelivery
+      ? "DUE_TO_RESTAURANT_COURIER"
+      : "NOT_STARTED";
   const pickupCode = isPickup
     ? generatePickupCode(state.nextOrderNumber)
     : null;
-  const restaurantCommissionCents = pickup
-    ? pickup.restaurantCommissionCents
-    : pricing.restaurantCommissionCents;
   const restaurantCommissionRateBps = isPickup
     ? restaurant.pickupCommissionRateBps
     : restaurant.commissionRateBps;
+  const restaurantCommissionCents = pickup
+    ? pickup.restaurantCommissionCents
+    : pricing.restaurantCommissionCents;
   const platformGrossRevenueCents = pickup
     ? pickup.platformCommissionReceivableCents
     : pricing.platformGrossRevenueCents;
+
+  // Кто собирает деньги клиента, выплаты и причитающаяся Direct комиссия.
+  // RESTAURANT_DELIVERY (§9–10): клиент платит наличными курьеру ресторана —
+  // всю сумму получает ресторан (platformCollected = 0), Direct удерживает
+  // расчётную комиссию 7% (platformCommissionReceivable). Доставка не входит
+  // в комиссионную базу, small-order fee не применяется, driverPayout = 0.
+  // Фактическое начисление комиссии — только после доставки (settlement).
+  const customerTotalCents = pricing.customerTotalCents;
+  const driverPayoutCents = isPickup ? 0 : pricing.driverPayoutCents;
+  const restaurantPayoutBeforeBankFeeCents = isPickup
+    ? 0
+    : pricing.restaurantPayoutBeforeBankFeeCents;
+  const restaurantCollectedFromCustomerCents = pickup
+    ? pickup.restaurantCollectedFromCustomerCents
+    : isRestaurantDelivery
+      ? customerTotalCents
+      : 0;
+  const platformCollectedFromCustomerCents =
+    pickup || isRestaurantDelivery ? 0 : customerTotalCents;
+  const platformCommissionReceivableCents = pickup
+    ? pickup.platformCommissionReceivableCents
+    : isRestaurantDelivery
+      ? pricing.restaurantCommissionCents
+      : 0;
+  const restaurantNetAfterPlatformCommissionCents = pickup
+    ? pickup.restaurantNetAfterPlatformCommissionCents
+    : isRestaurantDelivery
+      ? customerTotalCents - pricing.restaurantCommissionCents
+      : pricing.restaurantPayoutBeforeBankFeeCents;
 
   const items: OrderItemSnapshot[] = itemViews.map((view) => ({
     menuItemId: view.menuItem.id,
@@ -486,27 +518,17 @@ export function createOrderFromCart(
       minimumOrderCents: pricing.minimumOrderCents,
       smallOrderFeeCents: pricing.smallOrderFeeCents,
       platformGrossRevenueCents,
-      driverPayoutCents: isPickup ? 0 : pricing.driverPayoutCents,
-      restaurantPayoutBeforeBankFeeCents: isPickup
-        ? 0
-        : pricing.restaurantPayoutBeforeBankFeeCents,
-      customerTotalCents: pricing.customerTotalCents,
+      driverPayoutCents,
+      restaurantPayoutBeforeBankFeeCents,
+      customerTotalCents,
       restaurantZoneId: restaurant.zoneId,
       customerZoneId,
       appliedPromotion,
       restaurantDelivery: restaurantDeliverySnapshot,
-      restaurantCollectedFromCustomerCents: pickup
-        ? pickup.restaurantCollectedFromCustomerCents
-        : 0,
-      platformCollectedFromCustomerCents: pickup
-        ? 0
-        : pricing.customerTotalCents,
-      platformCommissionReceivableCents: pickup
-        ? pickup.platformCommissionReceivableCents
-        : 0,
-      restaurantNetAfterPlatformCommissionCents: pickup
-        ? pickup.restaurantNetAfterPlatformCommissionCents
-        : pricing.restaurantPayoutBeforeBankFeeCents,
+      restaurantCollectedFromCustomerCents,
+      platformCollectedFromCustomerCents,
+      platformCommissionReceivableCents,
+      restaurantNetAfterPlatformCommissionCents,
     },
     history: [
       {
@@ -586,9 +608,15 @@ export function acceptRestaurantOrder(
 
   const now = new Date().toISOString();
 
-  // Самовывоз: оплата в ресторане при получении, онлайн-оплата не запускается —
-  // заказ сразу переходит в приготовление.
-  if (targetOrder.paymentMethod === "PAY_AT_RESTAURANT") {
+  // Оплата не онлайн (самовывоз в ресторане либо наличные курьеру ресторана):
+  // онлайн-оплата не запускается, AWAITING_PAYMENT не используется — заказ
+  // сразу переходит в приготовление.
+  if (
+    targetOrder.paymentMethod === "PAY_AT_RESTAURANT" ||
+    targetOrder.paymentMethod === "CASH_TO_RESTAURANT_COURIER"
+  ) {
+    const isCourierCash =
+      targetOrder.paymentMethod === "CASH_TO_RESTAURANT_COURIER";
     const expectedReadyAt = new Date(
       new Date(now).getTime() + preparationMinutes * 60_000,
     ).toISOString();
@@ -610,7 +638,9 @@ export function acceptRestaurantOrder(
             type: "STATUS",
             fromStatus: "RESTAURANT_REVIEW",
             toStatus: "PREPARING",
-            message: `Ресторан принял заказ. Время приготовления — ${preparationMinutes} минут. Оплата в ресторане при получении.`,
+            message: isCourierCash
+              ? `Ресторан принял заказ. Время приготовления — ${preparationMinutes} минут. Оплата наличными курьеру ресторана при получении.`
+              : `Ресторан принял заказ. Время приготовления — ${preparationMinutes} минут. Оплата в ресторане при получении.`,
           },
         ],
       }),
@@ -860,16 +890,87 @@ export function markOrderArriving(
   );
 }
 
+/**
+ * Атомарное завершение доставки собственным курьером ресторана (§11): один
+ * шаг ARRIVING → DELIVERED, который также фиксирует получение наличных и
+ * создаёт единственную неизменяемую settlement-запись комиссии Direct.
+ *
+ * Комиссия начисляется только здесь (по факту доставки). Повторное нажатие не
+ * создаёт вторую запись: переход разрешён лишь из ARRIVING, а settlement
+ * защищён идемпотентным id. Отменённый/недоставленный заказ settlement не
+ * создаёт (в ARRIVING он ещё не попадает при отмене).
+ */
 export function markOrderDelivered(
   state: PrototypeState,
   orderId: string,
 ): PrototypeState {
-  return advanceCourierStatus(
-    state,
+  const targetOrder = state.orders.find((order) => order.id === orderId);
+  if (
+    !targetOrder ||
+    targetOrder.deliveryMode !== "RESTAURANT_DELIVERY" ||
+    targetOrder.status !== "ARRIVING"
+  ) {
+    return state;
+  }
+
+  const now = new Date().toISOString();
+  const nextHistoryNumber = targetOrder.history.length + 1;
+  const updatedOrder: Order = {
+    ...targetOrder,
+    status: "DELIVERED",
+    paymentStatus: "PAID_TO_RESTAURANT_COURIER",
+    paidAt: now,
+    updatedAt: now,
+    history: [
+      ...targetOrder.history,
+      {
+        id: `${targetOrder.id}-history-${nextHistoryNumber}`,
+        occurredAt: now,
+        actor: "RESTAURANT",
+        type: "PAYMENT",
+        fromStatus: "ARRIVING",
+        toStatus: "ARRIVING",
+        message: "Курьер ресторана получил оплату наличными.",
+      },
+      {
+        id: `${targetOrder.id}-history-${nextHistoryNumber + 1}`,
+        occurredAt: now,
+        actor: "RESTAURANT",
+        type: "STATUS",
+        fromStatus: "ARRIVING",
+        toStatus: "DELIVERED",
+        message: "Заказ доставлен клиенту.",
+      },
+    ],
+  };
+
+  // Единственная запись комиссии за доставку (id привязан к заказу).
+  const settlementId = `settlement-${orderId}`;
+  const alreadySettled = state.settlements.some(
+    (entry) => entry.id === settlementId || entry.orderId === orderId,
+  );
+  const settlement: SettlementEntry = {
+    id: settlementId,
     orderId,
-    "ARRIVING",
-    "DELIVERED",
-    "Заказ доставлен клиенту.",
+    restaurantId: targetOrder.restaurant.id,
+    type: "RESTAURANT_DELIVERY_COMMISSION",
+    amountCents: targetOrder.financials.platformCommissionReceivableCents,
+    status: "PENDING",
+    createdAt: now,
+  };
+
+  return finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((order) =>
+        order.id === orderId ? updatedOrder : order,
+      ),
+      settlements: alreadySettled
+        ? state.settlements
+        : [...state.settlements, settlement],
+    },
+    now,
   );
 }
 

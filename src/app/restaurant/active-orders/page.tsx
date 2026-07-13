@@ -206,7 +206,7 @@ export default function RestaurantActiveOrdersPage() {
                     type="button"
                     onClick={() => markDelivered(order.id)}
                   >
-                    Заказ доставлен
+                    Заказ доставлен, наличные получены
                   </button>
                 </div>
               ) : null}

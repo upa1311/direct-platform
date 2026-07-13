@@ -26,7 +26,7 @@ function makeReadyPickupOrder(): {
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   s = setCartFulfillmentChoice(s, "PICKUP");
-  const created = createOrderFromCart(s, { isAddressConfirmed: false });
+  const created = createOrderFromCart(s);
   assert.equal(created.result.error, null);
   s = created.state;
   const orderId = created.result.orderId as string;

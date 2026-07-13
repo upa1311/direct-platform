@@ -60,6 +60,7 @@ export const paymentMethodLabels: Record<PaymentMethod, string> = {
   ONLINE: "Оплата онлайн",
   CASH: "Наличные",
   PAY_AT_RESTAURANT: "Оплата в ресторане при получении",
+  CASH_TO_RESTAURANT_COURIER: "Оплата наличными курьеру ресторана",
 };
 
 export const pickupPaymentMethodLabels: Record<PickupPaymentMethod, string> = {
@@ -100,6 +101,8 @@ export const paymentStatusLabels: Record<
   CASH_ON_DELIVERY: "Наличные при получении",
   DUE_AT_PICKUP: "Оплата при получении",
   PAID_AT_RESTAURANT: "Оплачено в ресторане",
+  DUE_TO_RESTAURANT_COURIER: "Оплата курьеру при получении",
+  PAID_TO_RESTAURANT_COURIER: "Оплачено курьеру ресторана",
 };
 
 export const orderActorLabels: Record<OrderHistoryEvent["actor"], string> = {
@@ -761,17 +764,44 @@ export function getSettlementForOrder(
   );
 }
 
-/** Задолженность ресторана перед Direct: сумма ожидающих (PENDING) начислений. */
-export function getRestaurantPickupDebtCents(
+/** Сумма ожидающих (PENDING) начислений ресторана, опционально по типу. */
+export function getRestaurantSettlementDebtCents(
   state: PrototypeState,
   restaurantId: string,
+  type?: SettlementEntry["type"],
 ): number {
   return state.settlements
     .filter(
       (entry) =>
-        entry.restaurantId === restaurantId && entry.status === "PENDING",
+        entry.restaurantId === restaurantId &&
+        entry.status === "PENDING" &&
+        (type ? entry.type === type : true),
     )
     .reduce((total, entry) => total + entry.amountCents, 0);
+}
+
+/** Задолженность ресторана перед Direct по комиссии самовывоза (PENDING). */
+export function getRestaurantPickupDebtCents(
+  state: PrototypeState,
+  restaurantId: string,
+): number {
+  return getRestaurantSettlementDebtCents(
+    state,
+    restaurantId,
+    "PICKUP_COMMISSION",
+  );
+}
+
+/** Задолженность ресторана перед Direct по комиссии собственной доставки (PENDING). */
+export function getRestaurantDeliveryCommissionDebtCents(
+  state: PrototypeState,
+  restaurantId: string,
+): number {
+  return getRestaurantSettlementDebtCents(
+    state,
+    restaurantId,
+    "RESTAURANT_DELIVERY_COMMISSION",
+  );
 }
 
 export interface PickupStats {

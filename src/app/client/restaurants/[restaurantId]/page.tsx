@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
+import { Gift } from "lucide-react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { useClientAddressConfirmation } from "@/components/order-flow/client-address-confirmation";
@@ -14,8 +15,10 @@ import {
   getRestaurant,
   getRestaurantMenu,
   getRestaurantPromotion,
+  isAddressReady,
   resolveVariant,
 } from "@/prototype/selectors";
+import { shouldAutoConfirmAddress } from "@/prototype/pricing-engine";
 
 function getProductLabel(quantity: number): string {
   const lastTwoDigits = quantity % 100;
@@ -29,12 +32,34 @@ function getProductLabel(quantity: number): string {
 export default function ClientRestaurantPage() {
   const params = useParams<{ restaurantId: string }>();
   const { state, addItem, setItemQuantity } = usePrototype();
-  const { isAddressConfirmed } = useClientAddressConfirmation();
+  const { isAddressConfirmed, confirmAddress } = useClientAddressConfirmation();
   const { notifyItemAdded } = useClientCartUi();
   const [feedback, setFeedback] = useState("");
   const [selectedVariants, setSelectedVariants] = useState<
     Record<string, string>
   >({});
+
+  // При открытии ресторана с уже валидным кратким адресом можно тихо
+  // подтвердить его (не блокируя переход). Пустой/неполный адрес не мешает
+  // открыть ресторан и выбрать блюда — адрес заполняется позже в корзине.
+  const hasValidAddress = isAddressReady(state.cart.address, state);
+  useEffect(() => {
+    if (
+      shouldAutoConfirmAddress({
+        fulfillmentChoice: state.cart.fulfillmentChoice,
+        isAddressConfirmed,
+        hasValidAddress,
+      })
+    ) {
+      confirmAddress();
+    }
+  }, [
+    confirmAddress,
+    hasValidAddress,
+    isAddressConfirmed,
+    state.cart.fulfillmentChoice,
+  ]);
+
   const restaurant = getRestaurant(state, params.restaurantId);
 
   if (!restaurant || restaurant.status !== "PUBLISHED") {
@@ -52,15 +77,10 @@ export default function ClientRestaurantPage() {
     state.cart.restaurantId === restaurant.id
       ? state.cart.items.reduce((total, item) => total + item.quantity, 0)
       : 0;
-  const isPickup = state.cart.fulfillmentChoice === "PICKUP";
-  const checkoutHref =
-    !isPickup && !isAddressConfirmed
-      ? "/client/catalog#delivery-address"
-      : "/client/cart#checkout-cart";
-  const checkoutLabel =
-    !isPickup && !isAddressConfirmed
-      ? "Указать адрес"
-      : "Перейти к оформлению";
+  // CTA при наличии товаров всегда ведёт в корзину. Адрес заполняется в
+  // оформлении; клиента не возвращают в каталог из-за отсутствующего адреса.
+  const checkoutHref = "/client/cart#checkout-cart";
+  const checkoutLabel = "Перейти к оформлению";
 
   const getAddFeedback = (result: ReturnType<typeof addItem>) => {
     if (result === "ADDED") {
@@ -113,9 +133,10 @@ export default function ClientRestaurantPage() {
           <span>Обычно {restaurant.defaultPreparationMinutes} минут</span>
         </div>
         {promotion ? (
-          <div className={flowStyles.restaurantPromo}>
-            <strong>{promotion.title}</strong>
-          </div>
+          <p className={flowStyles.promoInline}>
+            <Gift aria-hidden="true" className={flowStyles.promoInlineIcon} />
+            <span>{promotion.title}</span>
+          </p>
         ) : null}
         {restaurant.restaurantDeliverySettings ? (
           <div className={flowStyles.restaurantPromo}>

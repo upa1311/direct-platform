@@ -177,6 +177,75 @@ export default function AdminOrdersPage() {
                         </dd>
                       </div>
                     </dl>
+                  ) : order.deliveryMode === "RESTAURANT_DELIVERY" ? (
+                    <dl className={flowStyles.definitionList}>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Стоимость еды</dt>
+                        <dd>
+                          {formatMoney(order.financials.foodSubtotalCents)}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Доставка</dt>
+                        <dd>{formatMoney(order.financials.deliveryFeeCents)}</dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Получено рестораном от клиента</dt>
+                        <dd>
+                          {formatMoney(
+                            order.financials
+                              .restaurantCollectedFromCustomerCents,
+                          )}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Расчётная комиссия Direct 7%</dt>
+                        <dd>
+                          {formatMoney(
+                            order.financials.restaurantCommissionCents,
+                          )}
+                        </dd>
+                      </div>
+                      {settlement ? (
+                        <>
+                          <div className={flowStyles.definitionRow}>
+                            <dt>Начисленная комиссия Direct</dt>
+                            <dd>{formatMoney(settlement.amountCents)}</dd>
+                          </div>
+                          <div className={flowStyles.definitionRow}>
+                            <dt>Статус комиссии</dt>
+                            <dd>
+                              {SETTLEMENT_STATUS_LABELS[settlement.status] ??
+                                settlement.status}
+                            </dd>
+                          </div>
+                        </>
+                      ) : (
+                        <div className={flowStyles.definitionRow}>
+                          <dt>Статус комиссии</dt>
+                          <dd>не начислена</dd>
+                        </div>
+                      )}
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Чистая сумма ресторана после комиссии</dt>
+                        <dd>
+                          {formatMoney(
+                            order.financials
+                              .restaurantNetAfterPlatformCommissionCents,
+                          )}
+                        </dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Выплата от Direct</dt>
+                        <dd>не применяется — деньги получает ресторан</dd>
+                      </div>
+                      <div className={flowStyles.definitionRow}>
+                        <dt>Итог клиента</dt>
+                        <dd>
+                          {formatMoney(order.financials.customerTotalCents)}
+                        </dd>
+                      </div>
+                    </dl>
                   ) : (
                     <dl className={flowStyles.definitionList}>
                       <div className={flowStyles.definitionRow}>

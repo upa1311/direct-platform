@@ -26,7 +26,12 @@ export type DeliveryMode =
   | "PICKUP";
 /** Историческое клиентское понятие v4. Сохранено для совместимости миграции. */
 export type CustomerDeliveryMode = "PLATFORM_DRIVER" | "PICKUP";
-export type PaymentMethod = "ONLINE" | "CASH" | "PAY_AT_RESTAURANT";
+export type PaymentMethod =
+  | "ONLINE"
+  | "CASH"
+  | "PAY_AT_RESTAURANT"
+  /** Наличные курьеру ресторана (RESTAURANT_DELIVERY). Деньги идут ресторану, не Direct. */
+  | "CASH_TO_RESTAURANT_COURIER";
 /** Способы оплаты, доступные на точке самовывоза. */
 export type PickupPaymentMethod = "CASH" | "CARD";
 export type OrderStatus =
@@ -46,9 +51,15 @@ export type PaymentStatus =
   | "PAID"
   | "CASH_ON_DELIVERY"
   | "DUE_AT_PICKUP"
-  | "PAID_AT_RESTAURANT";
+  | "PAID_AT_RESTAURANT"
+  /** Ожидается оплата наличными курьеру ресторана при получении. */
+  | "DUE_TO_RESTAURANT_COURIER"
+  /** Оплата наличными курьеру ресторана получена. */
+  | "PAID_TO_RESTAURANT_COURIER";
 
-export type SettlementType = "PICKUP_COMMISSION";
+export type SettlementType =
+  | "PICKUP_COMMISSION"
+  | "RESTAURANT_DELIVERY_COMMISSION";
 export type SettlementStatus = "PENDING" | "NETTED" | "PAID" | "WAIVED";
 
 /** Неизменяемая запись начисления комиссии Direct (ledger). */

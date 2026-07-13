@@ -278,6 +278,71 @@
   font-weight: 700;
 }
 
+/* Спокойная inline-подача акции: без фона, рамки, капсулы, тени и padding. */
+.promoInline {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: #202522;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.promoInlineIcon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: #b85f2c;
+}
+
+.promoProgressInline {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: #59625c;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.promoProgressInline strong {
+  color: #202522;
+  font-weight: 600;
+}
+
+/* Обычная фирменная текстовая ссылка возврата в меню — без подложки. */
+.backToMenuLink {
+  display: inline-block;
+  width: fit-content;
+  margin-top: 8px;
+  color: #b85f2c;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.backToMenuLink:hover {
+  text-decoration: underline;
+}
+
+.backToMenuLink:focus-visible {
+  outline: 2px solid #b85f2c;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 .sizeSelector {
   display: inline-flex;
   flex-wrap: wrap;

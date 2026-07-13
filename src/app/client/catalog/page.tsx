@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MapPin } from "lucide-react";
+import { Gift, MapPin } from "lucide-react";
 
 import {
   ADDRESS_REQUEST_EVENT,
@@ -232,9 +232,13 @@ export default function ClientCatalogPage() {
                       : "Меню для просмотра"}
                   </span>
                   {promotion ? (
-                    <p className={flowStyles.promoBadge}>
-                      {promotion.displayText}
-                    </p>
+                    <span className={flowStyles.promoInline}>
+                      <Gift
+                        aria-hidden="true"
+                        className={flowStyles.promoInlineIcon}
+                      />
+                      <span>{promotion.displayText}</span>
+                    </span>
                   ) : null}
                   {restaurantDelivery ? (
                     <p className={flowStyles.deliveryConditions}>

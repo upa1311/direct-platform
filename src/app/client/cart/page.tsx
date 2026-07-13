@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Gift } from "lucide-react";
 
-import { useClientAddressConfirmation } from "@/components/order-flow/client-address-confirmation";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -23,8 +23,6 @@ import {
 
 export default function ClientCartPage() {
   const router = useRouter();
-  const { isAddressConfirmed, isConfirmationHydrated } =
-    useClientAddressConfirmation();
   const {
     state,
     setItemQuantity,
@@ -35,6 +33,10 @@ export default function ClientCartPage() {
     createOrder,
   } = usePrototype();
   const [submitError, setSubmitError] = useState("");
+  const [addressError, setAddressError] = useState("");
+  const addressSectionRef = useRef<HTMLElement>(null);
+  const streetFieldRef = useRef<HTMLSelectElement>(null);
+  const houseFieldRef = useRef<HTMLInputElement>(null);
   const itemViews = getCartItemViews(state);
   const restaurant = getRestaurant(state, state.cart.restaurantId);
   const pricing = calculateCartPricing(state);
@@ -57,9 +59,11 @@ export default function ClientCartPage() {
   const selectedModeIsSupported =
     deliveryMode !== null &&
     restaurant?.deliveryModes.includes(deliveryMode) === true;
+  // Кнопка отправки не блокируется молча из-за адреса: для доставки адрес
+  // проверяется при клике (handleSubmit покажет ошибку и сфокусирует поле).
+  // Так клиент всегда может нажать «Отправить заказ» и получить подсказку.
   const canSubmitOrder =
     selectedModeIsSupported &&
-    (!isDelivery || (isAddressConfirmed && addressIsReady)) &&
     restaurantDeliveryReady &&
     customerNameIsValid &&
     customerPhoneIsValid &&
@@ -67,12 +71,38 @@ export default function ClientCartPage() {
     state.cart.paymentMethod === "ONLINE" &&
     restaurant?.isAcceptingOrders === true &&
     restaurant.paymentMethods.includes("ONLINE") &&
-    pricing.customerTotalCents !== null &&
-    itemViews.every(({ menuItem }) => menuItem.available);
+    itemViews.every(({ menuItem }) => menuItem.available) &&
+    (isPickup ? pricing.customerTotalCents !== null : true);
+
+  const focusAddressSection = () => {
+    window.requestAnimationFrame(() => {
+      addressSectionRef.current?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+        block: "start",
+      });
+      // Первое незаполненное поле: сначала улица, затем дом.
+      const target = state.cart.address.street.trim()
+        ? houseFieldRef.current
+        : streetFieldRef.current;
+      target?.focus({ preventScroll: true });
+    });
+  };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const result = createOrder({ isAddressConfirmed });
+    // Доставка без корректного адреса: не создаём заказ, показываем ошибку
+    // рядом с формой, прокручиваем к адресу и фокусируем первое пустое поле.
+    // Клиент не отправляется обратно в каталог.
+    if (isDelivery && !addressIsReady) {
+      setSubmitError("");
+      setAddressError("Введите адрес доставки");
+      focusAddressSection();
+      return;
+    }
+    setAddressError("");
+    const result = createOrder();
     if (result.error || !result.orderId) {
       setSubmitError(result.error ?? "Не удалось создать заказ.");
       return;
@@ -102,10 +132,13 @@ export default function ClientCartPage() {
         : "Укажите адрес";
   const pickupPaymentSummary = getPickupPaymentSummary(restaurant);
 
-  const promoProgress =
+  // Прогресс акции показываем только до первого применения (пока ни одна
+  // пицца не стала бесплатной). После применения клиент видит скидку в итогах.
+  const promoProgressUnits =
     pricing.promotionEligibleUnits > 0 &&
+    pricing.promotionFreeUnitCount === 0 &&
     pricing.promotionUnitsToNextFree !== null
-      ? `Добавьте ещё ${pricing.promotionUnitsToNextFree} ${pluralizePizza(pricing.promotionUnitsToNextFree)} — следующая будет в подарок`
+      ? pricing.promotionUnitsToNextFree
       : null;
 
   return (
@@ -114,14 +147,6 @@ export default function ClientCartPage() {
         <h1>Ваш заказ</h1>
         <p>{restaurant.name}</p>
       </header>
-
-      {isDelivery && isConfirmationHydrated && !isAddressConfirmed ? (
-        <div className={flowStyles.addressConfirmationPrompt} role="status">
-          <Link href="/client/catalog#delivery-address">
-            Подтвердите адрес доставки
-          </Link>
-        </div>
-      ) : null}
 
       <div className={flowStyles.cartLayout}>
         <div className={flowStyles.panelStack}>
@@ -201,8 +226,15 @@ export default function ClientCartPage() {
                 </div>
               ))}
             </div>
-            {promoProgress ? (
-              <p className={flowStyles.summaryHint}>{promoProgress}</p>
+            {promoProgressUnits !== null ? (
+              <p className={flowStyles.promoProgressInline}>
+                <Gift aria-hidden="true" className={flowStyles.promoInlineIcon} />
+                <span>
+                  Добавьте ещё <strong>{promoProgressUnits}</strong>{" "}
+                  {pluralizePizza(promoProgressUnits)}, чтобы получить следующую
+                  бесплатно
+                </span>
+              </p>
             ) : null}
           </section>
 
@@ -252,7 +284,11 @@ export default function ClientCartPage() {
           </section>
 
           {isDelivery ? (
-            <section className={flowStyles.card}>
+            <section
+              className={flowStyles.card}
+              id="delivery-address-section"
+              ref={addressSectionRef}
+            >
               <h2>Адрес доставки</h2>
               <div className={flowStyles.fieldGrid}>
                 <label
@@ -260,11 +296,12 @@ export default function ClientCartPage() {
                 >
                   <span>Улица</span>
                   <select
-                    required
+                    ref={streetFieldRef}
                     value={state.cart.address.street}
-                    onChange={(event) =>
-                      updateAddress({ street: event.target.value })
-                    }
+                    onChange={(event) => {
+                      updateAddress({ street: event.target.value });
+                      setAddressError("");
+                    }}
                   >
                     <option value="">Выберите улицу</option>
                     {state.zones.flatMap((zone) =>
@@ -279,11 +316,12 @@ export default function ClientCartPage() {
                 <label className={flowStyles.field}>
                   <span>Дом</span>
                   <input
-                    required
+                    ref={houseFieldRef}
                     value={state.cart.address.house}
-                    onChange={(event) =>
-                      updateAddress({ house: event.target.value })
-                    }
+                    onChange={(event) => {
+                      updateAddress({ house: event.target.value });
+                      setAddressError("");
+                    }}
                   />
                 </label>
                 <label className={flowStyles.field}>
@@ -331,6 +369,11 @@ export default function ClientCartPage() {
                   Выберите известную улицу и укажите номер дома.
                 </div>
               ) : null}
+              {addressError ? (
+                <div className={flowStyles.warningNotice} role="alert">
+                  {addressError}
+                </div>
+              ) : null}
             </section>
           ) : (
             <section className={flowStyles.card}>
@@ -355,6 +398,10 @@ export default function ClientCartPage() {
                   </p>
                 ) : null}
               </>
+            ) : isRestaurantDelivery ? (
+              <p className={flowStyles.compactPayment}>
+                Оплата наличными курьеру ресторана
+              </p>
             ) : (
               <p className={flowStyles.compactPayment}>Оплата онлайн</p>
             )}
@@ -444,7 +491,13 @@ export default function ClientCartPage() {
             <div
               className={`${flowStyles.summaryRow} ${flowStyles.summaryTotal}`}
             >
-              <dt>{isPickup ? "К оплате в ресторане" : "К оплате"}</dt>
+              <dt>
+                {isPickup
+                  ? "Оплата в ресторане"
+                  : isRestaurantDelivery
+                    ? "Оплата курьеру ресторана"
+                    : "К оплате"}
+              </dt>
               <dd>
                 {pricing.customerTotalCents === null
                   ? "—"
@@ -462,11 +515,19 @@ export default function ClientCartPage() {
           {isRestaurantDelivery &&
           pricing.restaurantDeliveryStatus === "BELOW_MINIMUM" &&
           pricing.restaurantDeliveryMissingCents !== null ? (
-            <p className={flowStyles.summaryHint} role="status">
-              До минимальной суммы заказа не хватает{" "}
-              {formatMoney(pricing.restaurantDeliveryMissingCents)}. Добавьте
-              блюда, чтобы оформить доставку, или воспользуйтесь самовывозом.
-            </p>
+            <>
+              <p className={flowStyles.summaryHint} role="status">
+                До минимальной суммы заказа не хватает{" "}
+                {formatMoney(pricing.restaurantDeliveryMissingCents)}. Добавьте
+                блюда, чтобы оформить доставку, или воспользуйтесь самовывозом.
+              </p>
+              <Link
+                className={flowStyles.backToMenuLink}
+                href={`/client/restaurants/${restaurant.id}`}
+              >
+                ← Вернуться в меню ресторана
+              </Link>
+            </>
           ) : null}
           {isRestaurantDelivery &&
           pricing.restaurantDeliveryStatus === "OK" &&

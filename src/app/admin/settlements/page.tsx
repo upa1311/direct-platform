@@ -6,6 +6,7 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import {
   formatMoney,
   getPickupStats,
+  getRestaurantDeliveryCommissionDebtCents,
   getRestaurantPickupDebtCents,
 } from "@/prototype/selectors";
 
@@ -14,6 +15,11 @@ const SETTLEMENT_STATUS_LABELS: Record<string, string> = {
   NETTED: "Взаимозачёт",
   PAID: "Оплачено",
   WAIVED: "Списано",
+};
+
+const SETTLEMENT_TYPE_LABELS: Record<string, string> = {
+  PICKUP_COMMISSION: "Комиссия самовывоза",
+  RESTAURANT_DELIVERY_COMMISSION: "Комиссия доставки ресторана",
 };
 
 export default function AdminSettlementsPage() {
@@ -34,17 +40,28 @@ export default function AdminSettlementsPage() {
         <h2>Задолженность и статистика по ресторанам</h2>
         <div className={flowStyles.orderList}>
           {restaurants.map((restaurant) => {
-            const debt = getRestaurantPickupDebtCents(state, restaurant.id);
+            const pickupDebt = getRestaurantPickupDebtCents(
+              state,
+              restaurant.id,
+            );
+            const deliveryDebt = getRestaurantDeliveryCommissionDebtCents(
+              state,
+              restaurant.id,
+            );
             const stats = getPickupStats(state, restaurant.id);
             return (
               <div className={flowStyles.cartLine} key={restaurant.id}>
                 <div className={flowStyles.cartLineTop}>
                   <strong>{restaurant.name}</strong>
                   <span className={flowStyles.price}>
-                    Долг перед Direct: {formatMoney(debt)}
+                    Долг перед Direct: {formatMoney(pickupDebt + deliveryDebt)}
                   </span>
                 </div>
                 <div className={flowStyles.inlineMeta}>
+                  <span>Комиссия самовывоза: {formatMoney(pickupDebt)}</span>
+                  <span>
+                    Комиссия доставки ресторана: {formatMoney(deliveryDebt)}
+                  </span>
                   <span>Выдано самовывозом: {stats.issued}</span>
                   <span>Невыкуплено: {stats.noShow}</span>
                   <span>Процент неявок: {stats.noShowPercent}%</span>
@@ -75,7 +92,8 @@ export default function AdminSettlementsPage() {
             {[...state.settlements].reverse().map((entry) => (
               <div className={flowStyles.definitionRow} key={entry.id}>
                 <dt>
-                  {entry.orderId} · {entry.restaurantId}
+                  {entry.orderId} · {entry.restaurantId} ·{" "}
+                  {SETTLEMENT_TYPE_LABELS[entry.type] ?? entry.type}
                 </dt>
                 <dd>
                   {formatMoney(entry.amountCents)} ·{" "}

@@ -39,7 +39,6 @@ import {
   upsertPromotion,
   type AddCartItemResult,
   type CompletePickupResult,
-  type CreateOrderOptions,
   type CreateOrderResult,
   type CreateRestaurantResult,
   type RestaurantFormInput,
@@ -93,7 +92,7 @@ interface PrototypeContextValue {
   ) => void;
   setPaymentMethod: (paymentMethod: PaymentMethod) => void;
   setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => void;
-  createOrder: (options: CreateOrderOptions) => CreateOrderResult;
+  createOrder: () => CreateOrderResult;
   acceptOrder: (orderId: string, preparationMinutes: number) => void;
   rejectOrder: (orderId: string, reason: string) => void;
   simulateOnlinePayment: (orderId: string) => void;
@@ -285,16 +284,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
-  const createOrder = useCallback(
-    (options: CreateOrderOptions) => {
-      const action = createOrderFromCart(stateRef.current, options);
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
-  );
+  const createOrder = useCallback(() => {
+    const action = createOrderFromCart(stateRef.current);
+    if (action.state !== stateRef.current) {
+      replaceState(action.state);
+    }
+    return action.result;
+  }, [replaceState]);
 
   const acceptOrder = useCallback(
     (orderId: string, preparationMinutes: number) => {

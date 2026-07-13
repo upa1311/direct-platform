@@ -241,7 +241,9 @@ function normalizeOrder(value: unknown): Order {
       ? "ONLINE"
       : raw.paymentMethod === "PAY_AT_RESTAURANT"
         ? "PAY_AT_RESTAURANT"
-        : "ONLINE",
+        : raw.paymentMethod === "CASH_TO_RESTAURANT_COURIER"
+          ? "CASH_TO_RESTAURANT_COURIER"
+          : "ONLINE",
     paymentStatus: wasCashOrder
       ? safeStatus === "AWAITING_PAYMENT"
         ? "AWAITING_PAYMENT"
@@ -309,6 +311,21 @@ function normalizeCart(value: unknown, fallback: Cart): Cart {
   };
 }
 
+/**
+ * Приведение legacy delivery `paymentMethods` к современной ONLINE-only модели.
+ * Старая schema v2 допускала `QR`/`CASH`; сейчас доставка только `ONLINE`
+ * (в прототипе CASH disabled). Любой исходный набор — содержащий `ONLINE`,
+ * старые `QR`/`CASH`, пустой, отсутствующий или с неизвестными значениями —
+ * нормализуется в `["ONLINE"]`. Иначе после миграции v2 ресторан теряет
+ * `ONLINE` и выпадает из современного flow (см. selectors.ts и client/cart:
+ * `paymentMethods.includes("ONLINE")`). `CASH` сознательно НЕ переносится как
+ * способ оплаты доставки. Способы оплаты на точке (`pickupPaymentMethods`)
+ * нормализуются отдельно и здесь не затрагиваются.
+ */
+function normalizeDeliveryPaymentMethods(): PrototypeState["restaurants"][number]["paymentMethods"] {
+  return ["ONLINE"];
+}
+
 function normalizeRestaurantV5(
   value: unknown,
 ): PrototypeState["restaurants"][number] {
@@ -322,6 +339,7 @@ function normalizeRestaurantV5(
     : (["CASH", "CARD"] as PrototypeState["restaurants"][number]["pickupPaymentMethods"]);
   return {
     ...(raw as unknown as PrototypeState["restaurants"][number]),
+    paymentMethods: normalizeDeliveryPaymentMethods(),
     deliveryProvider: provider,
     pickupEnabled:
       typeof raw.pickupEnabled === "boolean" ? raw.pickupEnabled : true,
