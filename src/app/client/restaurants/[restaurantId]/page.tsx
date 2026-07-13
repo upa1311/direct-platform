@@ -9,17 +9,15 @@ import { TEST_RESTAURANT_ID } from "@/prototype/default-state";
 import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
-  deliveryModeLabels,
   formatMoney,
+  getDeliveryProviderLabel,
   getRestaurant,
   getRestaurantMenu,
-  getDeliveryFeeCents,
-  getValidatedAddressZoneId,
 } from "@/prototype/selectors";
 
 export default function ClientRestaurantPage() {
   const params = useParams<{ restaurantId: string }>();
-  const { state, addItem } = usePrototype();
+  const { state, addItem, setItemQuantity } = usePrototype();
   const { notifyItemAdded } = useClientCartUi();
   const [feedback, setFeedback] = useState("");
   const restaurant = getRestaurant(state, params.restaurantId);
@@ -33,13 +31,12 @@ export default function ClientRestaurantPage() {
   }
 
   const menuItems = getRestaurantMenu(state, restaurant.id);
-  const customerZoneId = getValidatedAddressZoneId(state.cart.address, state);
-  const deliveryFee = getDeliveryFeeCents(state, restaurant);
   const canOrder =
     restaurant.id === TEST_RESTAURANT_ID &&
     restaurant.isAcceptingOrders &&
     restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
     restaurant.paymentMethods.includes("ONLINE");
+  const deliveryProviderLabel = getDeliveryProviderLabel(restaurant);
 
   const getAddFeedback = (result: ReturnType<typeof addItem>) => {
     if (result === "ADDED") {
@@ -87,18 +84,11 @@ export default function ClientRestaurantPage() {
           <span>{restaurant.address}</span>
           <span>Обычно {restaurant.defaultPreparationMinutes} минут</span>
         </div>
-        <ul className={flowStyles.modeList} aria-label="Способы получения">
-          {restaurant.deliveryModes.map((mode) => (
-            <li key={mode}>{deliveryModeLabels[mode]}</li>
-          ))}
-        </ul>
-        <div className={flowStyles.deliveryQuote}>
-          {customerZoneId && deliveryFee !== null ? (
-            <><strong>Доставка по вашему адресу: {formatMoney(deliveryFee)}</strong><span>{state.cart.address.street}, дом {state.cart.address.house}</span></>
-          ) : (
-            <><strong>Укажите адрес в каталоге</strong><Link href="/client/catalog">Рассчитать доставку</Link></>
-          )}
-        </div>
+        {canOrder && deliveryProviderLabel ? (
+          <p className={flowStyles.deliveryProvider}>
+            {deliveryProviderLabel}
+          </p>
+        ) : null}
       </div>
 
       {!canOrder ? (
@@ -116,13 +106,22 @@ export default function ClientRestaurantPage() {
       </p>
 
       <div className={flowStyles.menuList}>
-        {menuItems.map((menuItem) => (
-          <article
-            className={`${flowStyles.menuItem} ${
-              menuItem.available ? "" : flowStyles.menuItemUnavailable
-            }`}
-            key={menuItem.id}
-          >
+        {menuItems.map((menuItem) => {
+          const cartItem =
+            state.cart.restaurantId === restaurant.id
+              ? state.cart.items.find(
+                  (item) => item.menuItemId === menuItem.id,
+                )
+              : undefined;
+          const quantity = cartItem?.quantity ?? 0;
+
+          return (
+            <article
+              className={`${flowStyles.menuItem} ${
+                menuItem.available ? "" : flowStyles.menuItemUnavailable
+              }`}
+              key={menuItem.id}
+            >
             <div>
               <h2>{menuItem.name}</h2>
               <p>{menuItem.description}</p>
@@ -135,17 +134,43 @@ export default function ClientRestaurantPage() {
               <span className={flowStyles.price}>
                 {formatMoney(menuItem.priceCents, menuItem.currencyCode)}
               </span>
-              <button
-                className={flowStyles.primaryButton}
-                type="button"
-                disabled={!menuItem.available || !canOrder}
-                onClick={(event) => handleAdd(menuItem.id, event)}
-              >
-                Добавить
-              </button>
+              {quantity > 0 && menuItem.available && canOrder ? (
+                <div
+                  className={flowStyles.menuQuantity}
+                  aria-label={`Количество: ${menuItem.name}`}
+                >
+                  <button
+                    type="button"
+                    aria-label={`Уменьшить количество: ${menuItem.name}`}
+                    onClick={() =>
+                      setItemQuantity(menuItem.id, quantity - 1)
+                    }
+                  >
+                    −
+                  </button>
+                  <span aria-live="polite">{quantity}</span>
+                  <button
+                    type="button"
+                    aria-label={`Увеличить количество: ${menuItem.name}`}
+                    onClick={(event) => handleAdd(menuItem.id, event)}
+                  >
+                    +
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className={flowStyles.primaryButton}
+                  type="button"
+                  disabled={!menuItem.available || !canOrder}
+                  onClick={(event) => handleAdd(menuItem.id, event)}
+                >
+                  Добавить
+                </button>
+              )}
             </div>
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </div>
     </>
   );

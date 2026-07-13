@@ -11,6 +11,13 @@ import type {
   Restaurant,
   ZoneId,
 } from "./models";
+import { getDefaultRecommendationRank } from "./default-state";
+
+export type CatalogSort =
+  | "RECOMMENDED"
+  | "DELIVERY"
+  | "PREPARATION"
+  | "OPEN";
 
 export interface CartItemView {
   cartItem: CartItem;
@@ -72,6 +79,70 @@ export function getPublishedRestaurants(state: PrototypeState): Restaurant[] {
   return state.restaurants.filter(
     (restaurant) => restaurant.status === "PUBLISHED",
   );
+}
+
+function getRestaurantRank(restaurant: Restaurant): number {
+  return Number.isFinite(restaurant.recommendationRank)
+    ? Number(restaurant.recommendationRank)
+    : getDefaultRecommendationRank(restaurant.id);
+}
+
+export function sortPublishedRestaurants(
+  state: PrototypeState,
+  sort: CatalogSort,
+): Restaurant[] {
+  const restaurants = getPublishedRestaurants(state);
+  const stableOrder = new Map(
+    restaurants.map((restaurant, index) => [restaurant.id, index]),
+  );
+  const compareFallback = (left: Restaurant, right: Restaurant) =>
+    getRestaurantRank(left) - getRestaurantRank(right) ||
+    (stableOrder.get(left.id) ?? 0) - (stableOrder.get(right.id) ?? 0);
+
+  return [...restaurants].sort((left, right) => {
+    if (sort === "DELIVERY") {
+      const leftFee = getDeliveryFeeCents(state, left);
+      const rightFee = getDeliveryFeeCents(state, right);
+      if (leftFee === null && rightFee !== null) return 1;
+      if (leftFee !== null && rightFee === null) return -1;
+      if (leftFee !== null && rightFee !== null && leftFee !== rightFee) {
+        return leftFee - rightFee;
+      }
+    }
+
+    if (
+      sort === "PREPARATION" &&
+      left.defaultPreparationMinutes !== right.defaultPreparationMinutes
+    ) {
+      return left.defaultPreparationMinutes - right.defaultPreparationMinutes;
+    }
+
+    if (sort === "OPEN" && left.isAcceptingOrders !== right.isAcceptingOrders) {
+      return left.isAcceptingOrders ? -1 : 1;
+    }
+
+    return compareFallback(left, right);
+  });
+}
+
+export function getDeliveryProviderLabel(
+  restaurant: Restaurant,
+): string | null {
+  if (restaurant.deliveryModes.includes("PLATFORM_DRIVER")) {
+    return "Доставит водитель Direct";
+  }
+  if (restaurant.deliveryModes.includes("RESTAURANT_DELIVERY")) {
+    return "Доставит курьер ресторана";
+  }
+  return null;
+}
+
+export function isCustomerNameValid(name: string): boolean {
+  return name.trim().length > 0;
+}
+
+export function isCustomerPhoneValid(phone: string): boolean {
+  return phone.replace(/\D/g, "").length >= 7;
 }
 
 export function getRestaurantMenu(

@@ -14,6 +14,8 @@ import {
   getRestaurant,
   getSmallOrderMissingAmountCents,
   isAddressReady,
+  isCustomerNameValid,
+  isCustomerPhoneValid,
 } from "@/prototype/selectors";
 
 export default function ClientCartPage() {
@@ -23,6 +25,7 @@ export default function ClientCartPage() {
     setItemQuantity,
     setItemComment,
     updateAddress,
+    updateCustomer,
     setPaymentMethod,
     createOrder,
   } = usePrototype();
@@ -35,6 +38,18 @@ export default function ClientCartPage() {
     state.cart.address.street.trim() || state.cart.address.house.trim(),
   );
   const addressIsReady = isAddressReady(state.cart.address, state);
+  const customerNameIsValid = isCustomerNameValid(state.customer.name);
+  const customerPhoneIsValid = isCustomerPhoneValid(state.customer.phone);
+  const canSubmitOrder =
+    customerNameIsValid &&
+    customerPhoneIsValid &&
+    addressIsReady &&
+    itemViews.length > 0 &&
+    state.cart.paymentMethod === "ONLINE" &&
+    restaurant?.isAcceptingOrders === true &&
+    restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
+    restaurant.paymentMethods.includes("ONLINE") &&
+    itemViews.every(({ menuItem }) => menuItem.available);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -128,6 +143,51 @@ export default function ClientCartPage() {
           </section>
 
           <section className={flowStyles.card}>
+            <h2>Контактные данные</h2>
+            <div className={flowStyles.fieldGrid}>
+              <label className={flowStyles.field}>
+                <span>Имя</span>
+                <input
+                  required
+                  value={state.customer.name}
+                  aria-invalid={!customerNameIsValid}
+                  onChange={(event) =>
+                    updateCustomer({ name: event.target.value })
+                  }
+                  autoComplete="name"
+                />
+                {!customerNameIsValid ? (
+                  <small className={flowStyles.fieldError}>
+                    Укажите имя получателя.
+                  </small>
+                ) : null}
+              </label>
+              <label className={flowStyles.field}>
+                <span>Телефон</span>
+                <input
+                  required
+                  type="tel"
+                  value={state.customer.phone}
+                  aria-invalid={!customerPhoneIsValid}
+                  onChange={(event) =>
+                    updateCustomer({ phone: event.target.value })
+                  }
+                  autoComplete="tel"
+                  placeholder="Введите номер телефона"
+                />
+                {!customerPhoneIsValid ? (
+                  <small className={flowStyles.fieldError}>
+                    В телефоне должно быть не менее 7 цифр.
+                  </small>
+                ) : null}
+              </label>
+            </div>
+            <p className={flowStyles.prototypeNote}>
+              Подтверждение телефона будет подключено позднее.
+            </p>
+          </section>
+
+          <section className={flowStyles.card}>
             <h2>Адрес доставки</h2>
             <div className={flowStyles.fieldGrid}>
               <label className={`${flowStyles.field} ${flowStyles.fieldFull}`}>
@@ -193,14 +253,14 @@ export default function ClientCartPage() {
                 />
               </label>
             </div>
-            {state.cart.address.zoneId ? (
+            {addressIsReady ? (
               <div className={flowStyles.zoneNotice}>
-                Зона определена автоматически: {state.cart.address.zoneId.replace("zone-", "зона ")}.
+                Адрес доставки принят.
               </div>
             ) : null}
             {hasAddressInput && !addressIsReady ? (
               <div className={flowStyles.warningNotice} role="alert">
-                Выберите известную улицу и укажите номер дома. Зона адреса должна определиться автоматически.
+                Выберите известную улицу и укажите номер дома.
               </div>
             ) : null}
           </section>
@@ -286,7 +346,7 @@ export default function ClientCartPage() {
             <button
               className={flowStyles.primaryButton}
               type="submit"
-              disabled={!addressIsReady}
+              disabled={!canSubmitOrder}
             >
               Отправить заказ
             </button>

@@ -6,7 +6,10 @@ import {
   type PrototypeState,
   type Restaurant,
 } from "./models";
-import { createDefaultTariffs } from "./default-state";
+import {
+  createDefaultTariffs,
+  getDefaultRecommendationRank,
+} from "./default-state";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v3";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v3";
@@ -166,6 +169,11 @@ export function normalizePrototypeState(
     tariffs,
     restaurants: state.restaurants.map((restaurant) => ({
       ...restaurant,
+      recommendationRank:
+        Number.isFinite(restaurant.recommendationRank) &&
+        Number(restaurant.recommendationRank) >= 0
+          ? Number(restaurant.recommendationRank)
+          : getDefaultRecommendationRank(restaurant.id),
       status:
         restaurant.id === "restaurant-1" ||
         restaurant.id === "restaurant-2" ||

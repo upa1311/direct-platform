@@ -52,6 +52,7 @@ export interface Restaurant {
   deliveryModes: DeliveryMode[];
   paymentMethods: PaymentMethod[];
   defaultPreparationMinutes: number;
+  recommendationRank?: number;
 }
 
 export interface MenuItem {

@@ -239,6 +239,7 @@
 }
 
 .quietLink,
+.demoRoleLink,
 .sidebarExit {
   color: #626a65;
   font-size: 13px;
@@ -247,8 +248,16 @@
 }
 
 .quietLink:hover,
+.demoRoleLink:hover,
 .sidebarExit:hover {
   color: #202522;
+}
+
+.demoRoleLink {
+  color: #7b827d;
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
 }
 
 .headerNav {
@@ -594,6 +603,13 @@
   .brandCopy span,
   .quietLink {
     display: none;
+  }
+
+  .demoRoleLink {
+    max-width: 92px;
+    font-size: 10px;
+    line-height: 1.25;
+    text-align: right;
   }
 
   .headerActions {

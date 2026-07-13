@@ -60,6 +60,7 @@ const defaultRestaurants: Restaurant[] = [
     deliveryModes: ["PLATFORM_DRIVER", "RESTAURANT_DELIVERY", "PICKUP"],
     paymentMethods: ["ONLINE", "CASH"],
     defaultPreparationMinutes: 25,
+    recommendationRank: 1,
   },
   {
     id: "restaurant-2",
@@ -72,6 +73,7 @@ const defaultRestaurants: Restaurant[] = [
     deliveryModes: ["PLATFORM_DRIVER", "PICKUP"],
     paymentMethods: ["ONLINE", "CASH"],
     defaultPreparationMinutes: 20,
+    recommendationRank: 3,
   },
   {
     id: "restaurant-3",
@@ -84,6 +86,7 @@ const defaultRestaurants: Restaurant[] = [
     deliveryModes: ["PLATFORM_DRIVER", "RESTAURANT_DELIVERY"],
     paymentMethods: ["ONLINE"],
     defaultPreparationMinutes: 30,
+    recommendationRank: 2,
   },
   {
     id: "restaurant-4",
@@ -96,6 +99,7 @@ const defaultRestaurants: Restaurant[] = [
     deliveryModes: ["PLATFORM_DRIVER"],
     paymentMethods: ["ONLINE"],
     defaultPreparationMinutes: 25,
+    recommendationRank: 4,
   },
   {
     id: "restaurant-5",
@@ -108,8 +112,16 @@ const defaultRestaurants: Restaurant[] = [
     deliveryModes: ["PLATFORM_DRIVER", "PICKUP"],
     paymentMethods: ["ONLINE"],
     defaultPreparationMinutes: 35,
+    recommendationRank: 5,
   },
 ];
+
+export function getDefaultRecommendationRank(restaurantId: string): number {
+  return (
+    defaultRestaurants.find((restaurant) => restaurant.id === restaurantId)
+      ?.recommendationRank ?? Number.MAX_SAFE_INTEGER
+  );
+}
 
 const defaultMenuItems: MenuItem[] = [
   {

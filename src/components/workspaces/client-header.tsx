@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ShoppingCart } from "lucide-react";
 
 import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
@@ -22,16 +23,21 @@ export function ClientHeader() {
       brandHref="/client/catalog"
       showWorkspaceLink={false}
       rightSlot={
-        <button
-          ref={cartButtonRef}
-          className={`${styles.cartHeaderButton} ${badgePulse ? styles.cartHeaderButtonPulse : ""}`}
-          type="button"
-          onClick={openCart}
-          aria-label={`Открыть корзину, товаров: ${cartQuantity}`}
-        >
-          <ShoppingCart aria-hidden="true" />
-          {cartQuantity > 0 ? <span>{cartQuantity}</span> : null}
-        </button>
+        <>
+          <Link className={styles.demoRoleLink} href="/workspaces">
+            Демо · Сменить роль
+          </Link>
+          <button
+            ref={cartButtonRef}
+            className={`${styles.cartHeaderButton} ${badgePulse ? styles.cartHeaderButtonPulse : ""}`}
+            type="button"
+            onClick={openCart}
+            aria-label={`Открыть корзину, товаров: ${cartQuantity}`}
+          >
+            <ShoppingCart aria-hidden="true" />
+            {cartQuantity > 0 ? <span>{cartQuantity}</span> : null}
+          </button>
+        </>
       }
     />
   );

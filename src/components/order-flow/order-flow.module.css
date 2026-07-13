@@ -52,6 +52,20 @@
   font-weight: 750;
 }
 
+.preparationTime {
+  font-size: 13px;
+}
+
+.deliveryProvider {
+  width: fit-content;
+  margin: 0;
+  padding-left: 14px;
+  border-left: 3px solid #b85f2c;
+  color: #4f5852;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .deliveryQuote {
   display: grid;
   gap: 5px;
@@ -194,6 +208,42 @@
   display: grid;
   justify-items: end;
   gap: 10px;
+}
+
+.menuQuantity {
+  min-height: 42px;
+  display: inline-grid;
+  grid-template-columns: 40px 42px 40px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #d5dad6;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.menuQuantity button {
+  height: 40px;
+  border: 0;
+  background: transparent;
+  color: #303632;
+  cursor: pointer;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.menuQuantity button:hover {
+  background: #f0f2ef;
+}
+
+.menuQuantity button:focus-visible {
+  position: relative;
+  outline: 3px solid rgb(198 102 45 / 25%);
+  outline-offset: -3px;
+}
+
+.menuQuantity span {
+  text-align: center;
+  font-weight: 750;
 }
 
 .price {
@@ -371,6 +421,17 @@
   color: #4f5852;
   font-size: 13px;
   font-weight: 700;
+}
+
+.fieldError {
+  color: #9a3e34;
+  font-size: 12px;
+}
+
+.prototypeNote {
+  margin-top: 14px;
+  color: #68716b;
+  font-size: 13px;
 }
 
 .field input,

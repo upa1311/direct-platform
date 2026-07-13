@@ -17,6 +17,8 @@ import {
   getCartItemViews,
   getRestaurant,
   isAddressReady,
+  isCustomerNameValid,
+  isCustomerPhoneValid,
 } from "./selectors";
 import { finalizeMutation } from "./prototype-store";
 
@@ -171,6 +173,23 @@ export function updateCartAddress(
   });
 }
 
+export function updateCustomerProfile(
+  state: PrototypeState,
+  patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>,
+): PrototypeState {
+  const phoneChanged =
+    patch.phone !== undefined && patch.phone !== state.customer.phone;
+
+  return finalizeMutation(state, {
+    ...state,
+    customer: {
+      ...state.customer,
+      ...patch,
+      phoneVerified: phoneChanged ? false : state.customer.phoneVerified,
+    },
+  });
+}
+
 export function setCartPaymentMethod(
   state: PrototypeState,
   paymentMethod: PaymentMethod,
@@ -222,6 +241,20 @@ export function createOrderFromCart(
   state: PrototypeState,
 ): ActionResult<CreateOrderResult> {
   const restaurant = getRestaurant(state, state.cart.restaurantId);
+
+  if (!isCustomerNameValid(state.customer.name)) {
+    return {
+      state,
+      result: { orderId: null, error: "Укажите имя получателя." },
+    };
+  }
+
+  if (!isCustomerPhoneValid(state.customer.phone)) {
+    return {
+      state,
+      result: { orderId: null, error: "Укажите телефон минимум с 7 цифрами." },
+    };
+  }
 
   if (state.cart.items.length === 0) {
     return {
@@ -355,8 +388,8 @@ export function createOrderFromCart(
     updatedAt: now,
     customer: {
       id: state.customer.id,
-      name: state.customer.name,
-      phone: state.customer.phone,
+      name: state.customer.name.trim(),
+      phone: state.customer.phone.trim(),
     },
     restaurant: {
       id: restaurant.id,

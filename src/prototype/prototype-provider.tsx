@@ -25,6 +25,7 @@ import {
   setCartPaymentMethod,
   simulateSuccessfulOnlinePayment,
   updateCartAddress,
+  updateCustomerProfile,
   type AddCartItemResult,
   type CreateOrderResult,
 } from "./actions";
@@ -57,6 +58,9 @@ interface PrototypeContextValue {
   setItemComment: (menuItemId: string, comment: string) => void;
   updateAddress: (
     patch: Partial<Omit<DeliveryAddress, "zoneId">>,
+  ) => void;
+  updateCustomer: (
+    patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>,
   ) => void;
   setPaymentMethod: (paymentMethod: PaymentMethod) => void;
   createOrder: () => CreateOrderResult;
@@ -201,6 +205,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
+  const updateCustomer = useCallback(
+    (patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>) => {
+      replaceState(updateCustomerProfile(stateRef.current, patch));
+    },
+    [replaceState],
+  );
+
   const setPaymentMethod = useCallback(
     (paymentMethod: PaymentMethod) => {
       replaceState(setCartPaymentMethod(stateRef.current, paymentMethod));
@@ -275,6 +286,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       setItemQuantity,
       setItemComment,
       updateAddress,
+      updateCustomer,
       setPaymentMethod,
       createOrder,
       acceptOrder,
@@ -292,6 +304,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       setItemQuantity,
       setItemComment,
       updateAddress,
+      updateCustomer,
       setPaymentMethod,
       createOrder,
       acceptOrder,
