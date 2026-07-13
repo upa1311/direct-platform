@@ -44,12 +44,28 @@ export default function ClientRestaurantPage() {
   const canOrder =
     restaurant.id === TEST_RESTAURANT_ID &&
     restaurant.isAcceptingOrders &&
-    restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
+    (restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
+      restaurant.deliveryModes.includes("PICKUP")) &&
     restaurant.paymentMethods.includes("ONLINE");
   const cartQuantity =
     state.cart.restaurantId === restaurant.id
       ? state.cart.items.reduce((total, item) => total + item.quantity, 0)
       : 0;
+  const selectedModeIsSupported = state.cart.deliveryMode
+    ? restaurant.deliveryModes.includes(state.cart.deliveryMode)
+    : false;
+  const checkoutHref =
+    state.cart.deliveryMode === null
+      ? "/client/catalog#fulfillment-method"
+      : state.cart.deliveryMode === "PLATFORM_DRIVER" && !isAddressConfirmed
+        ? "/client/catalog#delivery-address"
+        : "/client/cart#checkout-cart";
+  const checkoutLabel =
+    state.cart.deliveryMode === null
+      ? "Выбрать способ получения"
+      : state.cart.deliveryMode === "PLATFORM_DRIVER" && !isAddressConfirmed
+        ? "Указать адрес"
+        : "Перейти к оформлению";
 
   const getAddFeedback = (result: ReturnType<typeof addItem>) => {
     if (result === "ADDED") {
@@ -100,6 +116,16 @@ export default function ClientRestaurantPage() {
           <span>{restaurant.address}</span>
           <span>Обычно {restaurant.defaultPreparationMinutes} минут</span>
         </div>
+        {selectedModeIsSupported &&
+        state.cart.deliveryMode === "PLATFORM_DRIVER" ? (
+          <p className={flowStyles.deliveryProvider}>
+            Доставит водитель Direct
+          </p>
+        ) : selectedModeIsSupported && state.cart.deliveryMode === "PICKUP" ? (
+          <p className={flowStyles.deliveryProvider}>
+            Самовывоз из ресторана · {restaurant.address}
+          </p>
+        ) : null}
       </div>
 
       {!canOrder ? (
@@ -185,17 +211,13 @@ export default function ClientRestaurantPage() {
       {cartQuantity > 0 ? (
         <Link
           className={flowStyles.menuCheckoutCta}
-          href={
-            isAddressConfirmed
-              ? "/client/cart#checkout-cart"
-              : "/client/catalog#delivery-address"
-          }
+          href={checkoutHref}
         >
           <span>
             {cartQuantity} {getProductLabel(cartQuantity)} ·
           </span>
           <strong>
-            {isAddressConfirmed ? "Перейти к оформлению" : "Указать адрес"}
+            {checkoutLabel}
           </strong>
         </Link>
       ) : null}

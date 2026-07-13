@@ -70,6 +70,21 @@ export function ClientGuidedFlow() {
     state.cart.restaurantId ??
     null;
   const hasCartItems = state.cart.items.length > 0;
+  const deliveryMode = existingOrder?.deliveryMode ?? state.cart.deliveryMode;
+  const firstStepComplete = existingOrder
+    ? true
+    : deliveryMode === "PICKUP" ||
+      (deliveryMode === "PLATFORM_DRIVER" && isAddressConfirmed);
+  const firstStepLabel =
+    deliveryMode === "PICKUP"
+      ? "Самовывоз"
+      : deliveryMode === "PLATFORM_DRIVER"
+        ? "Куда доставить"
+        : "Способ получения";
+  const firstStepHref =
+    deliveryMode === "PLATFORM_DRIVER"
+      ? "/client/catalog#delivery-address"
+      : "/client/catalog#fulfillment-method";
 
   if (
     !isHydrated ||
@@ -84,7 +99,7 @@ export function ClientGuidedFlow() {
 
   const currentStep = existingOrder
     ? 5
-    : !isAddressConfirmed
+    : !firstStepComplete
       ? 1
       : hasCartItems
         ? 4
@@ -94,20 +109,20 @@ export function ClientGuidedFlow() {
 
   const steps: GuidedStep[] = [
     {
-      label: "Куда доставить",
-      href: "/client/catalog#delivery-address",
+      label: firstStepLabel,
+      href: firstStepHref,
       state: currentStep === 1 ? "current" : "completed",
     },
     {
       label: "Выбор ресторана",
       href:
-        existingOrder || isAddressConfirmed
+        existingOrder || firstStepComplete
           ? "/client/catalog#restaurant-list"
           : null,
       state:
         existingOrder
           ? "completed"
-          : !isAddressConfirmed
+          : !firstStepComplete
             ? "locked"
           : currentStep === 2
             ? "current"
@@ -118,13 +133,13 @@ export function ClientGuidedFlow() {
     {
       label: "Выбор блюд",
       href:
-        (existingOrder || isAddressConfirmed) && selectedRestaurantId
+        (existingOrder || firstStepComplete) && selectedRestaurantId
           ? `/client/restaurants/${selectedRestaurantId}#restaurant-menu`
           : null,
       state:
         existingOrder
           ? "completed"
-          : !isAddressConfirmed
+          : !firstStepComplete
             ? "locked"
           : currentStep === 3
             ? "current"
@@ -138,13 +153,13 @@ export function ClientGuidedFlow() {
       label: "Оформление и оплата",
       href: existingOrder
         ? `/client/orders/${existingOrder.id}#order-status`
-        : isAddressConfirmed && hasCartItems
+        : firstStepComplete && hasCartItems
           ? "/client/cart#checkout-cart"
           : null,
       state:
         existingOrder
           ? "completed"
-          : !isAddressConfirmed
+          : !firstStepComplete
             ? "locked"
           : currentStep === 4
             ? "current"
@@ -156,13 +171,13 @@ export function ClientGuidedFlow() {
       label: "Статус заказа",
       href: existingOrder
         ? `/client/orders/${existingOrder.id}#order-status`
-        : isAddressConfirmed && activeOrder
+        : firstStepComplete && activeOrder
           ? `/client/orders/${activeOrder.id}#order-status`
           : null,
       state:
         existingOrder
           ? "current"
-          : isAddressConfirmed && activeOrder
+          : firstStepComplete && activeOrder
             ? "available"
             : "locked",
     },

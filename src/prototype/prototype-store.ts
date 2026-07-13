@@ -1,23 +1,52 @@
 import {
   PROTOTYPE_SCHEMA_VERSION,
   type Cart,
+  type CustomerDeliveryMode,
+  type DeliveryAddress,
+  type FinancialSnapshot,
   type Order,
   type PaymentMethod,
   type PrototypeState,
   type Restaurant,
+  type ZoneId,
 } from "./models";
 import {
   createDefaultTariffs,
   getDefaultRecommendationRank,
 } from "./default-state";
 
-export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v3";
-export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v3";
+export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v4";
+export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v4";
+export const LEGACY_V3_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v3";
 export const LEGACY_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v2";
+
+interface LegacyV3Cart extends Omit<Cart, "deliveryMode"> {
+  deliveryMode: "PLATFORM_DRIVER";
+}
+
+interface LegacyV3FinancialSnapshot
+  extends Omit<FinancialSnapshot, "deliveryMode" | "customerZoneId"> {
+  deliveryMode: "PLATFORM_DRIVER";
+  customerZoneId: ZoneId;
+}
+
+interface LegacyV3Order
+  extends Omit<Order, "address" | "deliveryMode" | "financials"> {
+  address: DeliveryAddress;
+  deliveryMode: "PLATFORM_DRIVER";
+  financials: LegacyV3FinancialSnapshot;
+}
+
+interface LegacyV3PrototypeState
+  extends Omit<PrototypeState, "schemaVersion" | "cart" | "orders"> {
+  schemaVersion: 3;
+  cart: LegacyV3Cart;
+  orders: LegacyV3Order[];
+}
 
 type LegacyPaymentMethod = "QR" | "CASH";
 
-interface LegacyCart extends Omit<Cart, "paymentMethod"> {
+interface LegacyCart extends Omit<LegacyV3Cart, "paymentMethod"> {
   paymentMethod: LegacyPaymentMethod;
 }
 
@@ -25,13 +54,13 @@ interface LegacyRestaurant extends Omit<Restaurant, "paymentMethods"> {
   paymentMethods: LegacyPaymentMethod[];
 }
 
-interface LegacyOrder extends Omit<Order, "paymentMethod"> {
+interface LegacyOrder extends Omit<LegacyV3Order, "paymentMethod"> {
   paymentMethod: LegacyPaymentMethod;
 }
 
 interface LegacyPrototypeState
   extends Omit<
-    PrototypeState,
+    LegacyV3PrototypeState,
     "schemaVersion" | "cart" | "restaurants" | "orders"
   > {
   schemaVersion: 2;
@@ -110,6 +139,15 @@ function isLegacyPrototypeState(
   );
 }
 
+function isLegacyV3PrototypeState(
+  value: unknown,
+): value is LegacyV3PrototypeState {
+  return (
+    hasPrototypeStateShape(value) &&
+    (value as { schemaVersion?: unknown }).schemaVersion === 3
+  );
+}
+
 function normalizePaymentMethod(value: unknown): PaymentMethod {
   if (value === "CASH" || value === "QR") {
     return "ONLINE";
@@ -124,6 +162,16 @@ function normalizePaymentMethods(values: unknown): PaymentMethod[] {
 
   const methods = values.map(normalizePaymentMethod);
   return [...new Set(methods)];
+}
+
+function normalizeCartDeliveryMode(
+  value: unknown,
+): CustomerDeliveryMode | null {
+  return value === "PLATFORM_DRIVER" || value === "PICKUP" ? value : null;
+}
+
+function normalizeOrderDeliveryMode(value: unknown): CustomerDeliveryMode {
+  return value === "PICKUP" ? "PICKUP" : "PLATFORM_DRIVER";
 }
 
 function normalizeHistoryMessage(message: string): string {
@@ -158,6 +206,9 @@ export function normalizePrototypeState(
   const cartPaymentMethod = normalizePaymentMethod(
     state.cart.paymentMethod,
   );
+  const cartDeliveryMode = normalizeCartDeliveryMode(
+    state.cart.deliveryMode,
+  );
 
   return {
     ...state,
@@ -190,9 +241,12 @@ export function normalizePrototypeState(
     })),
     cart: {
       ...state.cart,
+      deliveryMode: cartDeliveryMode,
       paymentMethod: cartPaymentMethod,
     },
     orders: state.orders.map((order) => {
+      const deliveryMode = normalizeOrderDeliveryMode(order.deliveryMode);
+      const isPickup = deliveryMode === "PICKUP";
       const wasCashOrder =
         order.paymentMethod === "CASH" ||
         order.paymentStatus === "CASH_ON_DELIVERY";
@@ -204,6 +258,8 @@ export function normalizePrototypeState(
 
       return {
         ...order,
+        address: isPickup ? null : order.address,
+        deliveryMode,
         paymentMethod: "ONLINE",
         status: safeStatus,
         paymentStatus: wasCashOrder
@@ -213,13 +269,53 @@ export function normalizePrototypeState(
           : order.paymentStatus,
         paidAt: wasCashOrder ? null : order.paidAt,
         expectedReadyAt: wasCashOrder ? null : order.expectedReadyAt,
-        history: order.history.map((event) => ({
-          ...event,
-          message: normalizeHistoryMessage(event.message),
-        })),
+        financials: {
+          ...order.financials,
+          deliveryMode,
+          deliveryFeeCents: isPickup
+            ? 0
+            : order.financials.deliveryFeeCents,
+          driverPayoutCents: isPickup
+            ? 0
+            : order.financials.driverPayoutCents,
+          customerTotalCents: isPickup
+            ? order.financials.foodSubtotalCents +
+              order.financials.smallOrderFeeCents
+            : order.financials.customerTotalCents,
+          customerZoneId: isPickup
+            ? null
+            : order.financials.customerZoneId,
+        },
+        history: order.history.map((event) => ({ ...event })),
       };
     }),
   };
+}
+
+export function migrateV3PrototypeState(
+  legacyState: LegacyV3PrototypeState,
+): PrototypeState {
+  const migratedState = {
+    ...legacyState,
+    schemaVersion: PROTOTYPE_SCHEMA_VERSION,
+    cart: {
+      ...legacyState.cart,
+      deliveryMode: null,
+      paymentMethod: normalizePaymentMethod(legacyState.cart.paymentMethod),
+    },
+    orders: legacyState.orders.map((order) => ({
+      ...order,
+      deliveryMode: "PLATFORM_DRIVER" as const,
+      paymentMethod: normalizePaymentMethod(order.paymentMethod),
+      financials: {
+        ...order.financials,
+        deliveryMode: "PLATFORM_DRIVER" as const,
+      },
+      history: order.history.map((event) => ({ ...event })),
+    })),
+  } as PrototypeState;
+
+  return normalizePrototypeState(migratedState);
 }
 
 export function migrateLegacyPrototypeState(
@@ -241,11 +337,17 @@ export function migrateLegacyPrototypeState(
     })),
     cart: {
       ...legacyState.cart,
+      deliveryMode: null,
       paymentMethod: normalizePaymentMethod(legacyState.cart.paymentMethod),
     },
     orders: legacyState.orders.map((order) => ({
       ...order,
+      deliveryMode: "PLATFORM_DRIVER" as const,
       paymentMethod: normalizePaymentMethod(order.paymentMethod),
+      financials: {
+        ...order.financials,
+        deliveryMode: "PLATFORM_DRIVER" as const,
+      },
       history: order.history.map((event) => ({
         ...event,
         message: normalizeHistoryMessage(event.message),
@@ -282,6 +384,23 @@ export function parseLegacyStoredState(
     const parsed: unknown = JSON.parse(serialized);
     return isLegacyPrototypeState(parsed)
       ? migrateLegacyPrototypeState(parsed)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseV3StoredState(
+  serialized: string | null,
+): PrototypeState | null {
+  if (!serialized) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(serialized);
+    return isLegacyV3PrototypeState(parsed)
+      ? migrateV3PrototypeState(parsed)
       : null;
   } catch {
     return null;

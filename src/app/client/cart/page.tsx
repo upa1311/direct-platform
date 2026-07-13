@@ -26,6 +26,7 @@ export default function ClientCartPage() {
     state,
     setItemQuantity,
     setItemComment,
+    setDeliveryMode,
     updateAddress,
     updateCustomer,
     createOrder,
@@ -41,21 +42,26 @@ export default function ClientCartPage() {
   const addressIsReady = isAddressReady(state.cart.address, state);
   const customerNameIsValid = isCustomerNameValid(state.customer.name);
   const customerPhoneIsValid = isCustomerPhoneValid(state.customer.phone);
+  const isDelivery = state.cart.deliveryMode === "PLATFORM_DRIVER";
+  const isPickup = state.cart.deliveryMode === "PICKUP";
+  const selectedModeIsSupported = state.cart.deliveryMode
+    ? restaurant?.deliveryModes.includes(state.cart.deliveryMode) === true
+    : false;
   const canSubmitOrder =
-    isAddressConfirmed &&
+    state.cart.deliveryMode !== null &&
+    selectedModeIsSupported &&
+    (!isDelivery || (isAddressConfirmed && addressIsReady)) &&
     customerNameIsValid &&
     customerPhoneIsValid &&
-    addressIsReady &&
     itemViews.length > 0 &&
     state.cart.paymentMethod === "ONLINE" &&
     restaurant?.isAcceptingOrders === true &&
-    restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
     restaurant.paymentMethods.includes("ONLINE") &&
     itemViews.every(({ menuItem }) => menuItem.available);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const result = createOrder();
+    const result = createOrder({ isAddressConfirmed });
     if (result.error || !result.orderId) {
       setSubmitError(result.error ?? "Не удалось создать заказ.");
       return;
@@ -83,7 +89,7 @@ export default function ClientCartPage() {
         <p>{restaurant.name}</p>
       </header>
 
-      {isConfirmationHydrated && !isAddressConfirmed ? (
+      {isDelivery && isConfirmationHydrated && !isAddressConfirmed ? (
         <div className={flowStyles.addressConfirmationPrompt} role="status">
           <Link href="/client/catalog#delivery-address">
             Подтвердите адрес доставки
@@ -149,6 +155,46 @@ export default function ClientCartPage() {
             </div>
           </section>
 
+          <section className={flowStyles.card} id="fulfillment-method">
+            <h2>Как получить заказ</h2>
+            <fieldset
+              className={flowStyles.fulfillmentOptions}
+              aria-label="Способ получения"
+            >
+              <label className={flowStyles.fulfillmentOption}>
+                <input
+                  type="radio"
+                  name="checkout-delivery-mode"
+                  checked={isDelivery}
+                  onChange={() => setDeliveryMode("PLATFORM_DRIVER")}
+                />
+                <span>Доставка</span>
+              </label>
+              <label className={flowStyles.fulfillmentOption}>
+                <input
+                  type="radio"
+                  name="checkout-delivery-mode"
+                  checked={isPickup}
+                  onChange={() => setDeliveryMode("PICKUP")}
+                />
+                <span>Самовывоз</span>
+              </label>
+            </fieldset>
+            {isDelivery ? (
+              <p className={flowStyles.fulfillmentSummary}>
+                Доставит водитель Direct
+              </p>
+            ) : isPickup ? (
+              <p className={flowStyles.fulfillmentSummary}>
+                Самовывоз из ресторана
+              </p>
+            ) : (
+              <p className={flowStyles.fulfillmentHint}>
+                Выберите доставку или самовывоз
+              </p>
+            )}
+          </section>
+
           <section className={flowStyles.card}>
             <h2>Контактные данные</h2>
             <div className={flowStyles.fieldGrid}>
@@ -194,9 +240,10 @@ export default function ClientCartPage() {
             </p>
           </section>
 
-          <section className={flowStyles.card}>
-            <h2>Адрес доставки</h2>
-            <div className={flowStyles.fieldGrid}>
+          {isDelivery ? (
+            <section className={flowStyles.card}>
+              <h2>Адрес доставки</h2>
+              <div className={flowStyles.fieldGrid}>
               <label className={`${flowStyles.field} ${flowStyles.fieldFull}`}>
                 <span>Улица</span>
                 <select
@@ -259,13 +306,22 @@ export default function ClientCartPage() {
                   placeholder="Домофон, ориентир или пожелание"
                 />
               </label>
-            </div>
-            {hasAddressInput && !addressIsReady ? (
-              <div className={flowStyles.warningNotice} role="alert">
-                Выберите известную улицу и укажите номер дома.
               </div>
-            ) : null}
-          </section>
+              {hasAddressInput && !addressIsReady ? (
+                <div className={flowStyles.warningNotice} role="alert">
+                  Выберите известную улицу и укажите номер дома.
+                </div>
+              ) : null}
+            </section>
+          ) : isPickup ? (
+            <section className={flowStyles.card}>
+              <h2>Точка самовывоза</h2>
+              <p className={flowStyles.fulfillmentSummary}>
+                <strong>{restaurant.name}</strong>
+                <span>{restaurant.address}</span>
+              </p>
+            </section>
+          ) : null}
 
           <section className={flowStyles.card}>
             <h2>Оплата</h2>
@@ -281,14 +337,23 @@ export default function ClientCartPage() {
               <dd>{formatMoney(pricing.foodSubtotalCents)}</dd>
             </div>
             <div className={flowStyles.summaryRow}>
-              <dt>Доставка</dt>
+              <dt>
+                {isPickup
+                  ? "Самовывоз"
+                  : isDelivery
+                    ? "Доставка"
+                    : "Получение"}
+              </dt>
               <dd>
-                {pricing.deliveryFeeCents === null
-                  ? "Укажите адрес"
+                {state.cart.deliveryMode === null
+                  ? "Выберите способ"
+                  : pricing.deliveryFeeCents === null
+                    ? "Укажите адрес"
                   : formatMoney(pricing.deliveryFeeCents)}
               </dd>
             </div>
-            {pricing.smallOrderFeeCents > 0 ? (
+            {state.cart.deliveryMode !== null &&
+            pricing.smallOrderFeeCents > 0 ? (
               <div className={flowStyles.summaryRow}>
                 <dt>Доплата за небольшой заказ</dt>
                 <dd>{formatMoney(pricing.smallOrderFeeCents)}</dd>
@@ -303,7 +368,8 @@ export default function ClientCartPage() {
               </dd>
             </div>
           </dl>
-          {pricing.smallOrderFeeCents > 0 ? (
+          {state.cart.deliveryMode !== null &&
+          pricing.smallOrderFeeCents > 0 ? (
             <div className={flowStyles.warningNotice}>
               Добавьте товаров ещё на {formatMoney(smallOrderMissingCents)},
               чтобы доплата исчезла.

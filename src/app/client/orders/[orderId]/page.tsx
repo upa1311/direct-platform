@@ -8,6 +8,7 @@ import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
+  deliveryModeLabels,
   formatMoney,
   getOrder,
   orderStatusLabels,
@@ -51,9 +52,36 @@ export default function ClientOrderPage() {
           </div>
           <dl className={flowStyles.summaryList}>
             <div className={flowStyles.summaryRow}>
-              <dt>Адрес</dt>
-              <dd>{order.address.street}, дом {order.address.house}{order.address.apartment ? `, кв. ${order.address.apartment}` : ""}</dd>
+              <dt>Способ получения</dt>
+              <dd>{deliveryModeLabels[order.deliveryMode]}</dd>
             </div>
+            {order.deliveryMode === "PLATFORM_DRIVER" ? (
+              <>
+                <div className={flowStyles.summaryRow}>
+                  <dt>Адрес доставки</dt>
+                  <dd>
+                    {order.address
+                      ? `${order.address.street}, дом ${order.address.house}${order.address.apartment ? `, кв. ${order.address.apartment}` : ""}`
+                      : "Адрес не сохранён"}
+                  </dd>
+                </div>
+                <div className={flowStyles.summaryRow}>
+                  <dt>Исполнитель</dt>
+                  <dd>Доставит водитель Direct</dd>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className={flowStyles.summaryRow}>
+                  <dt>Забрать из</dt>
+                  <dd>{order.restaurant.name}</dd>
+                </div>
+                <div className={flowStyles.summaryRow}>
+                  <dt>Адрес ресторана</dt>
+                  <dd>{order.restaurant.address}</dd>
+                </div>
+              </>
+            )}
             <div className={flowStyles.summaryRow}>
               <dt>Оплата</dt>
               <dd>{paymentMethodLabels[order.paymentMethod]}</dd>
@@ -70,7 +98,7 @@ export default function ClientOrderPage() {
           </div>
           <dl className={flowStyles.summaryList}>
             <div className={flowStyles.summaryRow}><dt>Еда</dt><dd>{formatMoney(order.financials.foodSubtotalCents)}</dd></div>
-            <div className={flowStyles.summaryRow}><dt>Доставка</dt><dd>{formatMoney(order.financials.deliveryFeeCents)}</dd></div>
+            <div className={flowStyles.summaryRow}><dt>{order.deliveryMode === "PICKUP" ? "Самовывоз" : "Доставка"}</dt><dd>{formatMoney(order.financials.deliveryFeeCents)}</dd></div>
             {order.financials.smallOrderFeeCents > 0 ? <div className={flowStyles.summaryRow}><dt>Доплата за небольшой заказ</dt><dd>{formatMoney(order.financials.smallOrderFeeCents)}</dd></div> : null}
             <div className={`${flowStyles.summaryRow} ${flowStyles.summaryTotal}`}><dt>Итого</dt><dd>{formatMoney(order.financials.customerTotalCents)}</dd></div>
           </dl>

@@ -15,6 +15,7 @@ import {
   acceptRestaurantOrder,
   addCartItem,
   createOrderFromCart,
+  markOrderPickedUp,
   markOrderReady,
   rejectRestaurantOrder,
   resetPrototypeState,
@@ -22,15 +23,18 @@ import {
   saveTariffs,
   setCartItemComment,
   setCartItemQuantity,
+  setCartDeliveryMode,
   setCartPaymentMethod,
   simulateSuccessfulOnlinePayment,
   updateCartAddress,
   updateCustomerProfile,
   type AddCartItemResult,
+  type CreateOrderOptions,
   type CreateOrderResult,
 } from "./actions";
 import { createDefaultState } from "./default-state";
 import type {
+  CustomerDeliveryMode,
   DeliveryAddress,
   PaymentMethod,
   PrototypeState,
@@ -40,9 +44,11 @@ import {
   isNewerState,
   isPrototypeState,
   LEGACY_PROTOTYPE_STORAGE_KEY,
+  LEGACY_V3_PROTOTYPE_STORAGE_KEY,
   normalizePrototypeState,
   parseLegacyStoredState,
   parseStoredState,
+  parseV3StoredState,
   PROTOTYPE_CHANNEL_NAME,
   PROTOTYPE_STORAGE_KEY,
 } from "./prototype-store";
@@ -63,11 +69,13 @@ interface PrototypeContextValue {
     patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>,
   ) => void;
   setPaymentMethod: (paymentMethod: PaymentMethod) => void;
-  createOrder: () => CreateOrderResult;
+  setDeliveryMode: (deliveryMode: CustomerDeliveryMode | null) => void;
+  createOrder: (options: CreateOrderOptions) => CreateOrderResult;
   acceptOrder: (orderId: string, preparationMinutes: number) => void;
   rejectOrder: (orderId: string, reason: string) => void;
   simulateOnlinePayment: (orderId: string) => void;
   markReady: (orderId: string) => void;
+  markPickedUp: (orderId: string) => void;
   saveTariffMatrix: (tariffs: TariffMatrix) => void;
   restoreTariffs: () => void;
   resetPrototype: () => void;
@@ -95,11 +103,14 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     sourceIdRef.current = crypto.randomUUID();
 
-    const storedV3State = parseStoredState(
+    const storedV4State = parseStoredState(
       window.localStorage.getItem(PROTOTYPE_STORAGE_KEY),
     );
     const storedState =
-      storedV3State ??
+      storedV4State ??
+      parseV3StoredState(
+        window.localStorage.getItem(LEGACY_V3_PROTOTYPE_STORAGE_KEY),
+      ) ??
       parseLegacyStoredState(
         window.localStorage.getItem(LEGACY_PROTOTYPE_STORAGE_KEY),
       );
@@ -219,8 +230,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
-  const createOrder = useCallback(() => {
-    const action = createOrderFromCart(stateRef.current);
+  const setDeliveryMode = useCallback(
+    (deliveryMode: CustomerDeliveryMode | null) => {
+      replaceState(setCartDeliveryMode(stateRef.current, deliveryMode));
+    },
+    [replaceState],
+  );
+
+  const createOrder = useCallback((options: CreateOrderOptions) => {
+    const action = createOrderFromCart(stateRef.current, options);
     if (action.state !== stateRef.current) {
       replaceState(action.state);
     }
@@ -263,6 +281,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
+  const markPickedUp = useCallback(
+    (orderId: string) => {
+      replaceState(markOrderPickedUp(stateRef.current, orderId));
+    },
+    [replaceState],
+  );
+
   const saveTariffMatrix = useCallback(
     (tariffs: TariffMatrix) => {
       replaceState(saveTariffs(stateRef.current, tariffs));
@@ -288,11 +313,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       updateAddress,
       updateCustomer,
       setPaymentMethod,
+      setDeliveryMode,
       createOrder,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,
       markReady,
+      markPickedUp,
       saveTariffMatrix,
       restoreTariffs,
       resetPrototype,
@@ -306,11 +333,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       updateAddress,
       updateCustomer,
       setPaymentMethod,
+      setDeliveryMode,
       createOrder,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,
       markReady,
+      markPickedUp,
       saveTariffMatrix,
       restoreTariffs,
       resetPrototype,

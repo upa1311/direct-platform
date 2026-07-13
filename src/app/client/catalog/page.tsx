@@ -19,7 +19,7 @@ import {
 } from "@/prototype/selectors";
 
 export default function ClientCatalogPage() {
-  const { state, updateAddress } = usePrototype();
+  const { state, updateAddress, setDeliveryMode } = usePrototype();
   const {
     isAddressConfirmed,
     confirmAddress,
@@ -29,14 +29,17 @@ export default function ClientCatalogPage() {
   const streetFieldRef = useRef<HTMLSelectElement>(null);
   const hasValidAddress =
     getValidatedAddressZoneId(state.cart.address, state) !== null;
-  const showAddressForm = !isAddressConfirmed;
+  const isDelivery = state.cart.deliveryMode === "PLATFORM_DRIVER";
+  const deliveryPricingReady =
+    isDelivery && isAddressConfirmed && hasValidAddress;
+  const showAddressForm = isDelivery && !isAddressConfirmed;
   const effectiveSort =
-    sort === "DELIVERY" && !hasValidAddress ? "RECOMMENDED" : sort;
+    sort === "DELIVERY" && !deliveryPricingReady ? "RECOMMENDED" : sort;
   const restaurants = useMemo(
     () => sortPublishedRestaurants(state, effectiveSort),
     [effectiveSort, state],
   );
-  const orderableFees = hasValidAddress
+  const orderableFees = deliveryPricingReady
     ? restaurants
         .filter(canPlacePrototypeOrder)
         .map((restaurant) => getDeliveryFeeCents(state, restaurant))
@@ -45,6 +48,7 @@ export default function ClientCatalogPage() {
   const bestFee = orderableFees.length > 0 ? Math.min(...orderableFees) : null;
 
   const revealAddress = useCallback(() => {
+    if (!isDelivery) return;
     beginAddressEdit();
     window.requestAnimationFrame(() => {
       document.getElementById("delivery-address")?.scrollIntoView({
@@ -55,7 +59,7 @@ export default function ClientCatalogPage() {
       });
       streetFieldRef.current?.focus({ preventScroll: true });
     });
-  }, [beginAddressEdit]);
+  }, [beginAddressEdit, isDelivery]);
 
   useEffect(() => {
     const handleHash = () => {
@@ -74,69 +78,112 @@ export default function ClientCatalogPage() {
   return (
     <>
       <section
-        id="delivery-address"
-        className={`${flowStyles.card} ${flowStyles.catalogAddress} ${showAddressForm ? "" : flowStyles.catalogAddressCollapsed}`}
-        aria-labelledby="catalog-address-title"
+        id="fulfillment-method"
+        className={`${flowStyles.card} ${flowStyles.fulfillmentCard}`}
+        aria-labelledby="fulfillment-title"
       >
-        {showAddressForm ? (
-          <>
-            <div>
-              <h2 id="catalog-address-title">Куда доставить?</h2>
-              <p>От адреса зависит стоимость доставки.</p>
-            </div>
-            <div className={flowStyles.catalogAddressFields}>
-              <label className={flowStyles.field}>
-                <span>Улица</span>
-                <select
-                  ref={streetFieldRef}
-                  value={state.cart.address.street}
-                  onChange={(event) =>
-                    updateAddress({ street: event.target.value })
-                  }
-                >
-                  <option value="">Выберите улицу</option>
-                  {state.zones.flatMap((zone) =>
-                    zone.streets.map((street) => (
-                      <option value={street} key={street}>
-                        {street}
-                      </option>
-                    )),
-                  )}
-                </select>
-              </label>
-              <label className={flowStyles.field}>
-                <span>Дом</span>
-                <input
-                  required
-                  value={state.cart.address.house}
-                  onChange={(event) =>
-                    updateAddress({ house: event.target.value })
-                  }
-                  placeholder="Номер дома"
-                />
-              </label>
-            </div>
-            <button
-              className={flowStyles.compactTextButton}
-              type="button"
-              disabled={!hasValidAddress}
-              onClick={confirmAddress}
-            >
-              Готово
-            </button>
-          </>
-        ) : (
-          <div className={flowStyles.compactAddressLine}>
-            <MapPin aria-hidden="true" />
-            <strong id="catalog-address-title">
-              {state.cart.address.street}, дом {state.cart.address.house}
-            </strong>
-            <button type="button" onClick={revealAddress}>
-              Изменить
-            </button>
-          </div>
-        )}
+        <h2 id="fulfillment-title">Как получить заказ?</h2>
+        <fieldset
+          className={flowStyles.fulfillmentOptions}
+          aria-label="Способ получения"
+        >
+          <label className={flowStyles.fulfillmentOption}>
+            <input
+              type="radio"
+              name="catalog-delivery-mode"
+              checked={state.cart.deliveryMode === "PLATFORM_DRIVER"}
+              onChange={() => setDeliveryMode("PLATFORM_DRIVER")}
+            />
+            <span>Доставка</span>
+          </label>
+          <label className={flowStyles.fulfillmentOption}>
+            <input
+              type="radio"
+              name="catalog-delivery-mode"
+              checked={state.cart.deliveryMode === "PICKUP"}
+              onChange={() => setDeliveryMode("PICKUP")}
+            />
+            <span>Самовывоз</span>
+          </label>
+        </fieldset>
+        {state.cart.deliveryMode === "PLATFORM_DRIVER" &&
+        isAddressConfirmed ? (
+          <p className={flowStyles.fulfillmentSummary}>
+            Доставит водитель Direct
+          </p>
+        ) : state.cart.deliveryMode === "PICKUP" ? (
+          <p className={flowStyles.fulfillmentSummary}>
+            Заберёте заказ из выбранного ресторана
+          </p>
+        ) : null}
       </section>
+
+      {isDelivery ? (
+        <section
+          id="delivery-address"
+          className={`${flowStyles.card} ${flowStyles.catalogAddress} ${showAddressForm ? "" : flowStyles.catalogAddressCollapsed}`}
+          aria-labelledby="catalog-address-title"
+        >
+          {showAddressForm ? (
+            <>
+              <div>
+                <h2 id="catalog-address-title">Куда доставить?</h2>
+                <p>От адреса зависит стоимость доставки.</p>
+              </div>
+              <div className={flowStyles.catalogAddressFields}>
+                <label className={flowStyles.field}>
+                  <span>Улица</span>
+                  <select
+                    ref={streetFieldRef}
+                    value={state.cart.address.street}
+                    onChange={(event) =>
+                      updateAddress({ street: event.target.value })
+                    }
+                  >
+                    <option value="">Выберите улицу</option>
+                    {state.zones.flatMap((zone) =>
+                      zone.streets.map((street) => (
+                        <option value={street} key={street}>
+                          {street}
+                        </option>
+                      )),
+                    )}
+                  </select>
+                </label>
+                <label className={flowStyles.field}>
+                  <span>Дом</span>
+                  <input
+                    required
+                    value={state.cart.address.house}
+                    onChange={(event) =>
+                      updateAddress({ house: event.target.value })
+                    }
+                    placeholder="Номер дома"
+                  />
+                </label>
+              </div>
+              <button
+                className={flowStyles.compactTextButton}
+                type="button"
+                disabled={!hasValidAddress}
+                onClick={confirmAddress}
+              >
+                Готово
+              </button>
+            </>
+          ) : (
+            <div className={flowStyles.compactAddressLine}>
+              <MapPin aria-hidden="true" />
+              <strong id="catalog-address-title">
+                {state.cart.address.street}, дом {state.cart.address.house}
+              </strong>
+              <button type="button" onClick={revealAddress}>
+                Изменить
+              </button>
+            </div>
+          )}
+        </section>
+      ) : null}
 
       <div className={flowStyles.catalogHeadingRow} id="restaurant-list">
         <h1>Рестораны</h1>
@@ -147,7 +194,7 @@ export default function ClientCatalogPage() {
             onChange={(event) => setSort(event.target.value as CatalogSort)}
           >
             <option value="RECOMMENDED">Рекомендуемые</option>
-            <option value="DELIVERY" disabled={!hasValidAddress}>
+            <option value="DELIVERY" disabled={!deliveryPricingReady}>
               Выгодная доставка
             </option>
             <option value="PREPARATION">Быстрее приготовят</option>
@@ -159,7 +206,7 @@ export default function ClientCatalogPage() {
       <div className={flowStyles.catalogGrid}>
         {restaurants.map((restaurant) => {
           const deliveryFee =
-            hasValidAddress && canPlacePrototypeOrder(restaurant)
+            deliveryPricingReady && canPlacePrototypeOrder(restaurant)
               ? getDeliveryFeeCents(state, restaurant)
               : null;
           return (

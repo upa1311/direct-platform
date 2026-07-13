@@ -7,6 +7,7 @@ import { PageHeading } from "@/components/workspaces/route-content";
 import { TEST_RESTAURANT_ID } from "@/prototype/default-state";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
+  deliveryModeLabels,
   formatMoney,
   getRestaurant,
   getRestaurantOrders,
@@ -31,13 +32,14 @@ function formatCountdown(expectedReadyAt: string | null, now: number) {
 }
 
 export default function RestaurantActiveOrdersPage() {
-  const { state, markReady } = usePrototype();
+  const { state, markReady, markPickedUp } = usePrototype();
   const currentRestaurant = getRestaurant(state, TEST_RESTAURANT_ID);
   const [now, setNow] = useState(0);
   const orders = getRestaurantOrders(state, TEST_RESTAURANT_ID, [
     "AWAITING_PAYMENT",
     "PREPARING",
     "READY",
+    "READY_FOR_PICKUP",
   ]);
 
   useEffect(() => {
@@ -64,6 +66,7 @@ export default function RestaurantActiveOrdersPage() {
                     {order.publicNumber}
                   </h2>
                   <p>{orderStatusLabels[order.status]}</p>
+                  <p>{deliveryModeLabels[order.deliveryMode]}</p>
                 </div>
                 <span className={flowStyles.statusBadge}>
                   Оплата: {order.paymentStatus}
@@ -95,10 +98,23 @@ export default function RestaurantActiveOrdersPage() {
                       type="button"
                       onClick={() => markReady(order.id)}
                     >
-                      Готово и упаковано
+                      {order.deliveryMode === "PICKUP"
+                        ? "Готов к выдаче"
+                        : "Готово и упаковано"}
                     </button>
                   </div>
                 </>
+              ) : null}
+              {order.status === "READY_FOR_PICKUP" ? (
+                <div className={flowStyles.submitArea}>
+                  <button
+                    className={flowStyles.primaryButton}
+                    type="button"
+                    onClick={() => markPickedUp(order.id)}
+                  >
+                    Выдать заказ
+                  </button>
+                </div>
               ) : null}
             </article>
           ))}

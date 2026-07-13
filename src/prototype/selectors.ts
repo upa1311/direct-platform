@@ -29,7 +29,7 @@ export interface CartItemView {
 }
 
 export const deliveryModeLabels: Record<DeliveryMode, string> = {
-  PLATFORM_DRIVER: "Доставка Direct",
+  PLATFORM_DRIVER: "Доставка",
   RESTAURANT_DELIVERY: "Доставка ресторана",
   PICKUP: "Самовывоз",
 };
@@ -44,6 +44,8 @@ export const orderStatusLabels: Record<OrderStatus, string> = {
   AWAITING_PAYMENT: "Ожидается оплата",
   PREPARING: "Готовится",
   READY: "Готово и упаковано",
+  READY_FOR_PICKUP: "Готов к выдаче",
+  PICKED_UP: "Выдан",
   CANCELED: "Отменён",
 };
 
@@ -145,7 +147,8 @@ export function canPlacePrototypeOrder(restaurant: Restaurant): boolean {
     restaurant.id === TEST_RESTAURANT_ID &&
     restaurant.status === "PUBLISHED" &&
     restaurant.isAcceptingOrders &&
-    restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
+    (restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
+      restaurant.deliveryModes.includes("PICKUP")) &&
     restaurant.paymentMethods.includes("ONLINE")
   );
 }
@@ -248,9 +251,12 @@ export function calculateCartPricing(state: PrototypeState): CartPricing {
             restaurantCommissionCents,
         )
       : 0;
-  const deliveryFeeCents = restaurant
-    ? getDeliveryFeeCents(state, restaurant)
-    : null;
+  const deliveryFeeCents =
+    state.cart.deliveryMode === "PICKUP"
+      ? 0
+      : state.cart.deliveryMode === "PLATFORM_DRIVER" && restaurant
+        ? getDeliveryFeeCents(state, restaurant)
+        : null;
   const platformGrossRevenueCents =
     restaurantCommissionCents + smallOrderFeeCents;
   const restaurantPayoutBeforeBankFeeCents =
@@ -262,7 +268,8 @@ export function calculateCartPricing(state: PrototypeState): CartPricing {
     restaurantCommissionCents,
     smallOrderFeeCents,
     platformGrossRevenueCents,
-    driverPayoutCents: deliveryFeeCents,
+    driverPayoutCents:
+      state.cart.deliveryMode === null ? null : deliveryFeeCents,
     restaurantPayoutBeforeBankFeeCents,
     customerTotalCents:
       deliveryFeeCents === null
@@ -313,7 +320,8 @@ export function getLatestCustomerOrder(state: PrototypeState): Order | null {
 export function getActiveCustomerOrder(state: PrototypeState): Order | null {
   return (
     getCurrentCustomerOrders(state).find(
-      (order) => order.status !== "CANCELED",
+      (order) =>
+        order.status !== "CANCELED" && order.status !== "PICKED_UP",
     ) ?? null
   );
 }

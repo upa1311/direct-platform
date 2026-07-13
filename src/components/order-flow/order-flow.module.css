@@ -130,6 +130,7 @@
   text-decoration: none;
 }
 
+:global(#fulfillment-method),
 :global(#delivery-address),
 :global(#restaurant-list),
 :global(#restaurant-menu),
@@ -254,6 +255,73 @@
   align-items: end;
   gap: 16px 24px;
   margin-bottom: 20px;
+}
+
+.fulfillmentCard {
+  display: grid;
+  grid-template-columns: auto minmax(240px, 1fr) auto;
+  align-items: center;
+  gap: 14px 22px;
+  margin-bottom: 16px;
+}
+
+.fulfillmentCard h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.fulfillmentOptions {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fulfillmentOption {
+  min-height: 42px;
+  padding: 9px 14px;
+  border: 1px solid #d8ddd8;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  color: #39413c;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.fulfillmentOption:has(input:checked) {
+  border-color: #c66a36;
+  background: #fff7f1;
+  color: #7f3d1c;
+}
+
+.fulfillmentOption input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: #b85f2c;
+}
+
+.fulfillmentSummary,
+.fulfillmentHint {
+  margin: 0;
+  color: #59625c;
+  font-size: 14px;
+}
+
+.fulfillmentSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fulfillmentHint {
+  color: #7b837e;
 }
 
 .card.catalogAddressCollapsed {
@@ -1043,6 +1111,7 @@
 }
 
 @media (max-width: 850px) {
+  .fulfillmentCard { grid-template-columns: 1fr; }
   .catalogAddress { grid-template-columns: 1fr; }
   .catalogGrid,
   .cartLayout,
@@ -1113,6 +1182,7 @@
   }
 
   .catalogAddressFields { grid-template-columns: 1fr; }
+  .fulfillmentOptions { display: grid; grid-template-columns: 1fr 1fr; }
   .cartDrawer { padding: 20px 16px; }
   .cartDrawerItems article { align-items: flex-start; flex-direction: column; }
   .drawerQuantity { width: 100%; }

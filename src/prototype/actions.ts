@@ -5,6 +5,7 @@ import {
   TEST_RESTAURANT_ID,
 } from "./default-state";
 import type {
+  CustomerDeliveryMode,
   DeliveryAddress,
   Order,
   PaymentMethod,
@@ -38,6 +39,10 @@ export interface CreateOrderResult {
   error: string | null;
 }
 
+export interface CreateOrderOptions {
+  isAddressConfirmed: boolean;
+}
+
 export function addCartItem(
   state: PrototypeState,
   menuItemId: string,
@@ -55,7 +60,8 @@ export function addCartItem(
     restaurant.id !== TEST_RESTAURANT_ID ||
     restaurant.status !== "PUBLISHED" ||
     !restaurant.isAcceptingOrders ||
-    !restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
+    (!restaurant.deliveryModes.includes("PLATFORM_DRIVER") &&
+      !restaurant.deliveryModes.includes("PICKUP")) ||
     !restaurant.paymentMethods.includes("ONLINE")
   ) {
     return { state, result: "RESTAURANT_UNAVAILABLE" };
@@ -130,6 +136,7 @@ export function setCartItemQuantity(
       ...state.cart,
       restaurantId: items.length > 0 ? state.cart.restaurantId : null,
       items,
+      deliveryMode: items.length > 0 ? state.cart.deliveryMode : null,
       paymentMethod,
     },
   });
@@ -204,6 +211,24 @@ export function setCartPaymentMethod(
   });
 }
 
+export function setCartDeliveryMode(
+  state: PrototypeState,
+  deliveryMode: CustomerDeliveryMode | null,
+): PrototypeState {
+  if (state.cart.deliveryMode === deliveryMode) {
+    return state;
+  }
+
+  return finalizeMutation(state, {
+    ...state,
+    cart: {
+      ...state.cart,
+      deliveryMode,
+      paymentMethod: "ONLINE",
+    },
+  });
+}
+
 export function saveTariffs(
   state: PrototypeState,
   tariffs: TariffMatrix,
@@ -239,8 +264,10 @@ export function restoreDefaultTariffs(state: PrototypeState): PrototypeState {
 
 export function createOrderFromCart(
   state: PrototypeState,
+  options: CreateOrderOptions,
 ): ActionResult<CreateOrderResult> {
   const restaurant = getRestaurant(state, state.cart.restaurantId);
+  const deliveryMode = state.cart.deliveryMode;
 
   if (!isCustomerNameValid(state.customer.name)) {
     return {
@@ -274,11 +301,21 @@ export function createOrderFromCart(
     };
   }
 
+  if (!deliveryMode) {
+    return {
+      state,
+      result: {
+        orderId: null,
+        error: "Выберите доставку или самовывоз.",
+      },
+    };
+  }
+
   if (
     restaurant.id !== TEST_RESTAURANT_ID ||
     restaurant.status !== "PUBLISHED" ||
     !restaurant.isAcceptingOrders ||
-    !restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
+    !restaurant.deliveryModes.includes(deliveryMode) ||
     !restaurant.paymentMethods.includes("ONLINE")
   ) {
     return {
@@ -358,16 +395,28 @@ export function createOrderFromCart(
   }
 
   const pricing = calculateCartPricing(state);
+  const customerZoneId =
+    deliveryMode === "PLATFORM_DRIVER"
+      ? detectZoneId(
+          state.cart.address.street,
+          state,
+          state.cart.address.house,
+        )
+      : null;
 
-  const customerZoneId = detectZoneId(
-    state.cart.address.street,
-    state,
-    state.cart.address.house,
-  );
+  if (deliveryMode === "PLATFORM_DRIVER" && !options.isAddressConfirmed) {
+    return {
+      state,
+      result: {
+        orderId: null,
+        error: "Подтвердите адрес доставки.",
+      },
+    };
+  }
+
   if (
-    !isAddressReady(state.cart.address, state) ||
-    pricing.deliveryFeeCents === null ||
-    !customerZoneId
+    deliveryMode === "PLATFORM_DRIVER" &&
+    (!isAddressReady(state.cart.address, state) || !customerZoneId)
   ) {
     return {
       state,
@@ -375,6 +424,17 @@ export function createOrderFromCart(
         orderId: null,
         error: "Укажите улицу из справочника и номер дома.",
       },
+    };
+  }
+
+  if (
+    pricing.deliveryFeeCents === null ||
+    pricing.driverPayoutCents === null ||
+    pricing.customerTotalCents === null
+  ) {
+    return {
+      state,
+      result: { orderId: null, error: "Не удалось рассчитать заказ." },
     };
   }
 
@@ -397,8 +457,11 @@ export function createOrderFromCart(
       address: restaurant.address,
       zoneId: restaurant.zoneId,
     },
-    address: { ...state.cart.address, zoneId: customerZoneId },
-    deliveryMode: "PLATFORM_DRIVER",
+    address:
+      deliveryMode === "PLATFORM_DRIVER"
+        ? { ...state.cart.address, zoneId: customerZoneId }
+        : null,
+    deliveryMode,
     paymentMethod: "ONLINE",
     paymentStatus: "NOT_STARTED",
     paidAt: null,
@@ -418,7 +481,7 @@ export function createOrderFromCart(
     })),
     financials: {
       currencyCode: state.platformSettings.currencyCode,
-      deliveryMode: "PLATFORM_DRIVER",
+      deliveryMode,
       restaurantCommissionRateBps:
         state.platformSettings.restaurantCommissionRateBps,
       restaurantCommissionCents: pricing.restaurantCommissionCents,
@@ -426,7 +489,7 @@ export function createOrderFromCart(
       deliveryFeeCents: pricing.deliveryFeeCents,
       smallOrderFeeCents: pricing.smallOrderFeeCents,
       platformGrossRevenueCents: pricing.platformGrossRevenueCents,
-      driverPayoutCents: pricing.deliveryFeeCents,
+      driverPayoutCents: pricing.driverPayoutCents,
       restaurantPayoutBeforeBankFeeCents:
         pricing.restaurantPayoutBeforeBankFeeCents,
       customerTotalCents: pricing.customerTotalCents ?? 0,
@@ -441,7 +504,10 @@ export function createOrderFromCart(
         type: "STATUS",
         fromStatus: null,
         toStatus: "RESTAURANT_REVIEW",
-        message: "Заказ отправлен ресторану на проверку.",
+        message:
+          deliveryMode === "PICKUP"
+            ? "Заказ на самовывоз отправлен ресторану на проверку."
+            : "Заказ с доставкой отправлен ресторану на проверку.",
       },
     ],
   };
@@ -644,9 +710,12 @@ export function markOrderReady(
         return order;
       }
 
+      const nextStatus =
+        order.deliveryMode === "PICKUP" ? "READY_FOR_PICKUP" : "READY";
+
       return {
         ...order,
-        status: "READY",
+        status: nextStatus,
         updatedAt: now,
         history: [
           ...order.history,
@@ -656,12 +725,53 @@ export function markOrderReady(
             actor: "RESTAURANT",
             type: "STATUS",
             fromStatus: "PREPARING",
-            toStatus: "READY",
-            message: "Ресторан отметил заказ как готовый и упакованный.",
+            toStatus: nextStatus,
+            message:
+              order.deliveryMode === "PICKUP"
+                ? "Заказ готов к выдаче клиенту."
+                : "Ресторан отметил заказ как готовый и упакованный.",
           },
         ],
       };
     },
+    now,
+  );
+}
+
+export function markOrderPickedUp(
+  state: PrototypeState,
+  orderId: string,
+): PrototypeState {
+  const targetOrder = state.orders.find((order) => order.id === orderId);
+  if (
+    !targetOrder ||
+    targetOrder.deliveryMode !== "PICKUP" ||
+    targetOrder.status !== "READY_FOR_PICKUP"
+  ) {
+    return state;
+  }
+
+  const now = new Date().toISOString();
+  return replaceOrder(
+    state,
+    orderId,
+    (order) => ({
+      ...order,
+      status: "PICKED_UP",
+      updatedAt: now,
+      history: [
+        ...order.history,
+        {
+          id: `${order.id}-history-${order.history.length + 1}`,
+          occurredAt: now,
+          actor: "RESTAURANT",
+          type: "STATUS",
+          fromStatus: "READY_FOR_PICKUP",
+          toStatus: "PICKED_UP",
+          message: "Заказ выдан клиенту",
+        },
+      ],
+    }),
     now,
   );
 }

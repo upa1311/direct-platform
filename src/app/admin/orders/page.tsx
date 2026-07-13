@@ -5,6 +5,7 @@ import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
+  deliveryModeLabels,
   formatMoney,
   orderStatusLabels,
   paymentMethodLabels,
@@ -53,12 +54,15 @@ export default function AdminOrdersPage() {
                       <dd>{order.restaurant.name}</dd>
                     </div>
                     <div className={flowStyles.definitionRow}>
+                      <dt>Способ получения</dt>
+                      <dd>{deliveryModeLabels[order.deliveryMode]}</dd>
+                    </div>
+                    <div className={flowStyles.definitionRow}>
                       <dt>Адрес</dt>
                       <dd>
-                        {order.address.street}, дом {order.address.house}
-                        {order.address.apartment
-                          ? `, кв. ${order.address.apartment}`
-                          : ""}
+                        {order.address
+                          ? `${order.address.street}, дом ${order.address.house}${order.address.apartment ? `, кв. ${order.address.apartment}` : ""}`
+                          : `Самовывоз: ${order.restaurant.address}`}
                       </dd>
                     </div>
                     <div className={flowStyles.definitionRow}>
@@ -67,7 +71,7 @@ export default function AdminOrdersPage() {
                     </div>
                     <div className={flowStyles.definitionRow}>
                       <dt>Зона клиента</dt>
-                      <dd>{order.financials.customerZoneId}</dd>
+                      <dd>{order.financials.customerZoneId ?? "—"}</dd>
                     </div>
                     <div className={flowStyles.definitionRow}>
                       <dt>Оплата</dt>

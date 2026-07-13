@@ -1,4 +1,4 @@
-export const PROTOTYPE_SCHEMA_VERSION = 3 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 4 as const;
 
 export type CurrencyCode = "USD";
 export type ZoneId = "zone-1" | "zone-2" | "zone-3" | "zone-4";
@@ -12,12 +12,15 @@ export type DeliveryMode =
   | "PLATFORM_DRIVER"
   | "RESTAURANT_DELIVERY"
   | "PICKUP";
+export type CustomerDeliveryMode = "PLATFORM_DRIVER" | "PICKUP";
 export type PaymentMethod = "ONLINE" | "CASH";
 export type OrderStatus =
   | "RESTAURANT_REVIEW"
   | "AWAITING_PAYMENT"
   | "PREPARING"
   | "READY"
+  | "READY_FOR_PICKUP"
+  | "PICKED_UP"
   | "CANCELED";
 export type PaymentStatus =
   | "NOT_STARTED"
@@ -104,7 +107,7 @@ export interface CartItem {
 export interface Cart {
   restaurantId: string | null;
   items: CartItem[];
-  deliveryMode: "PLATFORM_DRIVER";
+  deliveryMode: CustomerDeliveryMode | null;
   paymentMethod: PaymentMethod;
   address: DeliveryAddress;
 }
@@ -135,7 +138,7 @@ export interface OrderRestaurantSnapshot {
 
 export interface FinancialSnapshot {
   currencyCode: CurrencyCode;
-  deliveryMode: "PLATFORM_DRIVER";
+  deliveryMode: CustomerDeliveryMode;
   restaurantCommissionRateBps: number;
   restaurantCommissionCents: number;
   foodSubtotalCents: number;
@@ -146,7 +149,7 @@ export interface FinancialSnapshot {
   restaurantPayoutBeforeBankFeeCents: number;
   customerTotalCents: number;
   restaurantZoneId: ZoneId;
-  customerZoneId: ZoneId;
+  customerZoneId: ZoneId | null;
 }
 
 export interface OrderHistoryEvent {
@@ -166,8 +169,8 @@ export interface Order {
   updatedAt: string;
   customer: OrderCustomerSnapshot;
   restaurant: OrderRestaurantSnapshot;
-  address: DeliveryAddress;
-  deliveryMode: "PLATFORM_DRIVER";
+  address: DeliveryAddress | null;
+  deliveryMode: CustomerDeliveryMode;
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   paidAt: string | null;

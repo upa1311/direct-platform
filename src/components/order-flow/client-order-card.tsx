@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import type { Order } from "@/prototype/models";
 import {
+  deliveryModeLabels,
   formatDateTime,
   formatMoney,
   orderStatusLabels,
@@ -29,6 +30,10 @@ export function ClientOrderCard({
         </span>
       </div>
       <dl className={styles.summaryList}>
+        <div className={styles.summaryRow}>
+          <dt>Получение</dt>
+          <dd>{deliveryModeLabels[order.deliveryMode]}</dd>
+        </div>
         <div className={styles.summaryRow}>
           <dt>Дата</dt>
           <dd>{formatDateTime(order.createdAt)}</dd>
