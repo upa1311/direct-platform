@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { createDefaultState } from "./default-state.ts";
 import {
   addCartItem,
+  adjustOrderEtaFromIntent,
   adjustOrderExpectedReadyAt,
   createOrderFromCart,
 } from "./actions.ts";
@@ -11,10 +12,16 @@ import {
   computeDelayedEtaIso,
   computeEarlierEtaIso,
   computeEtaDeltaMinutes,
+  computeEtaFromIntent,
   computeEtaFromNowIso,
   validateEtaCandidate,
-} from "./pricing-engine.ts";
-import { formatOrderEtaClock, getOrderStatusSince } from "./selectors.ts";
+} from "./order-eta.ts";
+import { normalizePrototypeState } from "./prototype-store.ts";
+import {
+  formatOrderEtaClock,
+  formatOrderEtaInRestaurantZone,
+  getOrderStatusSince,
+} from "./selectors.ts";
 import type { Order, OrderStatus, PrototypeState } from "./models.ts";
 
 const NOW = "2026-07-14T12:00:00.000Z";
@@ -183,12 +190,93 @@ test("§17.28: ошибка не мутирует state", () => {
   assert.equal(JSON.stringify(state), before);
 });
 
-test("§17.29: старый заказ получает etaAdjustments=[] при нормализации", () => {
-  const s = createDefaultState();
-  // orders пусты в дефолте; проверяем на созданном заказе — поле есть и пустое.
-  const withOrder = preparingState().state;
-  assert.ok(Array.isArray(withOrder.orders[0].etaAdjustments));
-  void s;
+// §5: настоящий тест legacy-нормализации (через реальный normalizer).
+test("§5: legacy-заказ без etaAdjustments нормализуется в [] без потери данных", () => {
+  const { state, orderId } = preparingState();
+  const order = orderOf(state, orderId);
+  // Имитируем старое состояние: у заказа НЕТ поля etaAdjustments.
+  const legacyOrder: Record<string, unknown> = { ...order };
+  delete legacyOrder.etaAdjustments;
+  const legacyState = {
+    ...state,
+    orders: [legacyOrder],
+  } as unknown as PrototypeState;
+
+  const normalized = normalizePrototypeState(legacyState);
+  const after = normalized.orders.find((o) => o.id === orderId)!;
+  assert.equal(after.id, order.id);
+  assert.equal(after.publicNumber, order.publicNumber);
+  assert.deepEqual(after.customer, order.customer);
+  assert.deepEqual(after.items, order.items);
+  assert.deepEqual(after.financials, order.financials);
+  assert.deepEqual(after.history, order.history);
+  assert.deepEqual(after.etaAdjustments, []);
+  // Заказ не заменён seed-данными.
+  assert.equal(normalized.orders.length, 1);
+});
+
+test("§5: пользовательские заказы не заменяются seed после нормализации", () => {
+  const { state, orderId } = preparingState();
+  const normalized = normalizePrototypeState(state);
+  assert.equal(normalized.orders.length, 1);
+  assert.equal(normalized.orders[0].id, orderId);
+});
+
+// §6: усиленная валидация.
+test("§6: невалидный nowIso отклоняется без мутации", () => {
+  const { state, orderId } = preparingState();
+  const before = JSON.stringify(state);
+  const res = adjustOrderExpectedReadyAt(state, orderId, NEXT_OK, "причина", "RESTAURANT", "не дата");
+  assert.equal(res.result.ok, false);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test("§6: причина длиной 301 символ отклоняется без мутации", () => {
+  const { state, orderId } = preparingState();
+  const before = JSON.stringify(state);
+  const res = adjustOrderExpectedReadyAt(state, orderId, NEXT_OK, "x".repeat(301), "RESTAURANT", NOW);
+  assert.equal(res.result.ok, false);
+  assert.equal(JSON.stringify(state), before);
+  // Ровно 300 — допускается.
+  const ok = adjustOrderExpectedReadyAt(state, orderId, NEXT_OK, "y".repeat(300), "RESTAURANT", NOW);
+  assert.equal(ok.result.ok, true);
+});
+
+// §7: actor в тексте истории.
+test("§7: actor RESTAURANT — «Ресторан…», ADMIN — «Администратор Direct…»", () => {
+  const rest = adjustOrderExpectedReadyAt(preparingState().state, "order-1001", NEXT_OK, "причина", "RESTAURANT", NOW);
+  const restMsg = orderOf(rest.state, "order-1001").history.at(-1)!.message;
+  assert.ok(restMsg.startsWith("Ресторан "));
+
+  const adm = adjustOrderExpectedReadyAt(preparingState().state, "order-1001", NEXT_OK, "причина", "ADMIN", NOW);
+  const admMsg = orderOf(adm.state, "order-1001").history.at(-1)!.message;
+  assert.ok(admMsg.startsWith("Администратор Direct "));
+});
+
+// §1: intent + единая временная точка.
+test("§1: FROM_NOW 1 успешно проходит (кандидат из intent = граница)", () => {
+  const { state, orderId } = preparingState();
+  const res = adjustOrderEtaFromIntent(state, orderId, { kind: "FROM_NOW", minutes: 1 }, "причина", "RESTAURANT", NOW);
+  assert.equal(res.result.ok, true);
+  assert.equal(res.result.nextExpectedReadyAt, "2026-07-14T12:01:00.000Z");
+});
+
+test("§1: domain и расчёт из intent используют один nowIso", () => {
+  // Кандидат из intent на NOW и валидация на том же NOW → успех у самой границы.
+  const intent = { kind: "FROM_NOW", minutes: 1 } as const;
+  const candidate = computeEtaFromIntent(intent, CURRENT_ETA, NOW);
+  assert.equal(validateEtaCandidate(candidate, NOW), null);
+});
+
+test("§1: EARLIER возле границы обрабатывается предсказуемо", () => {
+  const { state, orderId } = preparingState();
+  // ETA 12:20, EARLIER 25 → 11:55 (раньше now) → отклонено доменом.
+  const tooEarly = adjustOrderEtaFromIntent(state, orderId, { kind: "EARLIER", minutes: 25 }, "причина", "RESTAURANT", NOW);
+  assert.equal(tooEarly.result.ok, false);
+  // EARLIER 5 → 12:15 (валидно) → успех.
+  const ok = adjustOrderEtaFromIntent(state, orderId, { kind: "EARLIER", minutes: 5 }, "причина", "RESTAURANT", NOW);
+  assert.equal(ok.result.ok, true);
+  assert.equal(ok.result.nextExpectedReadyAt, "2026-07-14T12:15:00.000Z");
 });
 
 // =========================== §18 UI helpers ==================================
@@ -219,6 +307,24 @@ test("§18.5: custom «через N минут» считается от now", (
 test("§18.6: разница определяется как delay/earlier", () => {
   assert.ok(computeEtaDeltaMinutes(CURRENT_ETA, NEXT_OK) > 0); // задержка
   assert.ok(computeEtaDeltaMinutes(CURRENT_ETA, "2026-07-14T12:15:00.000Z") < 0); // раньше
+});
+
+test("§3: ETA форматируется в timeZone ресторана (Chisinau/New_York/UTC)", () => {
+  const iso = "2026-07-14T12:00:00.000Z";
+  const { state, orderId } = preparingState();
+  const order = orderOf(state, orderId);
+  const withTz = (tz: string): PrototypeState => ({
+    ...state,
+    restaurants: state.restaurants.map((r) =>
+      r.id === order.restaurant.id ? { ...r, timeZone: tz } : r,
+    ),
+  });
+  const chi = formatOrderEtaInRestaurantZone(withTz("Europe/Chisinau"), order, iso);
+  const ny = formatOrderEtaInRestaurantZone(withTz("America/New_York"), order, iso);
+  const utc = formatOrderEtaInRestaurantZone(withTz("UTC"), order, iso);
+  assert.notEqual(chi, ny);
+  assert.notEqual(ny, utc);
+  assert.notEqual(chi, utc);
 });
 
 test("§18.9: клиентская строка ETA — только HH:MM, без внутренней причины", () => {

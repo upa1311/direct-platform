@@ -58,9 +58,14 @@ import {
 import {
   computePickupSettlement,
   generatePickupCode,
-  validateEtaCandidate,
   validatePickupPayment,
 } from "./pricing-engine";
+import {
+  computeEtaFromIntent,
+  ETA_REASON_MAX_LENGTH,
+  validateEtaCandidate,
+  type EtaAdjustmentIntent,
+} from "./order-eta";
 import { finalizeMutation } from "./prototype-store";
 
 export interface ActionResult<T> {
@@ -1446,6 +1451,9 @@ export function adjustOrderExpectedReadyAt(
   });
 
   if (!order) return fail("Заказ не найден.");
+  if (Number.isNaN(Date.parse(nowIso))) {
+    return fail("Некорректное время операции.");
+  }
   if (order.status !== "PREPARING") {
     return fail("Изменить время можно только для заказа в приготовлении.");
   }
@@ -1455,6 +1463,9 @@ export function adjustOrderExpectedReadyAt(
   }
   const normReason = reason.trim();
   if (!normReason) return fail("Укажите причину.");
+  if (normReason.length > ETA_REASON_MAX_LENGTH) {
+    return fail("Причина слишком длинная (максимум 300 символов).");
+  }
 
   const boundsError = validateEtaCandidate(nextExpectedReadyAt, nowIso);
   if (boundsError) return fail(boundsError);
@@ -1470,9 +1481,11 @@ export function adjustOrderExpectedReadyAt(
     state.restaurants.find((r) => r.id === order.restaurant.id)?.timeZone ??
     "Europe/Chisinau";
   const isDelay = nextMs > Date.parse(prev);
+  // §7: префикс сообщения зависит от actor (кухня vs администратор Direct).
+  const who = actor === "ADMIN" ? "Администратор Direct" : "Ресторан";
   const message = isDelay
-    ? `Ресторан изменил ожидаемое время готовности с ${formatEtaTimeInZone(prev, timeZone)} на ${formatEtaTimeInZone(nextExpectedReadyAt, timeZone)}. Причина: ${normReason}`
-    : `Ресторан сообщил, что заказ будет готов раньше: новое время ${formatEtaTimeInZone(nextExpectedReadyAt, timeZone)}. Причина: ${normReason}`;
+    ? `${who} изменил ожидаемое время готовности с ${formatEtaTimeInZone(prev, timeZone)} на ${formatEtaTimeInZone(nextExpectedReadyAt, timeZone)}. Причина: ${normReason}`
+    : `${who} сообщил, что заказ будет готов раньше: новое время ${formatEtaTimeInZone(nextExpectedReadyAt, timeZone)}. Причина: ${normReason}`;
 
   const adjustment: OrderEtaAdjustment = {
     id: `eta-${orderId}-${order.etaAdjustments.length + 1}`,
@@ -1519,6 +1532,29 @@ export function adjustOrderExpectedReadyAt(
       nextExpectedReadyAt,
     },
   };
+}
+
+/**
+ * Корректировка ETA по типизированному намерению (§1). Один общий nowIso
+ * используется и для расчёта нового времени из intent, и для domain-validation —
+ * поэтому вариант «через 1 минуту» и границы ранней готовности не устаревают
+ * между выбором и submit. Тонкая обёртка над adjustOrderExpectedReadyAt.
+ */
+export function adjustOrderEtaFromIntent(
+  state: PrototypeState,
+  orderId: string,
+  intent: EtaAdjustmentIntent,
+  reason: string,
+  actor: "RESTAURANT" | "ADMIN",
+  nowIso: string,
+): ActionResult<AdjustOrderEtaResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  if (!order || !order.expectedReadyAt) {
+    // Делегируем — adjustOrderExpectedReadyAt вернёт корректную ошибку.
+    return adjustOrderExpectedReadyAt(state, orderId, "", reason, actor, nowIso);
+  }
+  const next = computeEtaFromIntent(intent, order.expectedReadyAt, nowIso);
+  return adjustOrderExpectedReadyAt(state, orderId, next, reason, actor, nowIso);
 }
 
 /**

@@ -8,12 +8,18 @@ import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import { getSafeAdminStatusCorrections } from "@/prototype/actions";
-import type { DeliveryMode, Order, OrderStatus } from "@/prototype/models";
+import type {
+  DeliveryMode,
+  Order,
+  OrderStatus,
+  PrototypeState,
+} from "@/prototype/models";
 import {
   deliveryModeLabels,
   driverStatusLabels,
   formatDateTime,
   formatMoney,
+  formatOrderEtaInRestaurantZone,
   getAvailableDrivers,
   getDriverById,
   getOrder,
@@ -34,7 +40,13 @@ const ETA_ACTOR_LABELS: Record<string, string> = {
 };
 
 /** §11: сводка последней корректировки ожидаемого времени готовности. */
-function EtaAdjustmentSummary({ order }: { order: Order }) {
+function EtaAdjustmentSummary({
+  order,
+  state,
+}: {
+  order: Order;
+  state: PrototypeState;
+}) {
   const last = order.etaAdjustments[order.etaAdjustments.length - 1];
   const diff = Math.round(
     (Date.parse(last.nextExpectedReadyAt) -
@@ -52,8 +64,17 @@ function EtaAdjustmentSummary({ order }: { order: Order }) {
       <strong>Последняя корректировка времени</strong>
       <div className={flowStyles.inlineMeta}>
         <span>
-          {formatDateTime(last.previousExpectedReadyAt)} →{" "}
-          {formatDateTime(last.nextExpectedReadyAt)}
+          {formatOrderEtaInRestaurantZone(
+            state,
+            order,
+            last.previousExpectedReadyAt,
+          )}{" "}
+          →{" "}
+          {formatOrderEtaInRestaurantZone(
+            state,
+            order,
+            last.nextExpectedReadyAt,
+          )}
         </span>
         <span>{diffLabel}</span>
         <span>Причина: {last.reason}</span>
@@ -878,7 +899,7 @@ function OrdersConsole() {
                 </dl>
 
                 {order.etaAdjustments.length > 0 ? (
-                  <EtaAdjustmentSummary order={order} />
+                  <EtaAdjustmentSummary order={order} state={state} />
                 ) : null}
 
                 <OrderActions order={order} />

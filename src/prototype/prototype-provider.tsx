@@ -14,7 +14,7 @@ import {
 import {
   acceptRestaurantOrder,
   addCartItem,
-  adjustOrderExpectedReadyAt,
+  adjustOrderEtaFromIntent,
   adminCancelOrder,
   adminSetPreparationMinutes,
   approveCancellationRequest,
@@ -75,6 +75,7 @@ import {
   type RestaurantFormInput,
   type UpdateRestaurantResult,
 } from "./actions";
+import type { EtaAdjustmentIntent } from "./order-eta";
 import { createDefaultState } from "./default-state";
 import type {
   DeliveryAddress,
@@ -186,7 +187,7 @@ interface PrototypeContextValue {
   markReady: (orderId: string, actor?: OrderActionActor) => void;
   adjustOrderEta: (
     orderId: string,
-    nextExpectedReadyAt: string,
+    intent: EtaAdjustmentIntent,
     reason: string,
     actor?: "RESTAURANT" | "ADMIN",
   ) => AdjustOrderEtaResult;
@@ -658,14 +659,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   const adjustOrderEta = useCallback(
     (
       orderId: string,
-      nextExpectedReadyAt: string,
+      intent: EtaAdjustmentIntent,
       reason: string,
       actor: "RESTAURANT" | "ADMIN" = "RESTAURANT",
     ) => {
-      const action = adjustOrderExpectedReadyAt(
+      // §1: один общий nowIso и для расчёта из intent, и для валидации.
+      const action = adjustOrderEtaFromIntent(
         stateRef.current,
         orderId,
-        nextExpectedReadyAt,
+        intent,
         reason,
         actor,
         new Date().toISOString(),

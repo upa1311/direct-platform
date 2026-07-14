@@ -1029,6 +1029,28 @@ export function formatOrderEtaClock(
   }).format(new Date(order.expectedReadyAt));
 }
 
+/**
+ * Форматирует произвольный ISO (например, prev/next ETA из audit) в дату-время
+ * в часовом поясе РЕСТОРАНА (§3) — не по времени администратора. Единый helper
+ * для admin ETA-сводки.
+ */
+export function formatOrderEtaInRestaurantZone(
+  state: PrototypeState,
+  order: Order,
+  iso: string,
+): string {
+  const timeZone =
+    state.restaurants.find((r) => r.id === order.restaurant.id)?.timeZone ??
+    "Europe/Chisinau";
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone,
+  }).format(new Date(iso));
+}
+
 /** Может ли клиент бесплатно и сразу отменить заказ (§6): до приготовления. */
 export function canClientCancelDirectly(order: Order): boolean {
   return (

@@ -17,12 +17,10 @@ import {
   isMenuItemAvailableAt,
 } from "@/prototype/selectors";
 import {
-  computeDelayedEtaIso,
-  computeEarlierEtaIso,
   computeEtaDeltaMinutes,
-  computeEtaFromNowIso,
-  validateEtaCandidate,
-} from "@/prototype/pricing-engine";
+  computeEtaFromIntent,
+  type EtaAdjustmentIntent,
+} from "@/prototype/order-eta";
 import styles from "./kitchen.module.css";
 
 const DELAY_REASONS = [
@@ -142,17 +140,25 @@ export function EtaAdjustPanel({
   const { adjustOrderEta } = usePrototype();
   const current = order.expectedReadyAt;
   const tz = restaurant.timeZone;
-  const [candidateIso, setCandidateIso] = useState<string | null>(null);
+  // §1: храним типизированное НАМЕРЕНИЕ, а не готовый ISO. Конкретное время
+  // считается один раз при submit из общего nowIso, поэтому «через 1 минуту» и
+  // границы ранней готовности не устаревают между выбором и отправкой.
+  const [intent, setIntent] = useState<EtaAdjustmentIntent | null>(null);
   const [customMinutes, setCustomMinutes] = useState("");
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const nowIso = () => new Date().toISOString();
   const lastAdjustment = order.etaAdjustments.at(-1) ?? null;
 
+  // Превью на текущий момент; авторитетный расчёт/валидация — при submit с тем
+  // же nowIso (adjustOrderEta → adjustOrderEtaFromIntent).
+  const previewIso =
+    intent && current
+      ? computeEtaFromIntent(intent, current, new Date().toISOString())
+      : null;
   const delta =
-    candidateIso && current ? computeEtaDeltaMinutes(current, candidateIso) : 0;
+    previewIso && current ? computeEtaDeltaMinutes(current, previewIso) : 0;
   const isDelay = delta >= 0;
   const reasons = isDelay ? DELAY_REASONS : EARLIER_REASONS;
   const selectedReason = (reasons as readonly string[]).includes(reason)
@@ -162,21 +168,12 @@ export function EtaAdjustPanel({
   const effectiveReason = isOther ? customReason : selectedReason;
 
   const chooseDelay = (minutes: number) => {
-    if (!current) return;
-    setCandidateIso(computeDelayedEtaIso(current, minutes, nowIso()));
+    setIntent({ kind: "DELAY", minutes });
     setCustomMinutes("");
     setError(null);
   };
   const chooseEarlier = (minutes: number) => {
-    if (!current) return;
-    const candidate = computeEarlierEtaIso(current, minutes);
-    const validation = validateEtaCandidate(candidate, nowIso());
-    if (validation) {
-      setCandidateIso(null);
-      setError(validation);
-      return;
-    }
-    setCandidateIso(candidate);
+    setIntent({ kind: "EARLIER", minutes });
     setCustomMinutes("");
     setError(null);
   };
@@ -184,15 +181,15 @@ export function EtaAdjustPanel({
     setCustomMinutes(value);
     const n = Number(value);
     if (!Number.isInteger(n) || n < 1 || n > 180) {
-      setCandidateIso(null);
+      setIntent(null);
       return;
     }
-    setCandidateIso(computeEtaFromNowIso(nowIso(), n));
+    setIntent({ kind: "FROM_NOW", minutes: n });
     setError(null);
   };
 
   const submit = () => {
-    if (!candidateIso) {
+    if (!intent) {
       setError("Выберите новое время.");
       return;
     }
@@ -200,12 +197,7 @@ export function EtaAdjustPanel({
       setError("Укажите причину.");
       return;
     }
-    const res = adjustOrderEta(
-      order.id,
-      candidateIso,
-      effectiveReason,
-      "RESTAURANT",
-    );
+    const res = adjustOrderEta(order.id, intent, effectiveReason, "RESTAURANT");
     // §9: при ошибке панель не закрываем и показываем domain error рядом.
     if (!res.ok) {
       setError(res.error);
@@ -215,7 +207,7 @@ export function EtaAdjustPanel({
   };
 
   const deltaLabel =
-    candidateIso === null
+    previewIso === null
       ? null
       : delta > 0
         ? `Задержка на ${delta} мин`
@@ -302,9 +294,10 @@ export function EtaAdjustPanel({
         </label>
       ) : null}
 
-      {candidateIso ? (
+      {previewIso ? (
         <p className={styles.panelHint}>
-          Новое ожидаемое время: <strong>{formatTimeInZone(candidateIso, tz)}</strong>
+          Новое ожидаемое время:{" "}
+          <strong>{formatTimeInZone(previewIso, tz)}</strong>
           {deltaLabel ? ` · ${deltaLabel}` : ""}
         </p>
       ) : null}
@@ -324,7 +317,7 @@ export function EtaAdjustPanel({
         <button
           className={`${styles.btn} ${styles.btnDark}`}
           type="button"
-          disabled={!candidateIso || !effectiveReason.trim()}
+          disabled={!intent || !effectiveReason.trim()}
           onClick={submit}
         >
           Обновить время
