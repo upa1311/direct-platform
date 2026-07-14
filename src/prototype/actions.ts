@@ -2079,6 +2079,20 @@ export function adminCancelOrder(
   }
 
   const now = new Date().toISOString();
+  // §3: если у заказа есть PENDING-запрос на отмену, обычная админ-отмена
+  // атомарно разрешает его как APPROVED — терминальный заказ не остаётся с
+  // висящим PENDING. Оплата/paidAt/snapshot/settlement не меняются, refund нет.
+  const pendingRequest = state.cancellationRequests.find(
+    (r) => r.orderId === orderId && r.status === "PENDING",
+  );
+  const wasOnlinePaid =
+    order.paymentMethod === "ONLINE" && order.paymentStatus === "PAID";
+  const historyMessage = pendingRequest
+    ? wasOnlinePaid
+      ? "Администратор Direct одобрил отмену после начала приготовления. Автоматический возврат не выполнялся."
+      : `Администратор Direct одобрил отмену после начала приготовления. Причина: ${normalizedReason}`
+    : `Заказ отменён администратором Direct. Причина: ${normalizedReason}`;
+
   const updatedOrder: Order = {
     ...order,
     status: "CANCELED",
@@ -2095,16 +2109,31 @@ export function adminCancelOrder(
         "STATUS",
         order.status,
         "CANCELED",
-        `Заказ отменён администратором Direct. Причина: ${normalizedReason}`,
+        historyMessage,
       ),
     ],
   };
+  const cancellationRequests = pendingRequest
+    ? state.cancellationRequests.map((r) =>
+        r.id === pendingRequest.id
+          ? {
+              ...r,
+              status: "APPROVED" as const,
+              resolvedAt: now,
+              resolvedBy: "ADMIN" as const,
+              resolutionNote: normalizedReason,
+            }
+          : r,
+      )
+    : state.cancellationRequests;
+
   const nextState = finalizeMutation(
     state,
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
       drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+      cancellationRequests,
     },
     now,
   );

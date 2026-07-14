@@ -3,14 +3,11 @@
 import Link from "next/link";
 
 import type { Order } from "@/prototype/models";
-import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatDateTime,
   formatMoney,
-  getCancellationRequestForOrder,
   getClientAutoCancelMessage,
-  getClientCancellationMessage,
   orderStatusLabels,
 } from "@/prototype/selectors";
 import { ClientOrderActions } from "./client-order-actions";
@@ -32,10 +29,7 @@ export function ClientOrderCard({
   order,
   linkLabel = "Подробнее",
 }: ClientOrderCardProps) {
-  const { state } = usePrototype();
   const autoCancelMessage = getClientAutoCancelMessage(order);
-  const request = getCancellationRequestForOrder(state, order.id);
-  const requestMessage = getClientCancellationMessage(request);
   return (
     <article className={styles.orderCard}>
       <div className={styles.orderHeader}>
@@ -68,10 +62,6 @@ export function ClientOrderCard({
       {autoCancelMessage ? (
         <p className={styles.summaryHint} role="status">
           {autoCancelMessage}
-        </p>
-      ) : requestMessage ? (
-        <p className={styles.summaryHint} role="status">
-          {requestMessage}
         </p>
       ) : null}
       <div className={styles.submitArea}>

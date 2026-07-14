@@ -229,8 +229,8 @@ function RequestCancellation({ order }: { order: Order }) {
         <strong>{statusMessage}</strong>
         {request.status === "PENDING" ? (
           <p className={styles.summaryHint}>
-            Запрос на отмену отправлен. Пока администратор рассматривает его,
-            заказ продолжает выполняться.
+            Пока администратор рассматривает запрос, заказ продолжает
+            выполняться.
           </p>
         ) : null}
         {request.status === "REJECTED" ? (
@@ -336,10 +336,27 @@ function RequestCancellation({ order }: { order: Order }) {
   );
 }
 
+/** Завершённый заказ: сообщение об одобренной отмене (§4) + «Заказать снова». */
+function CompletedActions({ order }: { order: Order }) {
+  const { state } = usePrototype();
+  const request = getCancellationRequestForOrder(state, order.id);
+  return (
+    <>
+      {request?.status === "APPROVED" ? (
+        <div className={styles.requestStatusBlock} role="status">
+          <strong>{getClientCancellationMessage(request)}</strong>
+        </div>
+      ) : null}
+      <RepeatOrderButton order={order} />
+    </>
+  );
+}
+
 /**
  * Единая клиентская панель действий заказа (§15). До приготовления — компактная
- * бесплатная «Отменить»; во время приготовления/доставки — запрос на отмену;
- * у завершённых — «Заказать снова». Вся логика — в чистых селекторах.
+ * бесплатная «Отменить»; во время приготовления/доставки — запрос на отмену и
+ * его статус; у завершённых — сообщение об одобрении (если было) + «Заказать
+ * снова». Статус запроса показывается ТОЛЬКО здесь (§4), без дублей на карточке.
  */
 export function ClientOrderActions({ order }: { order: Order }) {
   if (canClientCancelDirectly(order)) {
@@ -349,7 +366,7 @@ export function ClientOrderActions({ order }: { order: Order }) {
     return <RequestCancellation order={order} />;
   }
   if (isCompleted(order)) {
-    return <RepeatOrderButton order={order} />;
+    return <CompletedActions order={order} />;
   }
   return null;
 }

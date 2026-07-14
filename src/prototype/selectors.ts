@@ -780,13 +780,17 @@ function kitchenOrders(
 }
 
 /**
- * Момент входа заказа в указанный статус (§2). Разные секции кухни считают
- * время от РАЗНЫХ точек:
+ * Момент входа заказа в указанный статус. Разные секции кухни считают время от
+ * РАЗНЫХ точек:
  * - RESTAURANT_REVIEW — от createdAt (ожидание ресторана);
- * - PREPARING/READY/READY_FOR_PICKUP — от последнего history-перехода в этот
- *   статус (время приготовления/готовности), не от createdAt.
- * Если подходящего события нет — безопасный fallback updatedAt. Чистая
- * функция, историю не мутирует.
+ * - PREPARING/READY/READY_FOR_PICKUP — от последнего НАСТОЯЩЕГО перехода в этот
+ *   статус (fromStatus !== toStatus), не от createdAt.
+ *
+ * Технические события с fromStatus === toStatus (запрос на отмену, отклонение
+ * запроса, назначение/переназначение/снятие водителя) НЕ сбрасывают точку
+ * входа — иначе «Готовится N мин» и сортировка готовых прыгали бы. События из
+ * истории не удаляются (нужны для аудита), лишь игнорируются здесь.
+ * Если настоящего перехода нет — fallback updatedAt. Историю не мутирует.
  */
 export function getOrderStatusSince(order: Order, status: OrderStatus): string {
   if (status === "RESTAURANT_REVIEW") {
@@ -794,7 +798,12 @@ export function getOrderStatusSince(order: Order, status: OrderStatus): string {
   }
   const event = [...order.history]
     .reverse()
-    .find((e) => e.type === "STATUS" && e.toStatus === status);
+    .find(
+      (e) =>
+        e.type === "STATUS" &&
+        e.toStatus === status &&
+        e.fromStatus !== e.toStatus,
+    );
   return event?.occurredAt ?? order.updatedAt;
 }
 
@@ -981,10 +990,35 @@ export function getClientCancellationMessage(
 }
 
 /**
+ * Таймаут ответа ресторана для звукового расписания — ровно 7 минут. Должен
+ * совпадать с RESTAURANT_RESPONSE_TIMEOUT_MS в actions (авто-отмена).
+ */
+export const KITCHEN_REVIEW_TIMEOUT_MS = 7 * 60 * 1000;
+
+/**
+ * Новые заказы выбранного ресторана, которые ЕЩЁ должны звучать (§2): только
+ * RESTAURANT_REVIEW моложе 7 минут. На отметке 7:00 и позже заказ выпадает из
+ * звукового расписания даже до provider-sweep (визуально может показывать 0:00).
+ * Чистая функция.
+ */
+export function getAudibleKitchenReviewOrders(
+  state: PrototypeState,
+  restaurantId: string,
+  nowMs: number,
+): Order[] {
+  return state.orders.filter(
+    (order) =>
+      order.restaurant.id === restaurantId &&
+      order.status === "RESTAURANT_REVIEW" &&
+      nowMs - Date.parse(order.createdAt) < KITCHEN_REVIEW_TIMEOUT_MS,
+  );
+}
+
+/**
  * Нужен ли сейчас звуковой сигнал кухни (§2, §19). Чистая функция расписания:
  * сигнал нужен, если есть новые заказы и либо появился ещё не объявленный заказ,
- * либо прошёл интервал (по умолчанию 20с) с прошлого сигнала. Заказы другого
- * ресторана в reviewOrderIds не попадают (фильтрует вызывающий).
+ * либо прошёл интервал (по умолчанию 20с) с прошлого сигнала. В reviewOrderIds
+ * передаются только «звучащие» заказы (моложе 7 минут, выбранного ресторана).
  */
 export function isKitchenBeepDue(params: {
   reviewOrderIds: readonly string[];

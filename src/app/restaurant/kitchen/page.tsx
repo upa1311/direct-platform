@@ -16,6 +16,7 @@ import type { CancellationRequest, DeliveryMode, Order } from "@/prototype/model
 import {
   formatExpectedReady,
   formatKitchenCountdown,
+  getAudibleKitchenReviewOrders,
   getCancellationRequestForOrder,
   getKitchenAwaitingPaymentOrders,
   getKitchenNewOrders,
@@ -401,33 +402,38 @@ export default function RestaurantKitchenPage() {
   );
 
   // Refs — единый централизованный механизм сигналов (§2), без setInterval на
-  // карточку. Обновляем каждым рендером, читаем из общего тика.
-  const reviewIdsRef = useRef<string[]>([]);
+  // карточку. Синхронизируем после рендера, читаем из общего тика.
+  const stateRef = useRef(state);
+  const restaurantIdRef = useRef(selectedRestaurantId);
   const soundEnabledRef = useRef(false);
   const lastBeepRef = useRef<number | null>(null);
   const announcedRef = useRef<string[]>([]);
-  const reviewIdsKey = newOrders.map((order) => order.id).join(",");
 
-  // Синхронизируем refs после рендера (не во время) для общего тика.
   useEffect(() => {
-    reviewIdsRef.current = reviewIdsKey ? reviewIdsKey.split(",") : [];
+    stateRef.current = state;
+    restaurantIdRef.current = selectedRestaurantId;
     soundEnabledRef.current = soundEnabled;
-  }, [reviewIdsKey, soundEnabled]);
+  }, [state, selectedRestaurantId, soundEnabled]);
 
   useEffect(() => {
     // Единый тик кухни: часы + централизованное расписание звука (§2, §19).
     const tick = () => {
       setNowMs(Date.now());
-      const reviewIds = reviewIdsRef.current;
-      if (reviewIds.length === 0) {
-        // Нет новых заказов — сбрасываем расписание для мгновенного сигнала.
+      // Звучат только заказы моложе 7 минут выбранного ресторана (§2).
+      const audibleIds = getAudibleKitchenReviewOrders(
+        stateRef.current,
+        restaurantIdRef.current,
+        Date.now(),
+      ).map((order) => order.id);
+      if (audibleIds.length === 0) {
+        // Нет звучащих заказов — сбрасываем расписание для мгновенного сигнала.
         lastBeepRef.current = null;
         announcedRef.current = [];
         return;
       }
       if (!soundEnabledRef.current) return;
       const due = isKitchenBeepDue({
-        reviewOrderIds: reviewIds,
+        reviewOrderIds: audibleIds,
         announcedOrderIds: announcedRef.current,
         lastBeepAtMs: lastBeepRef.current,
         nowMs: Date.now(),
@@ -435,7 +441,7 @@ export default function RestaurantKitchenPage() {
       if (due) {
         playKitchenBeep();
         lastBeepRef.current = Date.now();
-        announcedRef.current = [...reviewIds];
+        announcedRef.current = [...audibleIds];
       }
     };
     tick();
@@ -452,10 +458,15 @@ export default function RestaurantKitchenPage() {
     setSoundBlocked(false);
     setSoundEnabled(true);
     window.localStorage.setItem(KITCHEN_SOUND_KEY, "1");
-    // Если уже есть необработанные новые заказы — один рабочий сигнал сразу.
+    // Если уже есть звучащие новые заказы — один рабочий сигнал сразу.
+    const audibleIds = getAudibleKitchenReviewOrders(
+      state,
+      selectedRestaurantId,
+      Date.now(),
+    ).map((order) => order.id);
     playKitchenBeep();
     lastBeepRef.current = Date.now();
-    announcedRef.current = [...reviewIdsRef.current];
+    announcedRef.current = audibleIds;
   };
 
   const handleDisableSound = () => {
