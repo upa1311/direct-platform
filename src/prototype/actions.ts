@@ -38,6 +38,7 @@ import {
   getCartDeliveryMode,
   getCartItemViews,
   getRestaurant,
+  isActiveOrderStatus,
   isAddressReady,
   isCustomerNameValid,
   isCustomerPhoneValid,
@@ -852,6 +853,12 @@ export function repeatOrderToCart(
 
   if (!order) {
     return fail("Заказ не найден.");
+  }
+
+  // Повторять можно только завершённый заказ (DELIVERED/PICKED_UP/CANCELED).
+  // Проверка в domain-слое, не только в UI — корзина не меняется.
+  if (isActiveOrderStatus(order.status)) {
+    return fail("Повторить можно только завершённый заказ.");
   }
 
   const restaurant = getRestaurant(state, order.restaurant.id);

@@ -6,7 +6,11 @@ import {
   acceptRestaurantOrder,
   addCartItem,
   cancelOrderByClient,
+  completePickupWithCode,
   createOrderFromCart,
+  markOrderArriving,
+  markOrderDelivered,
+  markOrderOutForDelivery,
   markOrderReady,
   repeatOrderToCart,
   setCartItemComment,
@@ -78,7 +82,8 @@ test("количество и комментарии позиций сохран
   s = setCartItemComment(s, "restaurant-2-item-1", "size-standard", "без лука");
   const created = createOrderFromCart(s);
   const orderId = created.result.orderId as string;
-  const res = repeatOrderToCart(created.state, orderId);
+  const completed = cancelOrderByClient(created.state, orderId, "тест").state;
+  const res = repeatOrderToCart(completed, orderId);
   assert.equal(res.result.ok, true);
   assert.equal(res.state.cart.items[0].quantity, 3);
   assert.equal(res.state.cart.items[0].cookingComment, "без лука");
@@ -165,7 +170,9 @@ test("прежний способ получения (PICKUP) сохраняет
     ...s,
     cart: { ...s.cart, fulfillmentChoice: "PICKUP" },
   });
-  const res = repeatOrderToCart(created.state, created.result.orderId as string);
+  const orderId = created.result.orderId as string;
+  const completed = cancelOrderByClient(created.state, orderId, "тест").state;
+  const res = repeatOrderToCart(completed, orderId);
   assert.equal(res.result.ok, true);
   assert.equal(res.state.cart.fulfillmentChoice, "PICKUP");
   assert.equal(res.result.fulfillmentChanged, false);
@@ -178,14 +185,16 @@ test("недоступный способ получения заменяетс�
     ...s,
     cart: { ...s.cart, fulfillmentChoice: "PICKUP" },
   });
+  const orderId = created.result.orderId as string;
+  const completed = cancelOrderByClient(created.state, orderId, "тест").state;
   // Ресторан 2 больше не поддерживает PICKUP — только доставка.
   const noPickup: PrototypeState = {
-    ...created.state,
-    restaurants: created.state.restaurants.map((r) =>
+    ...completed,
+    restaurants: completed.restaurants.map((r) =>
       r.id === "restaurant-2" ? { ...r, deliveryModes: ["PLATFORM_DRIVER"] } : r,
     ),
   };
-  const res = repeatOrderToCart(noPickup, created.result.orderId as string);
+  const res = repeatOrderToCart(noPickup, orderId);
   assert.equal(res.result.ok, true);
   assert.equal(res.state.cart.fulfillmentChoice, "DELIVERY");
   assert.equal(res.result.fulfillmentChanged, true);
@@ -198,7 +207,9 @@ test("оплата выводится по актуальному deliveryMode �
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
-  const res = repeatOrderToCart(created.state, created.result.orderId as string);
+  const orderId = created.result.orderId as string;
+  const completed = cancelOrderByClient(created.state, orderId, "тест").state;
+  const res = repeatOrderToCart(completed, orderId);
   assert.equal(res.result.ok, true);
   const newOrder = createOrderFromCart(res.state);
   const order = newOrder.state.orders.find(
@@ -273,4 +284,85 @@ test("завершённый заказ нельзя отменить повто
   const afterLen = second.state.orders.find((o) => o.id === orderId)?.history
     .length;
   assert.equal(afterLen, historyLen);
+});
+
+// --- Повтор разрешён только для завершённых статусов ------------------------
+
+/** Самовывоз Ресторана 2, доведённый до PICKED_UP. */
+function pickedUpOrder(): { state: PrototypeState; orderId: string } {
+  let s = createDefaultState();
+  s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
+  const created = createOrderFromCart({
+    ...s,
+    cart: { ...s.cart, fulfillmentChoice: "PICKUP" },
+  });
+  let st = created.state;
+  const orderId = created.result.orderId as string;
+  st = acceptRestaurantOrder(st, orderId, 20); // PREPARING
+  st = markOrderReady(st, orderId); // READY_FOR_PICKUP
+  const code = st.orders.find((o) => o.id === orderId)?.pickupCode as string;
+  st = completePickupWithCode(st, orderId, code).state; // PICKED_UP
+  return { state: st, orderId };
+}
+
+/** Доставка Ресторана 3 (свой курьер), доведённая до DELIVERED. */
+function deliveredOrder(): { state: PrototypeState; orderId: string } {
+  let s = createDefaultState();
+  s = updateCartAddress(s, ADDR);
+  s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
+  s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
+  const created = createOrderFromCart(s);
+  let st = created.state;
+  const orderId = created.result.orderId as string;
+  st = acceptRestaurantOrder(st, orderId, 20); // PREPARING
+  st = markOrderReady(st, orderId); // READY
+  st = markOrderOutForDelivery(st, orderId); // OUT_FOR_DELIVERY
+  st = markOrderArriving(st, orderId); // ARRIVING
+  st = markOrderDelivered(st, orderId); // DELIVERED
+  return { state: st, orderId };
+}
+
+test("повтор разрешён: CANCELED", () => {
+  const { state, orderId } = completedOrder(1);
+  assert.equal(
+    state.orders.find((o) => o.id === orderId)?.status,
+    "CANCELED",
+  );
+  assert.equal(repeatOrderToCart(state, orderId).result.ok, true);
+});
+
+test("повтор разрешён: DELIVERED", () => {
+  const { state, orderId } = deliveredOrder();
+  assert.equal(
+    state.orders.find((o) => o.id === orderId)?.status,
+    "DELIVERED",
+  );
+  assert.equal(repeatOrderToCart(state, orderId).result.ok, true);
+});
+
+test("повтор разрешён: PICKED_UP", () => {
+  const { state, orderId } = pickedUpOrder();
+  assert.equal(
+    state.orders.find((o) => o.id === orderId)?.status,
+    "PICKED_UP",
+  );
+  assert.equal(repeatOrderToCart(state, orderId).result.ok, true);
+});
+
+test("повтор запрещён для активного RESTAURANT_REVIEW; корзина не меняется", () => {
+  const { state, orderId } = reviewDeliveryOrder(2);
+  const cartBefore = JSON.stringify(state.cart);
+  const res = repeatOrderToCart(state, orderId);
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Повторить можно только завершённый заказ.");
+  assert.equal(JSON.stringify(res.state.cart), cartBefore);
+});
+
+test("повтор запрещён для активного PREPARING", () => {
+  const { state, orderId } = reviewDeliveryOrder(1);
+  let s = acceptRestaurantOrder(state, orderId, 20); // AWAITING_PAYMENT
+  s = simulateSuccessfulOnlinePayment(s, orderId); // PREPARING
+  const res = repeatOrderToCart(s, orderId);
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Повторить можно только завершённый заказ.");
 });

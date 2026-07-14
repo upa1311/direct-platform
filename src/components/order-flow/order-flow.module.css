@@ -1682,3 +1682,159 @@
     transition: none;
   }
 }
+
+/* --- Рабочий экран кухни ------------------------------------------------- */
+.kitchenScreen {
+  display: grid;
+  gap: 20px;
+}
+
+.kitchenHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.kitchenHeader h1 {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 34px);
+}
+
+.kitchenHeader .field {
+  min-width: 220px;
+}
+
+.kitchenAwaitingStrip {
+  padding: 14px 16px;
+  border: 1px solid #ead3b8;
+  border-radius: 12px;
+  background: #fff8ef;
+}
+
+.kitchenAwaitingStrip h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  color: #744a1c;
+}
+
+.kitchenAwaitingList {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.kitchenAwaitingCard {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e7dcc9;
+  border-radius: 10px;
+  background: #fffdf9;
+}
+
+.kitchenBoard {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+
+.kitchenColumn {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.kitchenColumnHead {
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #e2e4e0;
+  font-size: 17px;
+}
+
+.kitchenColumnHead span {
+  color: #68716b;
+  font-weight: 700;
+}
+
+.kitchenCard {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #e2e4e0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.kitchenCardDelayed {
+  border-color: #e0a97c;
+  box-shadow: inset 3px 0 0 #c2410c;
+}
+
+.kitchenDelayBadge {
+  width: fit-content;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #fbe7da;
+  color: #9a3d12;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.kitchenItems {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kitchenItems li {
+  display: grid;
+  gap: 3px;
+}
+
+.kitchenItemLine {
+  font-size: 15px;
+  font-weight: 650;
+  color: #202522;
+}
+
+.kitchenItemComment {
+  padding: 6px 10px;
+  border-left: 3px solid #b85f2c;
+  background: #fbf6f1;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #5a4634;
+}
+
+.kitchenUnits {
+  margin: 0;
+  color: #59625c;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.kitchenCountdown {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #f2f5f2;
+  font-size: 15px;
+  font-weight: 700;
+  color: #35433a;
+}
+
+.kitchenCountdownOverdue {
+  background: #fbe7da;
+  color: #9a3d12;
+}
+
+@media (max-width: 900px) {
+  .kitchenBoard {
+    grid-template-columns: 1fr;
+  }
+}

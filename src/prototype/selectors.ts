@@ -764,6 +764,86 @@ export function getWorkingRestaurantOrders(
   );
 }
 
+// --- Экран кухни: секции одного ресторана -----------------------------------
+
+function kitchenOrders(
+  state: PrototypeState,
+  restaurantId: string,
+  statuses: readonly OrderStatus[],
+): Order[] {
+  return state.orders.filter(
+    (order) =>
+      order.restaurant.id === restaurantId &&
+      statuses.includes(order.status),
+  );
+}
+
+/** Момент готовности заказа (из истории), иначе updatedAt. */
+export function getOrderReadySince(order: Order): string {
+  const event = [...order.history]
+    .reverse()
+    .find(
+      (e) =>
+        e.type === "STATUS" &&
+        (e.toStatus === "READY" || e.toStatus === "READY_FOR_PICKUP"),
+    );
+  return event?.occurredAt ?? order.updatedAt;
+}
+
+/** «Новые» — RESTAURANT_REVIEW, самые старые сверху (ждут дольше всех). */
+export function getKitchenNewOrders(
+  state: PrototypeState,
+  restaurantId: string,
+): Order[] {
+  return kitchenOrders(state, restaurantId, ["RESTAURANT_REVIEW"]).sort(
+    (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
+  );
+}
+
+/** «Ожидают оплаты» — AWAITING_PAYMENT (отдельная полоса, без действий кухни). */
+export function getKitchenAwaitingPaymentOrders(
+  state: PrototypeState,
+  restaurantId: string,
+): Order[] {
+  return kitchenOrders(state, restaurantId, ["AWAITING_PAYMENT"]).sort(
+    (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
+  );
+}
+
+/**
+ * «Готовятся» — PREPARING. Сортировка по expectedReadyAt по возрастанию:
+ * просроченные (наименьшее время) первыми, затем ближайшие; заказы без
+ * expectedReadyAt — в конце.
+ */
+export function getKitchenPreparingOrders(
+  state: PrototypeState,
+  restaurantId: string,
+): Order[] {
+  return kitchenOrders(state, restaurantId, ["PREPARING"]).sort((a, b) => {
+    const ta = a.expectedReadyAt
+      ? Date.parse(a.expectedReadyAt)
+      : Number.POSITIVE_INFINITY;
+    const tb = b.expectedReadyAt
+      ? Date.parse(b.expectedReadyAt)
+      : Number.POSITIVE_INFINITY;
+    return ta - tb;
+  });
+}
+
+/** «Готовы» — READY и READY_FOR_PICKUP, самые давно готовые сверху. */
+export function getKitchenReadyOrders(
+  state: PrototypeState,
+  restaurantId: string,
+): Order[] {
+  return kitchenOrders(state, restaurantId, [
+    "READY",
+    "READY_FOR_PICKUP",
+  ]).sort(
+    (a, b) =>
+      Date.parse(getOrderReadySince(a)) - Date.parse(getOrderReadySince(b)),
+  );
+}
+
 export function isAddressReady(
   address: DeliveryAddress,
   state: Pick<PrototypeState, "zones">,
