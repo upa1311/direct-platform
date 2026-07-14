@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Bell, BellRing } from "lucide-react";
 
-import flowStyles from "@/components/order-flow/order-flow.module.css";
 import kds from "@/components/kitchen/kitchen.module.css";
 import {
   MenuAvailabilitySection,
@@ -33,6 +32,7 @@ import {
   getPendingCancellationRequestsForRestaurant,
   getRestaurant,
   isKitchenBeepDue,
+  isOperationalPauseActiveAt,
   paymentStatusLabels,
 } from "@/prototype/selectors";
 
@@ -68,15 +68,13 @@ function CancellationRequestNotice({
   request: CancellationRequest;
 }) {
   return (
-    <div className={flowStyles.kitchenCancelRequest} role="status">
-      <span className={flowStyles.kitchenCancelRequestBadge}>
-        Запрос на отмену
-      </span>
+    <div className={kds.cancelNotice} role="status">
+      <span className={kds.cancelBadge}>Запрос на отмену</span>
       <p>
         Клиент запросил отмену. Администратор Direct рассматривает запрос. До
         решения продолжайте выполнение заказа.
       </p>
-      <p className={flowStyles.summaryHint}>Причина клиента: {request.reason}</p>
+      <p className={kds.subtle}>Причина клиента: {request.reason}</p>
     </div>
   );
 }
@@ -121,16 +119,16 @@ function formatElapsed(fromIso: string, nowMs: number): string {
 /** Общий блок позиций заказа с заметными комментариями (§6). */
 function KitchenItems({ order }: { order: Order }) {
   return (
-    <ul className={flowStyles.kitchenItems}>
+    <ul className={kds.items}>
       {order.items.map((item) => (
         <li key={`${item.menuItemId}-${item.selectedVariantId ?? "base"}`}>
-          <span className={flowStyles.kitchenItemLine}>
+          <span className={kds.itemLine}>
             {item.name}
             {item.selectedVariantName ? ` · ${item.selectedVariantName}` : ""} ×{" "}
             {item.quantity}
           </span>
           {item.cookingComment ? (
-            <span className={flowStyles.kitchenItemComment}>
+            <span className={kds.itemComment}>
               Комментарий: {item.cookingComment}
             </span>
           ) : null}
@@ -153,15 +151,15 @@ function KitchenCardHead({
   nowMs: number;
 }) {
   return (
-    <div className={flowStyles.orderHeader}>
+    <div className={kds.cardHead}>
       <div>
-        <h3 className={flowStyles.orderNumber}>{order.publicNumber}</h3>
-        <div className={flowStyles.inlineMeta}>
+        <h3 className={kds.orderNumber}>{order.publicNumber}</h3>
+        <div className={kds.cardMeta}>
           <span>{kitchenDeliveryLabel(order.deliveryMode)}</span>
           <span>Оплата: {paymentStatusLabels[order.paymentStatus]}</span>
         </div>
       </div>
-      <span className={flowStyles.statusBadge}>
+      <span className={kds.badge}>
         {waitingLabel} {formatElapsed(sinceIso, nowMs)}
       </span>
     </div>
@@ -184,7 +182,7 @@ function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
 
   return (
     <article
-      className={`${flowStyles.kitchenCard} ${autoClose.needsAttention ? flowStyles.kitchenCardAttention : ""}`}
+      className={`${kds.card} ${autoClose.needsAttention ? kds.cardAttention : ""}`}
     >
       <KitchenCardHead
         order={order}
@@ -193,21 +191,19 @@ function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
         nowMs={nowMs}
       />
       {autoClose.needsAttention ? (
-        <span className={flowStyles.kitchenAttentionBadge}>
-          Требуется реакция
-        </span>
+        <span className={kds.attentionBadge}>Требуется реакция</span>
       ) : null}
       <KitchenItems order={order} />
-      <p className={flowStyles.kitchenUnits}>Всего единиц: {totalUnits(order)}</p>
+      <p className={kds.units}>Всего единиц: {totalUnits(order)}</p>
       <div
-        className={`${flowStyles.kitchenCountdown} ${autoClose.urgent ? flowStyles.kitchenCountdownOverdue : ""}`}
+        className={`${kds.countdown} ${autoClose.urgent ? kds.countdownOverdue : ""}`}
       >
         {autoClose.text}
       </div>
 
       {!rejectOpen ? (
-        <div className={flowStyles.orderActions}>
-          <label className={flowStyles.field}>
+        <div className={kds.panel}>
+          <label className={kds.field}>
             <span>Время приготовления</span>
             <select
               value={prep}
@@ -238,11 +234,11 @@ function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
           </div>
         </div>
       ) : (
-        <div className={flowStyles.cancelDialog} role="group" aria-label="Отклонение заказа">
-          <h4 className={flowStyles.sectionTitle}>Причина отклонения</h4>
-          <fieldset className={flowStyles.cancelReasons}>
+        <div className={kds.dialog} role="group" aria-label="Отклонение заказа">
+          <h4 className={kds.dialogTitle}>Причина отклонения</h4>
+          <fieldset className={kds.reasonList}>
             {REJECT_REASONS.map((r) => (
-              <label className={flowStyles.cancelReasonOption} key={r}>
+              <label className={kds.reasonOption} key={r}>
                 <input
                   type="radio"
                   name={`reject-${order.id}`}
@@ -254,7 +250,7 @@ function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
             ))}
           </fieldset>
           {isOther ? (
-            <label className={flowStyles.field}>
+            <label className={kds.field}>
               <span>Ваша причина</span>
               <textarea
                 value={customReason}
@@ -307,7 +303,7 @@ function PreparingCard({
 
   return (
     <article
-      className={`${flowStyles.kitchenCard} ${countdown.overdue ? flowStyles.kitchenCardDelayed : ""}`}
+      className={`${kds.card} ${countdown.overdue ? kds.cardDelayed : ""}`}
     >
       <KitchenCardHead
         order={order}
@@ -319,18 +315,18 @@ function PreparingCard({
         <CancellationRequestNotice request={request} />
       ) : null}
       {countdown.overdue ? (
-        <span className={flowStyles.kitchenDelayBadge}>Задержка</span>
+        <span className={kds.delayBadge}>Задержка</span>
       ) : null}
       <KitchenItems order={order} />
-      <p className={flowStyles.kitchenUnits}>Всего единиц: {totalUnits(order)}</p>
-      <div className={flowStyles.inlineMeta}>
-        <span>Время приготовления: {order.preparationMinutes ?? "—"} мин</span>
+      <p className={kds.units}>Всего единиц: {totalUnits(order)}</p>
+      <div className={kds.metaLine}>
+        Время приготовления: {order.preparationMinutes ?? "—"} мин
       </div>
-      <p className={flowStyles.kitchenUnits}>
+      <p className={kds.units}>
         {formatExpectedReady(order.expectedReadyAt, timeZone)}
       </p>
       <div
-        className={`${flowStyles.kitchenCountdown} ${countdown.overdue ? flowStyles.kitchenCountdownOverdue : ""}`}
+        className={`${kds.countdown} ${countdown.overdue ? kds.countdownOverdue : ""}`}
       >
         {countdown.overdue ? countdown.text : `До готовности: ${countdown.text}`}
       </div>
@@ -358,25 +354,25 @@ function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
         : "Ожидает водителя Direct";
 
   return (
-    <article className={flowStyles.kitchenCard}>
-      <div className={flowStyles.orderHeader}>
+    <article className={kds.card}>
+      <div className={kds.cardHead}>
         <div>
-          <h3 className={flowStyles.orderNumber}>{order.publicNumber}</h3>
-          <div className={flowStyles.inlineMeta}>
+          <h3 className={kds.orderNumber}>{order.publicNumber}</h3>
+          <div className={kds.cardMeta}>
             <span>{kitchenDeliveryLabel(order.deliveryMode)}</span>
           </div>
         </div>
-        <span className={flowStyles.statusBadge}>{waitingFor}</span>
+        <span className={kds.badge}>{waitingFor}</span>
       </div>
       {request?.status === "PENDING" ? (
         <CancellationRequestNotice request={request} />
       ) : null}
-      <div className={flowStyles.inlineMeta}>
-        <span>Оплата: {paymentStatusLabels[order.paymentStatus]}</span>
+      <div className={kds.metaLine}>
+        Оплата: {paymentStatusLabels[order.paymentStatus]}
       </div>
       <KitchenItems order={order} />
-      <p className={flowStyles.kitchenUnits}>Всего единиц: {totalUnits(order)}</p>
-      <p className={flowStyles.summaryHint}>
+      <p className={kds.units}>Всего единиц: {totalUnits(order)}</p>
+      <p className={kds.subtle}>
         Готов {formatElapsed(getOrderReadySince(order), nowMs)} назад
       </p>
     </article>
@@ -489,6 +485,19 @@ export default function RestaurantKitchenPage() {
           <span className={kds.restaurantName}>{restaurant?.name ?? "—"}</span>
         </div>
         <div className={kds.toolbarRight}>
+          <span className={kds.statusChip}>
+            <span
+              className={`${kds.dot} ${
+                restaurant && isOperationalPauseActiveAt(restaurant.orderPause, nowMs)
+                  ? kds.dotWarn
+                  : kds.dotOk
+              }`}
+              aria-hidden="true"
+            />
+            {restaurant && isOperationalPauseActiveAt(restaurant.orderPause, nowMs)
+              ? "Приём на паузе"
+              : "Приём включён"}
+          </span>
           <select
             className={kds.restaurantSelect}
             aria-label="Сменить ресторан"
@@ -530,38 +539,36 @@ export default function RestaurantKitchenPage() {
       ) : null}
 
       {!isHydrated ? (
-        <div className={flowStyles.emptyState}>Загружаем кухню…</div>
+        <div className={kds.empty}>Загружаем кухню…</div>
       ) : (
         <>
           {restaurant ? (
             <RestaurantPauseControl restaurant={restaurant} nowMs={nowMs} />
           ) : null}
           {awaitingOrders.length > 0 ? (
-            <section className={flowStyles.kitchenAwaitingStrip}>
-              <h2>Ожидают оплаты — {awaitingOrders.length}</h2>
-              <div className={flowStyles.kitchenAwaitingList}>
+            <section className={kds.awaiting}>
+              <h2 className={kds.awaitingTitle}>
+                Ожидают оплаты — {awaitingOrders.length}
+              </h2>
+              <div className={kds.awaitingList}>
                 {awaitingOrders.map((order) => (
-                  <article className={flowStyles.kitchenAwaitingCard} key={order.id}>
-                    <div className={flowStyles.orderHeader}>
-                      <h3 className={flowStyles.orderNumber}>
-                        {order.publicNumber}
-                      </h3>
-                      <span className={flowStyles.statusBadge}>
+                  <article className={kds.awaitingCard} key={order.id}>
+                    <div className={kds.cardHead}>
+                      <h3 className={kds.orderNumber}>{order.publicNumber}</h3>
+                      <span className={kds.badge}>
                         {kitchenDeliveryLabel(order.deliveryMode)}
                       </span>
                     </div>
-                    <div className={flowStyles.inlineMeta}>
-                      <span>Оплата: {paymentStatusLabels[order.paymentStatus]}</span>
+                    <div className={kds.metaLine}>
+                      Оплата: {paymentStatusLabels[order.paymentStatus]}
                     </div>
                     <KitchenItems order={order} />
-                    <p className={flowStyles.kitchenUnits}>
-                      Всего единиц: {totalUnits(order)}
+                    <p className={kds.units}>Всего единиц: {totalUnits(order)}</p>
+                    <p className={kds.units}>
+                      Приготовление после оплаты:{" "}
+                      {order.preparationMinutes ?? "—"} мин
                     </p>
-                    <p className={flowStyles.kitchenUnits}>
-                      Приготовление после оплаты: {order.preparationMinutes ?? "—"}{" "}
-                      мин
-                    </p>
-                    <p className={flowStyles.summaryHint}>
+                    <p className={kds.subtle}>
                       Приготовление начнётся после подтверждения оплаты.
                     </p>
                   </article>
@@ -571,18 +578,18 @@ export default function RestaurantKitchenPage() {
           ) : null}
 
           {pendingRequests.length > 0 ? (
-            <p className={flowStyles.kitchenCancelSummary} role="status">
+            <p className={kds.cancelSummary} role="status">
               Запросы на отмену — {pendingRequests.length}
             </p>
           ) : null}
 
-          <div className={flowStyles.kitchenBoard}>
-            <section className={flowStyles.kitchenColumn}>
-              <h2 className={flowStyles.kitchenColumnHead}>
+          <div className={kds.board}>
+            <section className={kds.column}>
+              <h2 className={kds.columnHead}>
                 Новые <span>— {newOrders.length}</span>
               </h2>
               {newOrders.length === 0 ? (
-                <div className={flowStyles.emptyState}>Новых заказов нет.</div>
+                <div className={kds.empty}>Новых заказов нет.</div>
               ) : (
                 newOrders.map((order) => (
                   <NewOrderCard order={order} nowMs={nowMs} key={order.id} />
@@ -590,14 +597,12 @@ export default function RestaurantKitchenPage() {
               )}
             </section>
 
-            <section className={flowStyles.kitchenColumn}>
-              <h2 className={flowStyles.kitchenColumnHead}>
+            <section className={kds.column}>
+              <h2 className={kds.columnHead}>
                 Готовятся <span>— {preparingOrders.length}</span>
               </h2>
               {preparingOrders.length === 0 ? (
-                <div className={flowStyles.emptyState}>
-                  Сейчас ничего не готовится.
-                </div>
+                <div className={kds.empty}>Сейчас ничего не готовится.</div>
               ) : (
                 preparingOrders.map((order) => (
                   <PreparingCard
@@ -610,14 +615,12 @@ export default function RestaurantKitchenPage() {
               )}
             </section>
 
-            <section className={flowStyles.kitchenColumn}>
-              <h2 className={flowStyles.kitchenColumnHead}>
+            <section className={kds.column}>
+              <h2 className={kds.columnHead}>
                 Готовы <span>— {readyOrders.length}</span>
               </h2>
               {readyOrders.length === 0 ? (
-                <div className={flowStyles.emptyState}>
-                  Готовых заказов пока нет.
-                </div>
+                <div className={kds.empty}>Готовых заказов пока нет.</div>
               ) : (
                 readyOrders.map((order) => (
                   <ReadyCard order={order} nowMs={nowMs} key={order.id} />

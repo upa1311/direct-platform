@@ -486,7 +486,310 @@
   text-align: center;
 }
 
+/* --- Toolbar status chip (§8) -------------------------------------------- */
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--kds-border);
+  border-radius: 7px;
+  background: var(--kds-surface);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dotWarn {
+  background: var(--kds-warning);
+}
+
+/* --- Pause control layout (§5) ------------------------------------------- */
+.pauseWrap {
+  margin-bottom: 16px;
+}
+
+.pauseRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--kds-border);
+  border-radius: 8px;
+  background: var(--kds-surface);
+}
+
+.pausePanel {
+  width: 100%;
+}
+
+.pauseError {
+  margin: 8px 0 0;
+  color: var(--kds-danger);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* --- Awaiting payment strip (§3) ----------------------------------------- */
+.awaiting {
+  margin-bottom: 16px;
+  padding: 12px 14px 12px 16px;
+  border: 1px solid var(--kds-border);
+  border-left: 4px solid var(--kds-warning);
+  border-radius: 8px;
+  background: var(--kds-surface);
+}
+
+.awaitingTitle {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.awaitingList {
+  display: grid;
+  gap: 8px;
+}
+
+.awaitingCard {
+  padding: 10px 12px;
+  border: 1px solid var(--kds-border);
+  border-radius: 8px;
+  background: var(--kds-surface-subtle);
+}
+
+/* --- Board & columns ----------------------------------------------------- */
+.board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.column {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.columnHead {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--kds-muted);
+}
+
+.columnHead span {
+  color: var(--kds-text);
+}
+
+/* --- Order card ---------------------------------------------------------- */
+.card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--kds-border);
+  border-radius: 8px;
+  background: var(--kds-surface);
+}
+
+.cardAttention {
+  border-color: var(--kds-warning);
+  box-shadow: inset 3px 0 0 var(--kds-warning);
+}
+
+.cardDelayed {
+  border-color: var(--kds-danger);
+  box-shadow: inset 3px 0 0 var(--kds-danger);
+}
+
+.cardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.orderNumber {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.cardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 2px;
+  color: var(--kds-muted);
+  font-size: 12px;
+}
+
+.badge {
+  padding: 3px 8px;
+  border: 1px solid var(--kds-border-strong);
+  border-radius: 6px;
+  background: var(--kds-surface-subtle);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.items {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.items li {
+  display: grid;
+  gap: 3px;
+}
+
+.itemLine {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.itemComment {
+  padding: 5px 8px;
+  border-left: 3px solid var(--kds-border-strong);
+  background: var(--kds-surface-subtle);
+  color: var(--kds-text);
+  font-size: 13px;
+}
+
+.units {
+  margin: 0;
+  color: var(--kds-muted);
+  font-size: 13px;
+}
+
+.metaLine {
+  color: var(--kds-muted);
+  font-size: 13px;
+}
+
+.countdown {
+  padding: 6px 10px;
+  border: 1px solid var(--kds-border);
+  border-radius: 6px;
+  background: var(--kds-surface-subtle);
+  font-size: 14px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.countdownOverdue {
+  border-color: var(--kds-danger);
+  background: #fbf1f0;
+  color: var(--kds-danger);
+}
+
+.delayBadge {
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--kds-warning);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.attentionBadge {
+  width: fit-content;
+  padding: 2px 8px;
+  border: 1px solid var(--kds-warning);
+  border-radius: 6px;
+  color: var(--kds-warning);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+/* --- Cancellation request notice ----------------------------------------- */
+.cancelNotice {
+  padding: 9px 11px;
+  border: 1px solid var(--kds-border);
+  border-left: 4px solid var(--kds-danger);
+  border-radius: 7px;
+  background: var(--kds-surface);
+}
+
+.cancelNotice p {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.cancelBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--kds-danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.cancelSummary {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--kds-border);
+  border-left: 4px solid var(--kds-danger);
+  border-radius: 7px;
+  background: var(--kds-surface);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* --- Reject dialog ------------------------------------------------------- */
+.dialog {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--kds-border-strong);
+  border-radius: 8px;
+  background: var(--kds-surface);
+}
+
+.dialogTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.reasonList {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.reasonOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.subtle {
+  color: var(--kds-muted);
+  font-size: 13px;
+}
+
 /* --- Mobile -------------------------------------------------------------- */
+@media (max-width: 960px) {
+  .board {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 720px) {
   .filters {
     grid-template-columns: 1fr;

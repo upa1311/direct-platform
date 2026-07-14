@@ -91,6 +91,8 @@ function formatTimeInZone(iso: string | null, timeZone: string): string {
 
 /** Живой остаток времени паузы, слова с корректным склонением. */
 function formatRemaining(resumeAtIso: string, nowMs: number): string {
+  // §7: пока часы не инициализированы — не показываем ложный огромный остаток.
+  if (nowMs === 0) return "Рассчитываем оставшееся время…";
   const diffMs = Date.parse(resumeAtIso) - nowMs;
   const minutes = Math.max(0, Math.ceil(diffMs / 60_000));
   const lastTwo = minutes % 100;
@@ -200,6 +202,7 @@ export function RestaurantPauseControl({
   const { pauseRestaurant, resumeRestaurant } = usePrototype();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const paused = isOperationalPauseActiveAt(restaurant.orderPause, nowMs);
 
   const confirmPause = (reason: string, choice: DurationChoice) => {
@@ -217,48 +220,61 @@ export function RestaurantPauseControl({
   if (paused && restaurant.orderPause) {
     const pause = restaurant.orderPause;
     return (
-      <section className={styles.pauseActive} aria-live="polite">
-        <div>
-          <p className={styles.pauseTitle}>Приём заказов приостановлен</p>
-          <p className={styles.pauseMeta}>
-            {pause.resumeAt
-              ? `${formatRemaining(pause.resumeAt, nowMs)} · Возобновление в ${formatTimeInZone(pause.resumeAt, restaurant.timeZone)}`
-              : "До ручного включения"}
-          </p>
-          <p className={styles.pauseMeta}>Причина: {pause.reason}</p>
+      <section className={styles.pauseWrap} aria-live="polite">
+        <div className={styles.pauseActive}>
+          <div>
+            <p className={styles.pauseTitle}>Приём заказов приостановлен</p>
+            <p className={styles.pauseMeta}>
+              {pause.resumeAt
+                ? `${formatRemaining(pause.resumeAt, nowMs)} · Возобновление в ${formatTimeInZone(pause.resumeAt, restaurant.timeZone)}`
+                : "До ручного включения"}
+            </p>
+            <p className={styles.pauseMeta}>Причина: {pause.reason}</p>
+          </div>
+          <button
+            className={`${styles.btn} ${styles.btnDark}`}
+            type="button"
+            onClick={() => {
+              // §6: показываем ошибку возобновления рядом с блоком.
+              const res = resumeRestaurant(restaurant.id, "RESTAURANT");
+              setResumeError(res.ok ? null : res.error);
+            }}
+          >
+            Возобновить
+          </button>
         </div>
-        <button
-          className={`${styles.btn} ${styles.btnDark}`}
-          type="button"
-          onClick={() => resumeRestaurant(restaurant.id, "RESTAURANT")}
-        >
-          Возобновить
-        </button>
+        {resumeError ? (
+          <p className={styles.pauseError} role="alert">
+            {resumeError}
+          </p>
+        ) : null}
       </section>
     );
   }
 
   return (
-    <section className={styles.acceptStatus}>
-      <div className={styles.acceptStatusLeft}>
-        <span className={`${styles.dot} ${styles.dotOk}`} aria-hidden="true" />
-        Приём заказов включён
+    <section className={styles.pauseWrap}>
+      <div className={styles.pauseRow}>
+        <div className={styles.acceptStatusLeft}>
+          <span className={`${styles.dot} ${styles.dotOk}`} aria-hidden="true" />
+          Приём заказов включён
+        </div>
+        {!open ? (
+          <button
+            className={`${styles.btn} ${styles.btnOutline}`}
+            type="button"
+            onClick={() => {
+              setOpen(true);
+              setError(null);
+            }}
+          >
+            <Pause size={16} aria-hidden="true" />
+            Пауза
+          </button>
+        ) : null}
       </div>
-      {!open ? (
-        <button
-          className={`${styles.btn} ${styles.btnOutline}`}
-          type="button"
-          onClick={() => {
-            setOpen(true);
-            setError(null);
-          }}
-        >
-          <Pause size={16} aria-hidden="true" />
-          Пауза
-        </button>
-      ) : null}
       {open ? (
-        <div className={styles.menuRowPanel} style={{ width: "100%" }}>
+        <div className={styles.pausePanel}>
           <ReasonDurationPanel
             reasons={PAUSE_REASONS}
             durations={RESTAURANT_DURATIONS}
