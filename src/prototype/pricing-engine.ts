@@ -104,6 +104,11 @@ export function computePaidUnitsBeforeNextFree(
   if (groupSize <= 0 || config.freeQuantity <= 0 || totalEligibleUnits <= 0) {
     return null;
   }
+  // Неповторяющаяся акция срабатывает не более одного раза. Как только первая
+  // группа набрана, следующего подарка не будет — прогресс не показываем.
+  if (!config.repeat && totalEligibleUnits >= groupSize) {
+    return null;
+  }
   const remainder = totalEligibleUnits % groupSize;
   const unitsToNextGroup = remainder === 0 ? groupSize : groupSize - remainder;
   // Из оставшихся до группы единиц freeQuantity станут бесплатными.

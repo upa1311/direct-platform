@@ -28,6 +28,7 @@ import {
   getEffectiveDeliverySettings,
   getRestaurant,
   isRestaurantOpenNow,
+  shouldShowDriverAssignment,
 } from "./selectors.ts";
 import { normalizePrototypeState, upgradeToV6 } from "./prototype-store.ts";
 import {
@@ -376,4 +377,59 @@ test("изменение ресторана не пересчитывает ст
   );
   assert.equal(orderAfter, orderBefore);
   assert.equal(JSON.stringify(updated.state.settlements), settlementsBefore);
+});
+
+// --- §3: видимость блока назначения водителя --------------------------------
+
+function orderOf(state: PrototypeState, orderId: string) {
+  const order = state.orders.find((o) => o.id === orderId);
+  assert.ok(order);
+  return order;
+}
+
+test("назначение водителя скрыто в RESTAURANT_REVIEW (неоплачен)", () => {
+  const { state, orderId } = makePlatformReviewOrder();
+  assert.equal(shouldShowDriverAssignment(orderOf(state, orderId)), false);
+});
+
+test("назначение водителя скрыто в AWAITING_PAYMENT (неоплачен)", () => {
+  const { state, orderId } = makePlatformReviewOrder();
+  const awaiting = acceptRestaurantOrder(state, orderId, 20); // AWAITING_PAYMENT
+  assert.equal(shouldShowDriverAssignment(orderOf(awaiting, orderId)), false);
+});
+
+test("назначение водителя видно после оплаты (PREPARING/READY)", () => {
+  const prep = makePlatformPreparing();
+  assert.equal(
+    shouldShowDriverAssignment(orderOf(prep.state, prep.orderId)),
+    true,
+  );
+  const ready = makePlatformReady();
+  assert.equal(
+    shouldShowDriverAssignment(orderOf(ready.state, ready.orderId)),
+    true,
+  );
+});
+
+test("назначение водителя видно назначенному заказу в пути (OUT_FOR_DELIVERY)", () => {
+  const { state, orderId } = makePlatformReady();
+  const assigned = assignDriverToOrder(state, orderId, "driver-1");
+  const out = markOrderOutForDelivery(assigned.state, orderId);
+  assert.equal(shouldShowDriverAssignment(orderOf(out, orderId)), true);
+});
+
+test("назначение водителя скрыто для PICKUP и RESTAURANT_DELIVERY", () => {
+  const pickup = makePickupReview();
+  assert.equal(
+    shouldShowDriverAssignment(orderOf(pickup.state, pickup.orderId)),
+    false,
+  );
+  const rd = makeRestaurantDeliveryArriving();
+  assert.equal(shouldShowDriverAssignment(orderOf(rd.state, rd.orderId)), false);
+});
+
+test("назначение водителя скрыто у завершённого/отменённого заказа", () => {
+  const { state, orderId } = makePlatformReady();
+  const canceled = adminCancelOrder(state, orderId, "Отмена");
+  assert.equal(shouldShowDriverAssignment(orderOf(canceled.state, orderId)), false);
 });

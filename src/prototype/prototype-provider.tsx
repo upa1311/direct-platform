@@ -17,6 +17,7 @@ import {
   adminCancelOrder,
   adminSetPreparationMinutes,
   assignDriverToOrder,
+  cancelOrderByClient,
   completePickupWithCode,
   correctOrderStatus,
   createOrderFromCart,
@@ -30,6 +31,7 @@ import {
   markPickupNoShow as runPickupNoShow,
   reassignDriverForOrder,
   rejectRestaurantOrder,
+  repeatOrderToCart,
   resetPrototypeState,
   restoreDefaultTariffs,
   saveTariffs,
@@ -48,10 +50,12 @@ import {
   upsertPromotion,
   type AddCartItemResult,
   type AdminActionResult,
+  type ClientCancelResult,
   type CompletePickupResult,
   type CreateOrderResult,
   type CreateRestaurantResult,
   type OrderActionActor,
+  type RepeatOrderResult,
   type RestaurantFormInput,
   type UpdateRestaurantResult,
 } from "./actions";
@@ -105,6 +109,8 @@ interface PrototypeContextValue {
   setPaymentMethod: (paymentMethod: PaymentMethod) => void;
   setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => void;
   createOrder: () => CreateOrderResult;
+  repeatOrder: (orderId: string) => RepeatOrderResult;
+  cancelClientOrder: (orderId: string, reason: string) => ClientCancelResult;
   acceptOrder: (
     orderId: string,
     preparationMinutes: number,
@@ -336,6 +342,28 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     }
     return action.result;
   }, [replaceState]);
+
+  const repeatOrder = useCallback(
+    (orderId: string) => {
+      const action = repeatOrderToCart(stateRef.current, orderId);
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const cancelClientOrder = useCallback(
+    (orderId: string, reason: string) => {
+      const action = cancelOrderByClient(stateRef.current, orderId, reason);
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
+    },
+    [replaceState],
+  );
 
   const acceptOrder = useCallback(
     (
@@ -581,6 +609,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       setPaymentMethod,
       setFulfillmentChoice,
       createOrder,
+      repeatOrder,
+      cancelClientOrder,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,
@@ -619,6 +649,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       setPaymentMethod,
       setFulfillmentChoice,
       createOrder,
+      repeatOrder,
+      cancelClientOrder,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,

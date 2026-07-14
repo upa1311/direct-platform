@@ -20,15 +20,6 @@ import {
 } from "@/prototype/selectors";
 import { shouldAutoConfirmAddress } from "@/prototype/pricing-engine";
 
-function getProductLabel(quantity: number): string {
-  const lastTwoDigits = quantity % 100;
-  const lastDigit = quantity % 10;
-  if (lastTwoDigits >= 11 && lastTwoDigits <= 14) return "товаров";
-  if (lastDigit === 1) return "товар";
-  if (lastDigit >= 2 && lastDigit <= 4) return "товара";
-  return "товаров";
-}
-
 export default function ClientRestaurantPage() {
   const params = useParams<{ restaurantId: string }>();
   const { state, addItem, setItemQuantity } = usePrototype();
@@ -288,9 +279,7 @@ export default function ClientRestaurantPage() {
       </div>
       {cartQuantity > 0 ? (
         <Link className={flowStyles.menuCheckoutCta} href={checkoutHref}>
-          <span>
-            {cartQuantity} {getProductLabel(cartQuantity)} ·
-          </span>
+          <span>Выбрано: {cartQuantity} —</span>
           <strong>{checkoutLabel}</strong>
         </Link>
       ) : null}

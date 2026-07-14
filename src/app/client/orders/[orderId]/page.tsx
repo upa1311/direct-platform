@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
+import { ClientOrderActions } from "@/components/order-flow/client-order-actions";
 import { OrderHistory } from "@/components/order-flow/order-history";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
@@ -177,6 +178,7 @@ export default function ClientOrderPage() {
               Причина отмены: {order.cancellationReason}
             </div>
           ) : null}
+          <ClientOrderActions order={order} />
         </section>
 
         <section className={flowStyles.card}>

@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 
 import type { Order } from "@/prototype/models";
@@ -7,16 +9,24 @@ import {
   formatMoney,
   orderStatusLabels,
 } from "@/prototype/selectors";
+import { ClientOrderActions } from "./client-order-actions";
 import styles from "./order-flow.module.css";
 
 interface ClientOrderCardProps {
   order: Order;
-  linkLabel: string;
+  linkLabel?: string;
+}
+
+/** Краткий состав заказа: «Пицца × 2, Лимонад × 1». Без технических ID. */
+function briefComposition(order: Order): string {
+  return order.items
+    .map((item) => `${item.name} × ${item.quantity}`)
+    .join(", ");
 }
 
 export function ClientOrderCard({
   order,
-  linkLabel,
+  linkLabel = "Подробнее",
 }: ClientOrderCardProps) {
   return (
     <article className={styles.orderCard}>
@@ -39,6 +49,10 @@ export function ClientOrderCard({
           <dd>{formatDateTime(order.createdAt)}</dd>
         </div>
         <div className={styles.summaryRow}>
+          <dt>Состав</dt>
+          <dd>{briefComposition(order)}</dd>
+        </div>
+        <div className={styles.summaryRow}>
           <dt>Итог</dt>
           <dd>{formatMoney(order.financials.customerTotalCents)}</dd>
         </div>
@@ -48,6 +62,7 @@ export function ClientOrderCard({
           {linkLabel}
         </Link>
       </div>
+      <ClientOrderActions order={order} />
     </article>
   );
 }

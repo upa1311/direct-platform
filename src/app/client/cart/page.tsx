@@ -1,10 +1,11 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Gift } from "lucide-react";
 
+import { REPEAT_NOTICE_KEY } from "@/components/order-flow/client-order-actions";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -34,6 +35,17 @@ export default function ClientCartPage() {
   } = usePrototype();
   const [submitError, setSubmitError] = useState("");
   const [addressError, setAddressError] = useState("");
+  const [repeatNotice, setRepeatNotice] = useState("");
+  // Спокойное уведомление после повторного заказа (§6–7). Читаем sessionStorage
+  // только после монтирования, чтобы не расходиться с SSR-разметкой.
+  useEffect(() => {
+    const notice = window.sessionStorage.getItem(REPEAT_NOTICE_KEY);
+    if (notice) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое чтение browser-only storage после гидрации
+      setRepeatNotice(notice);
+      window.sessionStorage.removeItem(REPEAT_NOTICE_KEY);
+    }
+  }, []);
   const addressSectionRef = useRef<HTMLElement>(null);
   const streetFieldRef = useRef<HTMLSelectElement>(null);
   const houseFieldRef = useRef<HTMLInputElement>(null);
@@ -114,7 +126,7 @@ export default function ClientCartPage() {
     return (
       <>
         <header className={flowStyles.checkoutHeading}>
-          <h1>Ваш заказ</h1>
+          <h1>Ваш выбор</h1>
         </header>
         <div className={flowStyles.emptyState}>
           Корзина пуста. <Link href="/client/catalog">Перейти в каталог</Link>
@@ -144,7 +156,7 @@ export default function ClientCartPage() {
   return (
     <form id="checkout-cart" onSubmit={handleSubmit}>
       <header className={flowStyles.checkoutHeading}>
-        <h1>Ваш заказ</h1>
+        <h1>Ваш выбор</h1>
         <p>{restaurant.name}</p>
         <Link
           className={flowStyles.backToMenuLink}
@@ -153,6 +165,12 @@ export default function ClientCartPage() {
           ← Вернуться в меню
         </Link>
       </header>
+
+      {repeatNotice ? (
+        <p className={flowStyles.summaryHint} role="status">
+          {repeatNotice}
+        </p>
+      ) : null}
 
       <div className={flowStyles.cartLayout}>
         <div className={flowStyles.panelStack}>

@@ -7,6 +7,7 @@ import {
 } from "./default-state";
 import type {
   AppliedPromotionSnapshot,
+  CartItem,
   DeliveryAddress,
   DeliveryMode,
   DriverProfile,
@@ -746,6 +747,216 @@ export function rejectRestaurantOrder(
     },
     now,
   );
+}
+
+export interface ClientCancelResult {
+  ok: boolean;
+  error: string | null;
+}
+
+/**
+ * Клиентская отмена заказа (§10–14). Разрешена ТОЛЬКО пока ресторан ещё не
+ * принял заказ (status === RESTAURANT_REVIEW). Проверка статуса выполняется в
+ * самом action — защита от гонки, даже если UI успел показать кнопку. Причина
+ * обязательна, actor = CLIENT. Не меняет financial snapshot, цены, корзину,
+ * settlements; settlement НЕ создаётся. Повторный вызов после отмены вернёт
+ * ошибку (статус уже CANCELED) — второе событие не добавляется.
+ */
+export function cancelOrderByClient(
+  state: PrototypeState,
+  orderId: string,
+  reason: string,
+): ActionResult<ClientCancelResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const fail = (error: string): ActionResult<ClientCancelResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  if (!order) {
+    return fail("Заказ не найден.");
+  }
+  if (order.status !== "RESTAURANT_REVIEW") {
+    return fail(
+      "Ресторан уже принял заказ. Для отмены свяжитесь с рестораном или поддержкой.",
+    );
+  }
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) {
+    return fail("Укажите причину отмены.");
+  }
+
+  const now = new Date().toISOString();
+  const nextState = replaceOrder(
+    state,
+    orderId,
+    (o) => ({
+      ...o,
+      status: "CANCELED",
+      cancellationReason: normalizedReason,
+      updatedAt: now,
+      history: [
+        ...o.history,
+        {
+          id: `${o.id}-history-${o.history.length + 1}`,
+          occurredAt: now,
+          actor: "CLIENT",
+          type: "STATUS",
+          fromStatus: "RESTAURANT_REVIEW",
+          toStatus: "CANCELED",
+          message: `Клиент отменил заказ. Причина: ${normalizedReason}`,
+        },
+      ],
+    }),
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+export interface RepeatOrderResult {
+  ok: boolean;
+  error: string | null;
+  /** Названия/сообщения о недоступных позициях (пусто при успехе). */
+  unavailableItems: string[];
+  /** Хотя бы одна актуальная цена отличается от снимка заказа. */
+  pricesChanged: boolean;
+  /** Прежний способ получения недоступен — выбран другой безопасный. */
+  fulfillmentChanged: boolean;
+}
+
+/**
+ * Повтор завершённого заказа: формирует НОВУЮ корзину из АКТУАЛЬНЫХ данных
+ * (§3–9). Не копирует старые цены/скидки/финансовые снимки — итог пересчитает
+ * обычный pricing engine в корзине. Атомарно: сначала проверяет ресторан и все
+ * позиции (наличие, тот же ресторан, доступность, доступность размера), и лишь
+ * при полной валидности заменяет корзину. При любой недоступной позиции корзина
+ * НЕ меняется и возвращается полный список недоступных позиций.
+ */
+export function repeatOrderToCart(
+  state: PrototypeState,
+  orderId: string,
+): ActionResult<RepeatOrderResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const fail = (
+    error: string,
+    unavailableItems: string[] = [],
+  ): ActionResult<RepeatOrderResult> => ({
+    state,
+    result: {
+      ok: false,
+      error,
+      unavailableItems,
+      pricesChanged: false,
+      fulfillmentChanged: false,
+    },
+  });
+
+  if (!order) {
+    return fail("Заказ не найден.");
+  }
+
+  const restaurant = getRestaurant(state, order.restaurant.id);
+  if (!restaurant || !canPlacePrototypeOrder(restaurant)) {
+    return fail("Ресторан сейчас недоступен для повторного заказа.");
+  }
+
+  const unavailableItems: string[] = [];
+  const newItems: CartItem[] = [];
+  let pricesChanged = false;
+
+  for (const snap of order.items) {
+    const menuItem = state.menuItems.find((m) => m.id === snap.menuItemId);
+    if (
+      !menuItem ||
+      menuItem.restaurantId !== restaurant.id ||
+      !menuItem.available
+    ) {
+      unavailableItems.push(snap.name);
+      continue;
+    }
+
+    let variantId: string | null = null;
+    let currentVariantDeltaCents = 0;
+    if (snap.selectedVariantId) {
+      const variant = (menuItem.variants ?? []).find(
+        (v) => v.id === snap.selectedVariantId,
+      );
+      if (!variant || !variant.available) {
+        const sizeName = snap.selectedVariantName ?? "выбранный";
+        unavailableItems.push(
+          `${snap.name} — размер «${sizeName}» сейчас недоступен.`,
+        );
+        continue;
+      }
+      variantId = variant.id;
+      currentVariantDeltaCents = variant.priceDeltaCents;
+    }
+
+    // Сравнение старой и актуальной цены (база + доплата за выбранный размер).
+    if (
+      menuItem.priceCents !== snap.baseUnitPriceCents ||
+      currentVariantDeltaCents !== snap.variantPriceDeltaCents
+    ) {
+      pricesChanged = true;
+    }
+
+    newItems.push({
+      menuItemId: menuItem.id,
+      variantId,
+      quantity: snap.quantity,
+      cookingComment: snap.cookingComment ?? "",
+    });
+  }
+
+  if (unavailableItems.length > 0 || newItems.length === 0) {
+    return fail("Не удалось повторить заказ.", unavailableItems);
+  }
+
+  // Способ получения: сохранить прежний, если ресторан его поддерживает.
+  const supportsDelivery =
+    restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
+    restaurant.deliveryModes.includes("RESTAURANT_DELIVERY");
+  const supportsPickup = restaurant.deliveryModes.includes("PICKUP");
+  const desired: FulfillmentChoice =
+    order.deliveryMode === "PICKUP" ? "PICKUP" : "DELIVERY";
+  const desiredSupported =
+    desired === "PICKUP" ? supportsPickup : supportsDelivery;
+  let fulfillmentChoice = desired;
+  let fulfillmentChanged = false;
+  if (!desiredSupported) {
+    fulfillmentChoice = supportsDelivery ? "DELIVERY" : "PICKUP";
+    fulfillmentChanged = true;
+  }
+
+  const now = new Date().toISOString();
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      // Адрес и (через state.customer) контактные данные не очищаем.
+      cart: {
+        ...createEmptyCart(state.cart.address),
+        restaurantId: restaurant.id,
+        items: newItems,
+        fulfillmentChoice,
+        // Инвариант клиентской корзины — ONLINE; фактический способ оплаты
+        // выводится по deliveryMode при создании заказа (PAY_AT_RESTAURANT /
+        // CASH_TO_RESTAURANT_COURIER / ONLINE).
+        paymentMethod: "ONLINE",
+      },
+    },
+    now,
+  );
+
+  return {
+    state: nextState,
+    result: {
+      ok: true,
+      error: null,
+      unavailableItems: [],
+      pricesChanged,
+      fulfillmentChanged,
+    },
+  };
 }
 
 export function simulateSuccessfulOnlinePayment(

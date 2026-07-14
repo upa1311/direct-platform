@@ -1289,6 +1289,42 @@
   margin-top: 22px;
 }
 
+/* Компактный список недоступных позиций (без технических ID). */
+.plainList {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  list-style: disc;
+  font-weight: 500;
+}
+
+/* Спокойный встроенный диалог отмены заказа — без крупной цветной плашки. */
+.cancelDialog {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+  padding: 16px;
+  border: 1px solid #e2e4e0;
+  border-radius: 12px;
+  background: #fbfbfa;
+}
+
+.cancelReasons {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cancelReasonOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #39413c;
+  cursor: pointer;
+}
+
 .emptyState {
   padding: 30px;
   border: 1px dashed #cfd5d0;

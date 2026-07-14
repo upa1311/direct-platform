@@ -20,6 +20,7 @@ import {
   orderStatusLabels,
   paymentMethodLabels,
   paymentStatusLabels,
+  shouldShowDriverAssignment,
 } from "@/prototype/selectors";
 
 const PREP_MINUTES = [10, 15, 20, 25, 30, 40];
@@ -410,8 +411,11 @@ function OrderActions({ order }: { order: Order }) {
         </button>
       ) : null}
 
-      {/* Водитель Direct (PLATFORM_DRIVER): назначение + этапы READY → OUT → ARRIVING → DELIVERED */}
-      {isPlatform && !isTerminal ? <DriverAssignment order={order} /> : null}
+      {/* Водитель Direct (PLATFORM_DRIVER): блок назначения виден только когда
+          заказ оплачен и готов к передаче водителю либо уже в пути (§3). */}
+      {shouldShowDriverAssignment(order) ? (
+        <DriverAssignment order={order} />
+      ) : null}
       {isPlatform && order.assignedDriverId && order.status === "READY" ? (
         <button
           className={flowStyles.primaryButton}

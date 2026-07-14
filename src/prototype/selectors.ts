@@ -877,6 +877,34 @@ export function getDriverById(
   return state.drivers.find((driver) => driver.id === driverId) ?? null;
 }
 
+/** Активные курьерские статусы, в которых заказ уже «в пути» у водителя. */
+const DRIVER_ACTIVE_STATUSES: readonly OrderStatus[] = [
+  "PREPARING",
+  "READY",
+  "OUT_FOR_DELIVERY",
+  "ARRIVING",
+];
+
+/**
+ * Показывать ли в админке блок назначения водителя Direct (§3). Только для
+ * PLATFORM_DRIVER и либо когда заказ оплачен и готовится/готов (первичное
+ * назначение), либо когда водитель уже назначен и заказ в активном курьерском
+ * статусе. Исключает RESTAURANT_REVIEW, AWAITING_PAYMENT, неоплаченные и
+ * завершённые/отменённые заказы. UI-гейт дублирует доменную проверку назначения.
+ */
+export function shouldShowDriverAssignment(order: Order): boolean {
+  if (order.deliveryMode !== "PLATFORM_DRIVER") {
+    return false;
+  }
+  const eligibleForFirstAssignment =
+    order.paymentStatus === "PAID" &&
+    (order.status === "PREPARING" || order.status === "READY");
+  const alreadyAssignedActive =
+    order.assignedDriverId !== null &&
+    DRIVER_ACTIVE_STATUSES.includes(order.status);
+  return eligibleForFirstAssignment || alreadyAssignedActive;
+}
+
 /** Активные (не завершённые) статусы заказа. */
 export const ACTIVE_ORDER_STATUSES: readonly OrderStatus[] = [
   "RESTAURANT_REVIEW",
@@ -887,6 +915,27 @@ export const ACTIVE_ORDER_STATUSES: readonly OrderStatus[] = [
   "OUT_FOR_DELIVERY",
   "ARRIVING",
 ];
+
+/** Заказ клиента считается текущим (не завершённым)? */
+export function isActiveOrderStatus(status: OrderStatus): boolean {
+  return ACTIVE_ORDER_STATUSES.includes(status);
+}
+
+/** Текущие заказы клиента (активные статусы), новые сверху. */
+export function getCurrentCustomerActiveOrders(state: PrototypeState): Order[] {
+  return getCurrentCustomerOrders(state).filter((order) =>
+    isActiveOrderStatus(order.status),
+  );
+}
+
+/** Завершённые заказы клиента (DELIVERED/PICKED_UP/CANCELED), новые сверху. */
+export function getCurrentCustomerCompletedOrders(
+  state: PrototypeState,
+): Order[] {
+  return getCurrentCustomerOrders(state).filter(
+    (order) => !isActiveOrderStatus(order.status),
+  );
+}
 
 export function getRestaurantActiveOrderCount(
   state: PrototypeState,
