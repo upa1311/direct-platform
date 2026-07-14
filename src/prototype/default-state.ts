@@ -509,5 +509,6 @@ export function createDefaultState(): PrototypeState {
     cart: createEmptyCart(),
     orders: [],
     settlements: [],
+    cancellationRequests: [],
   };
 }

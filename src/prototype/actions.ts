@@ -7,6 +7,7 @@ import {
 } from "./default-state";
 import type {
   AppliedPromotionSnapshot,
+  CancellationRequest,
   CartItem,
   DeliveryAddress,
   DeliveryMode,
@@ -776,9 +777,14 @@ export function cancelOrderByClient(
   if (!order) {
     return fail("Заказ не найден.");
   }
-  if (order.status !== "RESTAURANT_REVIEW") {
+  // §6: бесплатная самостоятельная отмена — до начала приготовления, т.е.
+  // RESTAURANT_REVIEW или AWAITING_PAYMENT (онлайн-заказ ещё не оплачен).
+  if (
+    order.status !== "RESTAURANT_REVIEW" &&
+    order.status !== "AWAITING_PAYMENT"
+  ) {
     return fail(
-      "Ресторан уже принял заказ. Для отмены свяжитесь с рестораном или поддержкой.",
+      "Ресторан уже начал готовить заказ. Самостоятельная отмена недоступна. Отправьте запрос на отмену.",
     );
   }
   const normalizedReason = reason.trim();
@@ -787,6 +793,7 @@ export function cancelOrderByClient(
   }
 
   const now = new Date().toISOString();
+  const fromStatus = order.status;
   const nextState = replaceOrder(
     state,
     orderId,
@@ -802,12 +809,315 @@ export function cancelOrderByClient(
           occurredAt: now,
           actor: "CLIENT",
           type: "STATUS",
-          fromStatus: "RESTAURANT_REVIEW",
+          fromStatus,
           toStatus: "CANCELED",
           message: `Клиент отменил заказ. Причина: ${normalizedReason}`,
         },
       ],
     }),
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Таймаут ответа ресторана на новый заказ (§4): ровно 7 минут. */
+export const RESTAURANT_RESPONSE_TIMEOUT_MS = 7 * 60 * 1000;
+
+/**
+ * Автозакрытие неотвеченных заказов (§4). Идемпотентный чистый sweep: любой
+ * заказ в RESTAURANT_REVIEW, у которого с `createdAt` прошло ≥ 7 минут,
+ * переводится в CANCELED (actor SYSTEM). Если ресторан успел принять/отклонить —
+ * заказ уже не в RESTAURANT_REVIEW и не трогается. Не меняет оплату, snapshot,
+ * settlements, корзину, водителя. Повторный запуск не добавляет второе событие
+ * (уже CANCELED). Проверяет заказы ВСЕХ ресторанов.
+ */
+export function expireUnansweredRestaurantOrders(
+  state: PrototypeState,
+  nowIso: string,
+): PrototypeState {
+  const nowMs = Date.parse(nowIso);
+  const expiredIds = state.orders
+    .filter(
+      (order) =>
+        order.status === "RESTAURANT_REVIEW" &&
+        nowMs - Date.parse(order.createdAt) >= RESTAURANT_RESPONSE_TIMEOUT_MS,
+    )
+    .map((order) => order.id);
+
+  if (expiredIds.length === 0) {
+    return state;
+  }
+
+  const expiredSet = new Set(expiredIds);
+  const orders = state.orders.map((order) => {
+    if (!expiredSet.has(order.id)) {
+      return order;
+    }
+    return {
+      ...order,
+      status: "CANCELED" as OrderStatus,
+      cancellationReason: "Ресторан не ответил в течение 7 минут",
+      updatedAt: nowIso,
+      history: [
+        ...order.history,
+        {
+          id: `${order.id}-history-${order.history.length + 1}`,
+          occurredAt: nowIso,
+          actor: "SYSTEM" as const,
+          type: "STATUS" as const,
+          fromStatus: "RESTAURANT_REVIEW" as OrderStatus,
+          toStatus: "CANCELED" as OrderStatus,
+          message:
+            "Заказ автоматически закрыт: ресторан не ответил в течение 7 минут.",
+        },
+      ],
+    };
+  });
+
+  return finalizeMutation(state, { ...state, orders }, nowIso);
+}
+
+/** Статусы заказа, в которых доступен только ЗАПРОС на отмену (§10). */
+const CANCELLATION_REQUEST_STATUSES: readonly OrderStatus[] = [
+  "PREPARING",
+  "READY",
+  "READY_FOR_PICKUP",
+  "OUT_FOR_DELIVERY",
+  "ARRIVING",
+];
+
+export interface RequestCancellationResult {
+  ok: boolean;
+  error: string | null;
+}
+
+function cancellationRequestId(orderId: string): string {
+  return `cancellation-request-${orderId}`;
+}
+
+/**
+ * Клиентский запрос на отмену уже готовящегося заказа (§10). Не меняет статус
+ * заказа, оплату, snapshot; settlement не создаётся. Разрешён только для
+ * активных статусов приготовления/доставки; RESTAURANT_REVIEW/AWAITING_PAYMENT
+ * используют бесплатную отмену, терминальные — запрещены. Один запрос на заказ:
+ * повторный вызов при уже существующем запросе не создаёт дубликат.
+ */
+export function requestOrderCancellationByClient(
+  state: PrototypeState,
+  orderId: string,
+  reason: string,
+): ActionResult<RequestCancellationResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const fail = (error: string): ActionResult<RequestCancellationResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  if (!order) {
+    return fail("Заказ не найден.");
+  }
+  if (!CANCELLATION_REQUEST_STATUSES.includes(order.status)) {
+    return fail("Для этого заказа запрос на отмену недоступен.");
+  }
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) {
+    return fail("Укажите причину запроса.");
+  }
+  const requestId = cancellationRequestId(orderId);
+  if (state.cancellationRequests.some((r) => r.id === requestId)) {
+    return fail("Запрос на отмену уже отправлен.");
+  }
+
+  const now = new Date().toISOString();
+  const request: CancellationRequest = {
+    id: requestId,
+    orderId,
+    customerId: order.customer.id,
+    restaurantId: order.restaurant.id,
+    requestedAt: now,
+    requestedOrderStatus: order.status,
+    paymentMethod: order.paymentMethod,
+    reason: normalizedReason,
+    status: "PENDING",
+    resolvedAt: null,
+    resolvedBy: null,
+    resolutionNote: null,
+  };
+
+  const orders = state.orders.map((o) =>
+    o.id === orderId
+      ? {
+          ...o,
+          updatedAt: now,
+          history: [
+            ...o.history,
+            {
+              id: `${o.id}-history-${o.history.length + 1}`,
+              occurredAt: now,
+              actor: "CLIENT" as const,
+              type: "STATUS" as const,
+              fromStatus: o.status,
+              toStatus: o.status,
+              message: `Клиент отправил запрос на отмену. Причина: ${normalizedReason}`,
+            },
+          ],
+        }
+      : o,
+  );
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders,
+      cancellationRequests: [...state.cancellationRequests, request],
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Администратор отклоняет запрос на отмену (§12). Заказ не меняется и продолжает
+ * выполняться. Причина обязательна. Идемпотентно: не-PENDING запрос не меняется.
+ */
+export function rejectCancellationRequest(
+  state: PrototypeState,
+  requestId: string,
+  note: string,
+): ActionResult<AdminActionResult> {
+  const request = state.cancellationRequests.find((r) => r.id === requestId);
+  const normalizedNote = note.trim();
+  const fail = (error: string): ActionResult<AdminActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  if (!request) return fail("Запрос не найден.");
+  if (request.status !== "PENDING") return fail("Запрос уже рассмотрен.");
+  if (!normalizedNote) return fail("Укажите причину решения.");
+
+  const now = new Date().toISOString();
+  const order = state.orders.find((o) => o.id === request.orderId);
+  const orders = order
+    ? state.orders.map((o) =>
+        o.id === order.id
+          ? {
+              ...o,
+              updatedAt: now,
+              history: [
+                ...o.history,
+                adminHistoryEvent(
+                  o,
+                  1,
+                  now,
+                  "STATUS",
+                  o.status,
+                  o.status,
+                  `Администратор Direct отклонил запрос на отмену. Причина: ${normalizedNote}`,
+                ),
+              ],
+            }
+          : o,
+      )
+    : state.orders;
+
+  const cancellationRequests = state.cancellationRequests.map((r) =>
+    r.id === requestId
+      ? {
+          ...r,
+          status: "REJECTED" as const,
+          resolvedAt: now,
+          resolvedBy: "ADMIN" as const,
+          resolutionNote: normalizedNote,
+        }
+      : r,
+  );
+
+  const nextState = finalizeMutation(
+    state,
+    { ...state, orders, cancellationRequests },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Администратор одобряет отмену после начала приготовления (§12). Атомарно:
+ * заказ → CANCELED, запрос → APPROVED, назначенный водитель освобождается.
+ * КРИТИЧНО: оплата НЕ меняется (ONLINE/PAID остаётся PAID, paidAt не очищается),
+ * refund автоматически НЕ выполняется, financial snapshot не меняется,
+ * settlement не создаётся и не удаляется. Идемпотентно: не-PENDING запрос или
+ * терминальный заказ не изменяются.
+ */
+export function approveCancellationRequest(
+  state: PrototypeState,
+  requestId: string,
+  note: string,
+): ActionResult<AdminActionResult> {
+  const request = state.cancellationRequests.find((r) => r.id === requestId);
+  const normalizedNote = note.trim();
+  const fail = (error: string): ActionResult<AdminActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  if (!request) return fail("Запрос не найден.");
+  if (request.status !== "PENDING") return fail("Запрос уже рассмотрен.");
+  if (!normalizedNote) return fail("Укажите решение.");
+
+  const order = state.orders.find((o) => o.id === request.orderId);
+  if (!order) return fail("Заказ не найден.");
+  if (isTerminalOrderStatus(order.status)) {
+    return fail("Заказ уже завершён или отменён.");
+  }
+
+  const now = new Date().toISOString();
+  const wasOnlinePaid =
+    order.paymentMethod === "ONLINE" && order.paymentStatus === "PAID";
+  const refundNote = wasOnlinePaid
+    ? "Администратор Direct одобрил отмену после начала приготовления. Автоматический возврат не выполнялся."
+    : "Администратор Direct одобрил отмену после начала приготовления.";
+
+  const updatedOrder: Order = {
+    ...order,
+    status: "CANCELED",
+    cancellationReason: `Отмена одобрена администратором Direct. ${normalizedNote}`,
+    // Оплату и paidAt НЕ трогаем — возврат отдельным решением.
+    assignedDriverId: null,
+    driverAssignedAt: null,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      adminHistoryEvent(
+        order,
+        1,
+        now,
+        "STATUS",
+        order.status,
+        "CANCELED",
+        refundNote,
+      ),
+    ],
+  };
+
+  const cancellationRequests = state.cancellationRequests.map((r) =>
+    r.id === requestId
+      ? {
+          ...r,
+          status: "APPROVED" as const,
+          resolvedAt: now,
+          resolvedBy: "ADMIN" as const,
+          resolutionNote: normalizedNote,
+        }
+      : r,
+  );
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === order.id ? updatedOrder : o)),
+      drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+      cancellationRequests,
+    },
     now,
   );
   return { state: nextState, result: { ok: true, error: null } };

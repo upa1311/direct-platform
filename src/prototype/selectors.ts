@@ -1,5 +1,6 @@
 import type {
   AppliedPromotionSnapshot,
+  CancellationRequest,
   CartItem,
   CartPricing,
   DeliveryAddress,
@@ -897,6 +898,115 @@ export function getKitchenReadyOrders(
     (a, b) =>
       Date.parse(getOrderReadySince(a)) - Date.parse(getOrderReadySince(b)),
   );
+}
+
+// --- Отмена и запросы на отмену ----------------------------------------------
+
+/** Может ли клиент бесплатно и сразу отменить заказ (§6): до приготовления. */
+export function canClientCancelDirectly(order: Order): boolean {
+  return (
+    order.status === "RESTAURANT_REVIEW" || order.status === "AWAITING_PAYMENT"
+  );
+}
+
+/** Может ли клиент отправить ЗАПРОС на отмену (§10): активное приготовление/доставка. */
+export function canClientRequestCancellation(order: Order): boolean {
+  return (
+    order.status === "PREPARING" ||
+    order.status === "READY" ||
+    order.status === "READY_FOR_PICKUP" ||
+    order.status === "OUT_FOR_DELIVERY" ||
+    order.status === "ARRIVING"
+  );
+}
+
+/** Запрос на отмену для заказа, либо null. */
+export function getCancellationRequestForOrder(
+  state: PrototypeState,
+  orderId: string,
+): CancellationRequest | null {
+  return (
+    state.cancellationRequests.find((r) => r.orderId === orderId) ?? null
+  );
+}
+
+/** Все ожидающие (PENDING) запросы на отмену. */
+export function getPendingCancellationRequests(
+  state: PrototypeState,
+): CancellationRequest[] {
+  return state.cancellationRequests.filter((r) => r.status === "PENDING");
+}
+
+/** Ожидающие запросы на отмену конкретного ресторана. */
+export function getPendingCancellationRequestsForRestaurant(
+  state: PrototypeState,
+  restaurantId: string,
+): CancellationRequest[] {
+  return state.cancellationRequests.filter(
+    (r) => r.status === "PENDING" && r.restaurantId === restaurantId,
+  );
+}
+
+/** Крупное предупреждение после начала приготовления (§8), по способу оплаты. */
+export function getPostPreparationWarning(order: Order): string {
+  if (order.paymentMethod === "CASH_TO_RESTAURANT_COURIER") {
+    return "Ресторан уже начал готовить заказ. Для отмены отправьте запрос администратору Direct. Если приготовленный заказ не будет получен, это сохранится в истории и может ограничить будущие заказы без предоплаты.";
+  }
+  if (order.paymentMethod === "PAY_AT_RESTAURANT") {
+    return "Ресторан уже начал готовить заказ. Для отмены отправьте запрос администратору Direct. Неявка после приготовления сохранится в истории и может ограничить будущие заказы без предоплаты.";
+  }
+  // ONLINE (оплачен) и прочее.
+  return "Ресторан уже начал готовить заказ. Самостоятельная отмена недоступна. Вы можете отправить запрос администратору Direct. Возврат оплаты не гарантируется.";
+}
+
+/** Причина, которую проставляет автозакрытие неотвеченного заказа (§4). */
+export const AUTO_CANCEL_REASON = "Ресторан не ответил в течение 7 минут";
+
+/** Дружелюбное сообщение клиенту при автоотмене из-за молчания ресторана (§5). */
+export function getClientAutoCancelMessage(order: Order): string | null {
+  return order.status === "CANCELED" &&
+    order.cancellationReason === AUTO_CANCEL_REASON
+    ? "Ресторан не ответил вовремя. Попробуйте оформить заказ позже или выберите другой ресторан."
+    : null;
+}
+
+/** Статусное сообщение клиенту по его запросу на отмену (§13), либо null. */
+export function getClientCancellationMessage(
+  request: CancellationRequest | null,
+): string | null {
+  if (!request) return null;
+  if (request.status === "PENDING") return "Запрос на отмену рассматривается";
+  if (request.status === "APPROVED") return "Отмена одобрена администратором";
+  return `Запрос на отмену отклонён: ${request.resolutionNote ?? "решение администратора"}`;
+}
+
+/**
+ * Нужен ли сейчас звуковой сигнал кухни (§2, §19). Чистая функция расписания:
+ * сигнал нужен, если есть новые заказы и либо появился ещё не объявленный заказ,
+ * либо прошёл интервал (по умолчанию 20с) с прошлого сигнала. Заказы другого
+ * ресторана в reviewOrderIds не попадают (фильтрует вызывающий).
+ */
+export function isKitchenBeepDue(params: {
+  reviewOrderIds: readonly string[];
+  announcedOrderIds: readonly string[];
+  lastBeepAtMs: number | null;
+  nowMs: number;
+  intervalMs?: number;
+}): boolean {
+  const interval = params.intervalMs ?? 20_000;
+  if (params.reviewOrderIds.length === 0) {
+    return false;
+  }
+  const hasUnannounced = params.reviewOrderIds.some(
+    (id) => !params.announcedOrderIds.includes(id),
+  );
+  if (hasUnannounced) {
+    return true;
+  }
+  if (params.lastBeepAtMs === null) {
+    return true;
+  }
+  return params.nowMs - params.lastBeepAtMs >= interval;
 }
 
 export function isAddressReady(

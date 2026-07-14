@@ -11,6 +11,9 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatMoney,
+  getCancellationRequestForOrder,
+  getClientAutoCancelMessage,
+  getClientCancellationMessage,
   getDeliveryModeProviderLabel,
   getOrder,
   orderStatusLabels,
@@ -172,6 +175,20 @@ export default function ClientOrderPage() {
                 не списываются.
               </p>
             </div>
+          ) : null}
+          {getClientAutoCancelMessage(order) ? (
+            <div className={flowStyles.warningNotice} role="status">
+              {getClientAutoCancelMessage(order)}
+            </div>
+          ) : null}
+          {getClientCancellationMessage(
+            getCancellationRequestForOrder(state, order.id),
+          ) ? (
+            <p className={flowStyles.summaryHint} role="status">
+              {getClientCancellationMessage(
+                getCancellationRequestForOrder(state, order.id),
+              )}
+            </p>
           ) : null}
           {order.cancellationReason ? (
             <div className={flowStyles.warningNotice}>

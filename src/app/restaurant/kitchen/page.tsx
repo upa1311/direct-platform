@@ -1,23 +1,78 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
+import {
+  disableKitchenSound,
+  enableKitchenSound,
+  KITCHEN_SOUND_KEY,
+  playKitchenBeep,
+} from "@/components/workspaces/kitchen-sound";
 import { usePrototype } from "@/prototype/prototype-provider";
-import type { DeliveryMode, Order } from "@/prototype/models";
+import { RESTAURANT_RESPONSE_TIMEOUT_MS } from "@/prototype/actions";
+import type { CancellationRequest, DeliveryMode, Order } from "@/prototype/models";
 import {
   formatExpectedReady,
   formatKitchenCountdown,
+  getCancellationRequestForOrder,
   getKitchenAwaitingPaymentOrders,
   getKitchenNewOrders,
   getKitchenPreparingOrders,
   getKitchenReadyOrders,
   getOrderReadySince,
   getOrderStatusSince,
+  getPendingCancellationRequestsForRestaurant,
   getRestaurant,
+  isKitchenBeepDue,
   paymentStatusLabels,
 } from "@/prototype/selectors";
+
+const ATTENTION_THRESHOLD_MS = 2 * 60 * 1000;
+const URGENT_THRESHOLD_MS = 60 * 1000;
+
+/** Обратный отсчёт до автозакрытия неотвеченного заказа (§3). */
+function formatAutoClose(
+  createdAtIso: string,
+  nowMs: number,
+): { text: string; needsAttention: boolean; urgent: boolean } {
+  if (nowMs === 0) {
+    return { text: "—", needsAttention: false, urgent: false };
+  }
+  const elapsed = nowMs - Date.parse(createdAtIso);
+  const remainingMs = RESTAURANT_RESPONSE_TIMEOUT_MS - elapsed;
+  const remSec = Math.max(0, Math.ceil(remainingMs / 1000));
+  const mmss = `${Math.floor(remSec / 60)}:${String(remSec % 60).padStart(2, "0")}`;
+  const urgent = remainingMs <= URGENT_THRESHOLD_MS;
+  return {
+    text: urgent
+      ? `Заказ будет автоматически закрыт через ${mmss}`
+      : `До автоматического закрытия: ${mmss}`,
+    needsAttention: elapsed >= ATTENTION_THRESHOLD_MS,
+    urgent,
+  };
+}
+
+/** Заметный блок уведомления кухни о запросе клиента на отмену (§11). */
+function CancellationRequestNotice({
+  request,
+}: {
+  request: CancellationRequest;
+}) {
+  return (
+    <div className={flowStyles.kitchenCancelRequest} role="status">
+      <span className={flowStyles.kitchenCancelRequestBadge}>
+        Запрос на отмену
+      </span>
+      <p>
+        Клиент запросил отмену. Администратор Direct рассматривает запрос. До
+        решения продолжайте выполнение заказа.
+      </p>
+      <p className={flowStyles.summaryHint}>Причина клиента: {request.reason}</p>
+    </div>
+  );
+}
 
 const PREP_OPTIONS = [10, 15, 20, 25, 30, 40] as const;
 
@@ -118,17 +173,30 @@ function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
 
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
+  const autoClose = formatAutoClose(order.createdAt, nowMs);
 
   return (
-    <article className={flowStyles.kitchenCard}>
+    <article
+      className={`${flowStyles.kitchenCard} ${autoClose.needsAttention ? flowStyles.kitchenCardAttention : ""}`}
+    >
       <KitchenCardHead
         order={order}
         waitingLabel="Ждёт"
         sinceIso={getOrderStatusSince(order, "RESTAURANT_REVIEW")}
         nowMs={nowMs}
       />
+      {autoClose.needsAttention ? (
+        <span className={flowStyles.kitchenAttentionBadge}>
+          Требуется реакция
+        </span>
+      ) : null}
       <KitchenItems order={order} />
       <p className={flowStyles.kitchenUnits}>Всего единиц: {totalUnits(order)}</p>
+      <div
+        className={`${flowStyles.kitchenCountdown} ${autoClose.urgent ? flowStyles.kitchenCountdownOverdue : ""}`}
+      >
+        {autoClose.text}
+      </div>
 
       {!rejectOpen ? (
         <div className={flowStyles.orderActions}>
@@ -220,8 +288,9 @@ function PreparingCard({
   nowMs: number;
   timeZone: string;
 }) {
-  const { markReady } = usePrototype();
+  const { state, markReady } = usePrototype();
   const countdown = formatKitchenCountdown(order.expectedReadyAt, nowMs);
+  const request = getCancellationRequestForOrder(state, order.id);
   const readyLabel =
     order.deliveryMode === "PICKUP"
       ? "Готово к выдаче"
@@ -239,6 +308,9 @@ function PreparingCard({
         sinceIso={getOrderStatusSince(order, "PREPARING")}
         nowMs={nowMs}
       />
+      {request?.status === "PENDING" ? (
+        <CancellationRequestNotice request={request} />
+      ) : null}
       {countdown.overdue ? (
         <span className={flowStyles.kitchenDelayBadge}>Задержка</span>
       ) : null}
@@ -269,6 +341,8 @@ function PreparingCard({
 }
 
 function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
+  const { state } = usePrototype();
+  const request = getCancellationRequestForOrder(state, order.id);
   const waitingFor =
     order.status === "READY_FOR_PICKUP"
       ? "Ожидает клиента"
@@ -287,6 +361,9 @@ function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
         </div>
         <span className={flowStyles.statusBadge}>{waitingFor}</span>
       </div>
+      {request?.status === "PENDING" ? (
+        <CancellationRequestNotice request={request} />
+      ) : null}
       <div className={flowStyles.inlineMeta}>
         <span>Оплата: {paymentStatusLabels[order.paymentStatus]}</span>
       </div>
@@ -307,15 +384,8 @@ export default function RestaurantKitchenPage() {
     workspaceRestaurants,
   } = useRestaurantWorkspace();
   const [nowMs, setNowMs] = useState(0);
-
-  useEffect(() => {
-    // Часы кухни: стартуем сразу после монтирования (SSR-safe) и тикаем раз в
-    // секунду для обратного отсчёта и таймеров просрочки.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- инициализация клиентских часов после гидрации
-    setNowMs(Date.now());
-    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(intervalId);
-  }, []);
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [soundBlocked, setSoundBlocked] = useState(false);
 
   const restaurant = getRestaurant(state, selectedRestaurantId);
   const newOrders = getKitchenNewOrders(state, selectedRestaurantId);
@@ -325,11 +395,115 @@ export default function RestaurantKitchenPage() {
   );
   const preparingOrders = getKitchenPreparingOrders(state, selectedRestaurantId);
   const readyOrders = getKitchenReadyOrders(state, selectedRestaurantId);
+  const pendingRequests = getPendingCancellationRequestsForRestaurant(
+    state,
+    selectedRestaurantId,
+  );
+
+  // Refs — единый централизованный механизм сигналов (§2), без setInterval на
+  // карточку. Обновляем каждым рендером, читаем из общего тика.
+  const reviewIdsRef = useRef<string[]>([]);
+  const soundEnabledRef = useRef(false);
+  const lastBeepRef = useRef<number | null>(null);
+  const announcedRef = useRef<string[]>([]);
+  const reviewIdsKey = newOrders.map((order) => order.id).join(",");
+
+  // Синхронизируем refs после рендера (не во время) для общего тика.
+  useEffect(() => {
+    reviewIdsRef.current = reviewIdsKey ? reviewIdsKey.split(",") : [];
+    soundEnabledRef.current = soundEnabled;
+  }, [reviewIdsKey, soundEnabled]);
+
+  useEffect(() => {
+    // Единый тик кухни: часы + централизованное расписание звука (§2, §19).
+    const tick = () => {
+      setNowMs(Date.now());
+      const reviewIds = reviewIdsRef.current;
+      if (reviewIds.length === 0) {
+        // Нет новых заказов — сбрасываем расписание для мгновенного сигнала.
+        lastBeepRef.current = null;
+        announcedRef.current = [];
+        return;
+      }
+      if (!soundEnabledRef.current) return;
+      const due = isKitchenBeepDue({
+        reviewOrderIds: reviewIds,
+        announcedOrderIds: announcedRef.current,
+        lastBeepAtMs: lastBeepRef.current,
+        nowMs: Date.now(),
+      });
+      if (due) {
+        playKitchenBeep();
+        lastBeepRef.current = Date.now();
+        announcedRef.current = [...reviewIds];
+      }
+    };
+    tick();
+    const intervalId = window.setInterval(tick, 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const handleEnableSound = async () => {
+    const ok = await enableKitchenSound();
+    if (!ok) {
+      setSoundBlocked(true);
+      return;
+    }
+    setSoundBlocked(false);
+    setSoundEnabled(true);
+    window.localStorage.setItem(KITCHEN_SOUND_KEY, "1");
+    // Если уже есть необработанные новые заказы — один рабочий сигнал сразу.
+    playKitchenBeep();
+    lastBeepRef.current = Date.now();
+    announcedRef.current = [...reviewIdsRef.current];
+  };
+
+  const handleDisableSound = () => {
+    disableKitchenSound();
+    setSoundEnabled(false);
+    window.localStorage.setItem(KITCHEN_SOUND_KEY, "0");
+  };
 
   return (
     <div className={flowStyles.kitchenScreen}>
       <header className={flowStyles.kitchenHeader}>
-        <h1>Кухня: {restaurant?.name ?? "—"}</h1>
+        <div>
+          <h1>Кухня: {restaurant?.name ?? "—"}</h1>
+          <div className={flowStyles.kitchenSoundControls}>
+            {!soundEnabled ? (
+              <button
+                className={flowStyles.secondaryButton}
+                type="button"
+                onClick={handleEnableSound}
+              >
+                Включить звук
+              </button>
+            ) : (
+              <>
+                <span className={flowStyles.kitchenSoundOn}>Звук включён</span>
+                <button
+                  className={flowStyles.secondaryButton}
+                  type="button"
+                  onClick={() => playKitchenBeep()}
+                >
+                  Проверить звук
+                </button>
+                <button
+                  className={flowStyles.secondaryButton}
+                  type="button"
+                  onClick={handleDisableSound}
+                >
+                  Выключить звук
+                </button>
+              </>
+            )}
+            {soundBlocked ? (
+              <span className={flowStyles.summaryHint}>
+                Браузер заблокировал звук. Нажмите «Включить звук» ещё раз.
+              </span>
+            ) : null}
+          </div>
+        </div>
         <label className={flowStyles.field}>
           <span>Сменить ресторан</span>
           <select
@@ -381,6 +555,12 @@ export default function RestaurantKitchenPage() {
                 ))}
               </div>
             </section>
+          ) : null}
+
+          {pendingRequests.length > 0 ? (
+            <p className={flowStyles.kitchenCancelSummary} role="status">
+              Запросы на отмену — {pendingRequests.length}
+            </p>
           ) : null}
 
           <div className={flowStyles.kitchenBoard}>

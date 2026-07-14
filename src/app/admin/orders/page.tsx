@@ -16,12 +16,15 @@ import {
   formatMoney,
   getAvailableDrivers,
   getDriverById,
+  getOrder,
+  getPendingCancellationRequests,
   getRestaurant,
   orderStatusLabels,
   paymentMethodLabels,
   paymentStatusLabels,
   shouldShowDriverAssignment,
 } from "@/prototype/selectors";
+import type { CancellationRequest } from "@/prototype/models";
 
 const PREP_MINUTES = [10, 15, 20, 25, 30, 40];
 
@@ -463,6 +466,178 @@ function OrderActions({ order }: { order: Order }) {
   );
 }
 
+/** Карточка одного PENDING-запроса на отмену с действиями администратора (§12). */
+function CancellationRequestCard({
+  request,
+  onOpenOrder,
+}: {
+  request: CancellationRequest;
+  onOpenOrder: (publicNumber: string) => void;
+}) {
+  const { state, approveCancellation, rejectCancellation } = usePrototype();
+  const order = getOrder(state, request.orderId);
+  const restaurant = getRestaurant(state, request.restaurantId);
+  const [mode, setMode] = useState<"none" | "approve" | "reject">("none");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  if (!order) return null;
+  const paidOnline =
+    order.paymentMethod === "ONLINE" && order.paymentStatus === "PAID";
+
+  const submit = () => {
+    const result =
+      mode === "approve"
+        ? approveCancellation(request.id, note)
+        : rejectCancellation(request.id, note);
+    if (!result.ok) {
+      setError(result.error ?? "Не удалось выполнить действие.");
+      return;
+    }
+    setMode("none");
+    setNote("");
+    setError(null);
+  };
+
+  return (
+    <article className={flowStyles.orderCard}>
+      <div className={flowStyles.orderHeader}>
+        <div>
+          <h3 className={flowStyles.orderNumber}>Заказ {order.publicNumber}</h3>
+          <p>
+            {restaurant?.name ?? order.restaurant.name} · {order.customer.name}
+          </p>
+        </div>
+        <span className={flowStyles.statusBadge}>
+          {orderStatusLabels[order.status]}
+        </span>
+      </div>
+      <dl className={flowStyles.definitionList}>
+        <div className={flowStyles.definitionRow}>
+          <dt>Оплата</dt>
+          <dd>{paymentMethodLabels[order.paymentMethod]}</dd>
+        </div>
+        <div className={flowStyles.definitionRow}>
+          <dt>Оплачено онлайн</dt>
+          <dd>{paidOnline ? "Да" : "Нет"}</dd>
+        </div>
+        <div className={flowStyles.definitionRow}>
+          <dt>Причина клиента</dt>
+          <dd>{request.reason}</dd>
+        </div>
+        <div className={flowStyles.definitionRow}>
+          <dt>Запрос создан</dt>
+          <dd>{formatDateTime(request.requestedAt)}</dd>
+        </div>
+      </dl>
+      {paidOnline ? (
+        <p className={flowStyles.summaryHint}>
+          Возврат оплаты не выполняется автоматически. Требуется отдельное решение
+          по возврату.
+        </p>
+      ) : null}
+
+      {mode === "none" ? (
+        <div className={flowStyles.buttonRow}>
+          <button
+            className={flowStyles.dangerButton}
+            type="button"
+            onClick={() => {
+              setMode("approve");
+              setError(null);
+            }}
+          >
+            Одобрить отмену
+          </button>
+          <button
+            className={flowStyles.secondaryButton}
+            type="button"
+            onClick={() => {
+              setMode("reject");
+              setError(null);
+            }}
+          >
+            Отклонить запрос
+          </button>
+          <button
+            className={flowStyles.secondaryButton}
+            type="button"
+            onClick={() => onOpenOrder(order.publicNumber)}
+          >
+            Открыть заказ
+          </button>
+        </div>
+      ) : (
+        <div className={flowStyles.orderActions}>
+          <label className={flowStyles.field}>
+            <span>
+              {mode === "approve" ? "Решение по отмене" : "Причина отклонения"}
+            </span>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Обязательный комментарий администратора"
+            />
+          </label>
+          {error ? (
+            <div className={flowStyles.warningNotice} role="alert">
+              {error}
+            </div>
+          ) : null}
+          <div className={flowStyles.buttonRow}>
+            <button
+              className={
+                mode === "approve"
+                  ? flowStyles.dangerButton
+                  : flowStyles.primaryButton
+              }
+              type="button"
+              disabled={!note.trim()}
+              onClick={submit}
+            >
+              {mode === "approve" ? "Подтвердить отмену" : "Подтвердить отклонение"}
+            </button>
+            <button
+              className={flowStyles.secondaryButton}
+              type="button"
+              onClick={() => {
+                setMode("none");
+                setError(null);
+              }}
+            >
+              Назад
+            </button>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function CancellationRequestsSection({
+  onOpenOrder,
+}: {
+  onOpenOrder: (publicNumber: string) => void;
+}) {
+  const { state } = usePrototype();
+  const pending = getPendingCancellationRequests(state);
+  if (pending.length === 0) return null;
+  return (
+    <section className={flowStyles.card}>
+      <h2>Запросы на отмену — {pending.length}</h2>
+      <div className={flowStyles.orderList}>
+        {pending.map((request) => (
+          <CancellationRequestCard
+            request={request}
+            onOpenOrder={onOpenOrder}
+            key={request.id}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function OrdersConsole() {
   const { state } = usePrototype();
   const searchParams = useSearchParams();
@@ -500,6 +675,7 @@ function OrdersConsole() {
 
   return (
     <>
+      <CancellationRequestsSection onOpenOrder={setSearch} />
       <section className={flowStyles.card}>
         <h2>Фильтры</h2>
         <div className={flowStyles.fieldGrid}>

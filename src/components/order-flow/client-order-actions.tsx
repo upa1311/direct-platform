@@ -5,16 +5,33 @@ import { useState } from "react";
 
 import type { Order } from "@/prototype/models";
 import { usePrototype } from "@/prototype/prototype-provider";
-import { getRestaurant, isActiveOrderStatus } from "@/prototype/selectors";
+import {
+  canClientCancelDirectly,
+  canClientRequestCancellation,
+  getCancellationRequestForOrder,
+  getClientCancellationMessage,
+  getPostPreparationWarning,
+  isActiveOrderStatus,
+} from "@/prototype/selectors";
 import styles from "./order-flow.module.css";
 
-/** Ключ sessionStorage для спокойного уведомления после повторного заказа (§6–7). */
+/** Ключ sessionStorage для спокойного уведомления после повторного заказа. */
 export const REPEAT_NOTICE_KEY = "direct-repeat-order-notice";
 
+/** Причины бесплатной отмены (до приготовления). */
 const CANCEL_REASONS = [
   "Заказал по ошибке",
   "Хочу изменить заказ",
   "Слишком долго ждать",
+  "Другая причина",
+] as const;
+
+/** Причины запроса на отмену (после начала приготовления, §10). */
+const REQUEST_REASONS = [
+  "Хочу изменить заказ",
+  "Изменились планы",
+  "Слишком долго ждать",
+  "Ошибка в адресе",
   "Другая причина",
 ] as const;
 
@@ -32,20 +49,14 @@ function RepeatOrderButton({ order }: { order: Order }) {
   const handleRepeat = () => {
     setError(null);
     setUnavailable([]);
-
-    // §8: непустая корзина — подтвердить замену перед повтором.
     if (
       state.cart.items.length > 0 &&
-      !window.confirm(
-        "В корзине уже есть блюда. Заменить их повторным заказом?",
-      )
+      !window.confirm("В корзине уже есть блюда. Заменить их повторным заказом?")
     ) {
       return;
     }
-
     const result = repeatOrder(order.id);
     if (!result.ok) {
-      // Корзина не изменена (проверка до мутации). Показываем причину.
       if (result.unavailableItems.length > 0) {
         setUnavailable(result.unavailableItems);
       } else {
@@ -53,8 +64,6 @@ function RepeatOrderButton({ order }: { order: Order }) {
       }
       return;
     }
-
-    // §6–7: спокойное уведомление показываем уже в корзине.
     const notices: string[] = [];
     if (result.fulfillmentChanged) {
       notices.push(
@@ -100,11 +109,11 @@ function RepeatOrderButton({ order }: { order: Order }) {
   );
 }
 
-/** Диалог клиентской отмены заказа (только RESTAURANT_REVIEW). */
-function CancelOrderDialog({ order }: { order: Order }) {
+/** Компактная бесплатная отмена (RESTAURANT_REVIEW / AWAITING_PAYMENT), §6–7. */
+function DirectCancel({ order }: { order: Order }) {
   const { cancelClientOrder } = usePrototype();
   const [open, setOpen] = useState(false);
-  const [reason, setReason] = useState<string>("");
+  const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -123,16 +132,16 @@ function CancelOrderDialog({ order }: { order: Order }) {
 
   if (!open) {
     return (
-      <div className={styles.submitArea}>
+      <div className={styles.cancelActionRow}>
         <button
-          className={styles.dangerButton}
+          className={`${styles.secondaryButton} ${styles.cancelInlineButton}`}
           type="button"
           onClick={() => {
             setOpen(true);
             setError(null);
           }}
         >
-          Отменить заказ
+          Отменить
         </button>
       </div>
     );
@@ -200,36 +209,147 @@ function CancelOrderDialog({ order }: { order: Order }) {
   );
 }
 
-/** Спокойный контактный текст после принятия заказа рестораном (§13). */
-function PostAcceptContact({ order }: { order: Order }) {
-  const { state } = usePrototype();
-  const restaurant = getRestaurant(state, order.restaurant.id);
-  // Клиенту доступен только публичный телефон (не внутренние контакты).
-  const publicPhone = restaurant?.publicPhone?.trim();
+/** Запрос на отмену после начала приготовления (§8, §10, §13). */
+function RequestCancellation({ order }: { order: Order }) {
+  const { state, requestCancellation } = usePrototype();
+  const request = getCancellationRequestForOrder(state, order.id);
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [customReason, setCustomReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const isOther = reason === "Другая причина";
+  const effectiveReason = isOther ? customReason : reason;
+
+  // Уже есть запрос — показываем его статус, кнопку скрываем.
+  if (request) {
+    const statusMessage = getClientCancellationMessage(request);
+    return (
+      <div className={styles.requestStatusBlock} role="status">
+        <strong>{statusMessage}</strong>
+        {request.status === "PENDING" ? (
+          <p className={styles.summaryHint}>
+            Запрос на отмену отправлен. Пока администратор рассматривает его,
+            заказ продолжает выполняться.
+          </p>
+        ) : null}
+        {request.status === "REJECTED" ? (
+          <p className={styles.summaryHint}>Заказ продолжает выполняться.</p>
+        ) : null}
+      </div>
+    );
+  }
+
+  const submitRequest = () => {
+    const result = requestCancellation(order.id, effectiveReason);
+    if (!result.ok) {
+      setError(result.error ?? "Не удалось отправить запрос.");
+      return;
+    }
+    setOpen(false);
+    setError(null);
+  };
+
   return (
-    <p className={styles.summaryHint} role="status">
-      Для отмены свяжитесь с рестораном или поддержкой.
-      {publicPhone ? (
-        <>
-          {" "}
-          <a href={`tel:${publicPhone}`}>Позвонить ресторану</a>
-        </>
-      ) : null}
-    </p>
+    <div className={styles.requestCancelBlock}>
+      <p className={styles.requestWarningText}>
+        {getPostPreparationWarning(order)}
+      </p>
+      {!open ? (
+        <div className={styles.cancelActionRow}>
+          <button
+            className={styles.secondaryButton}
+            type="button"
+            onClick={() => {
+              setOpen(true);
+              setError(null);
+            }}
+          >
+            Запросить отмену
+          </button>
+        </div>
+      ) : (
+        <div
+          className={styles.cancelDialog}
+          role="group"
+          aria-label="Запрос на отмену"
+        >
+          <h3 className={styles.sectionTitle}>Запросить отмену?</h3>
+          <p className={styles.summaryHint}>Укажите причину запроса.</p>
+          <fieldset className={styles.cancelReasons}>
+            {REQUEST_REASONS.map((r) => (
+              <label className={styles.cancelReasonOption} key={r}>
+                <input
+                  type="radio"
+                  name={`request-reason-${order.id}`}
+                  checked={reason === r}
+                  onChange={() => {
+                    setReason(r);
+                    setError(null);
+                  }}
+                />
+                <span>{r}</span>
+              </label>
+            ))}
+          </fieldset>
+          {isOther ? (
+            <label className={styles.field}>
+              <span>Ваша причина</span>
+              <textarea
+                value={customReason}
+                onChange={(event) => {
+                  setCustomReason(event.target.value);
+                  setError(null);
+                }}
+                placeholder="Опишите причину запроса"
+              />
+            </label>
+          ) : null}
+          {error ? (
+            <div className={styles.warningNotice} role="alert">
+              {error}
+            </div>
+          ) : null}
+          <div className={styles.buttonRow}>
+            <button
+              className={styles.primaryButton}
+              type="button"
+              disabled={!effectiveReason.trim()}
+              onClick={submitRequest}
+            >
+              Отправить запрос
+            </button>
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setError(null);
+              }}
+            >
+              Не отправлять
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 /**
- * Единая клиентская панель действий заказа для списка и детальной страницы
- * (§15): отмена только в RESTAURANT_REVIEW, иначе контактный текст, а у
- * завершённых — «Заказать снова». Одна бизнес-логика, общий компонент.
+ * Единая клиентская панель действий заказа (§15). До приготовления — компактная
+ * бесплатная «Отменить»; во время приготовления/доставки — запрос на отмену;
+ * у завершённых — «Заказать снова». Вся логика — в чистых селекторах.
  */
 export function ClientOrderActions({ order }: { order: Order }) {
-  if (order.status === "RESTAURANT_REVIEW") {
-    return <CancelOrderDialog order={order} />;
+  if (canClientCancelDirectly(order)) {
+    return <DirectCancel order={order} />;
+  }
+  if (canClientRequestCancellation(order)) {
+    return <RequestCancellation order={order} />;
   }
   if (isCompleted(order)) {
     return <RepeatOrderButton order={order} />;
   }
-  return <PostAcceptContact order={order} />;
+  return null;
 }

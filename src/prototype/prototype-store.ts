@@ -477,6 +477,28 @@ function normalizeSettlements(value: unknown): PrototypeState["settlements"] {
 }
 
 /**
+ * Запросы на отмену: у старых состояний поля нет — используем пустой массив
+ * (§9). Не ломает старые snapshots и не входит в финансовые данные.
+ */
+function normalizeCancellationRequests(
+  value: unknown,
+): PrototypeState["cancellationRequests"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      typeof entry.orderId !== "string"
+    ) {
+      return [];
+    }
+    return [entry as unknown as PrototypeState["cancellationRequests"][number]];
+  });
+}
+
+/**
  * Приведение уже v6-совместимого состояния к корректному виду. Сохраняет
  * пользовательские и админские данные (рестораны, меню, акции, тарифы, зоны,
  * настройки, корзину, заказы, ledger) и лишь мягко дозаполняет недостающие поля.
@@ -548,6 +570,9 @@ export function normalizePrototypeState(
       ? state.orders.map(normalizeOrder)
       : [],
     settlements: normalizeSettlements(state.settlements),
+    cancellationRequests: normalizeCancellationRequests(
+      state.cancellationRequests,
+    ),
   };
 }
 
@@ -595,6 +620,9 @@ export function upgradeToV6(raw: unknown): PrototypeState {
       ? (source.orders as unknown[]).map(normalizeOrder)
       : [],
     settlements: [],
+    cancellationRequests: normalizeCancellationRequests(
+      source.cancellationRequests,
+    ),
   };
   return normalizePrototypeState(merged);
 }

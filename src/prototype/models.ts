@@ -389,6 +389,24 @@ export interface Order {
   history: OrderHistoryEvent[];
 }
 
+export type CancellationRequestStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+/** Клиентский запрос на отмену уже готовящегося заказа (рассматривает Direct). */
+export interface CancellationRequest {
+  id: string;
+  orderId: string;
+  customerId: string;
+  restaurantId: string;
+  requestedAt: string;
+  requestedOrderStatus: OrderStatus;
+  paymentMethod: PaymentMethod;
+  reason: string;
+  status: CancellationRequestStatus;
+  resolvedAt: string | null;
+  resolvedBy: "ADMIN" | null;
+  resolutionNote: string | null;
+}
+
 export interface PrototypeState {
   schemaVersion: typeof PROTOTYPE_SCHEMA_VERSION;
   revision: number;
@@ -405,6 +423,7 @@ export interface PrototypeState {
   cart: Cart;
   orders: Order[];
   settlements: SettlementEntry[];
+  cancellationRequests: CancellationRequest[];
 }
 
 /** Результат расчёта корзины для клиентского оформления. */

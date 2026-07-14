@@ -16,12 +16,14 @@ import {
   addCartItem,
   adminCancelOrder,
   adminSetPreparationMinutes,
+  approveCancellationRequest,
   assignDriverToOrder,
   cancelOrderByClient,
   completePickupWithCode,
   correctOrderStatus,
   createOrderFromCart,
   createRestaurant,
+  expireUnansweredRestaurantOrders,
   issuePickupWithoutCode,
   markOrderArriving,
   markOrderDelivered,
@@ -30,8 +32,10 @@ import {
   markOrderReady,
   markPickupNoShow as runPickupNoShow,
   reassignDriverForOrder,
+  rejectCancellationRequest,
   rejectRestaurantOrder,
   repeatOrderToCart,
+  requestOrderCancellationByClient,
   resetPrototypeState,
   restoreDefaultTariffs,
   saveTariffs,
@@ -56,6 +60,7 @@ import {
   type CreateRestaurantResult,
   type OrderActionActor,
   type RepeatOrderResult,
+  type RequestCancellationResult,
   type RestaurantFormInput,
   type UpdateRestaurantResult,
 } from "./actions";
@@ -111,6 +116,12 @@ interface PrototypeContextValue {
   createOrder: () => CreateOrderResult;
   repeatOrder: (orderId: string) => RepeatOrderResult;
   cancelClientOrder: (orderId: string, reason: string) => ClientCancelResult;
+  requestCancellation: (
+    orderId: string,
+    reason: string,
+  ) => RequestCancellationResult;
+  approveCancellation: (requestId: string, note: string) => AdminActionResult;
+  rejectCancellation: (requestId: string, note: string) => AdminActionResult;
   acceptOrder: (
     orderId: string,
     preparationMinutes: number,
@@ -267,6 +278,28 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     } satisfies PrototypeChannelMessage);
   }, [isHydrated, state]);
 
+  // §4: единый системный sweep автозакрытия неотвеченных заказов (7 минут).
+  // Проверяем сразу после гидрации и затем раз в 5 секунд для всех ресторанов.
+  // Идемпотентно — несколько вкладок не создают повторных событий; результат
+  // расходится через тот же localStorage/BroadcastChannel.
+  useEffect(() => {
+    if (!isHydrated) {
+      return;
+    }
+    const sweep = () => {
+      const next = expireUnansweredRestaurantOrders(
+        stateRef.current,
+        new Date().toISOString(),
+      );
+      if (next !== stateRef.current) {
+        replaceState(next);
+      }
+    };
+    sweep();
+    const intervalId = window.setInterval(sweep, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [isHydrated, replaceState]);
+
   const addItem = useCallback(
     (
       menuItemId: string,
@@ -357,6 +390,51 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   const cancelClientOrder = useCallback(
     (orderId: string, reason: string) => {
       const action = cancelOrderByClient(stateRef.current, orderId, reason);
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const requestCancellation = useCallback(
+    (orderId: string, reason: string) => {
+      const action = requestOrderCancellationByClient(
+        stateRef.current,
+        orderId,
+        reason,
+      );
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const approveCancellation = useCallback(
+    (requestId: string, note: string) => {
+      const action = approveCancellationRequest(
+        stateRef.current,
+        requestId,
+        note,
+      );
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const rejectCancellation = useCallback(
+    (requestId: string, note: string) => {
+      const action = rejectCancellationRequest(
+        stateRef.current,
+        requestId,
+        note,
+      );
       if (action.state !== stateRef.current) {
         replaceState(action.state);
       }
@@ -611,6 +689,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       createOrder,
       repeatOrder,
       cancelClientOrder,
+      requestCancellation,
+      approveCancellation,
+      rejectCancellation,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,
@@ -651,6 +732,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       createOrder,
       repeatOrder,
       cancelClientOrder,
+      requestCancellation,
+      approveCancellation,
+      rejectCancellation,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,

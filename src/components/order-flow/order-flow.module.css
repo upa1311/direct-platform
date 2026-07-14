@@ -1325,6 +1325,47 @@
   cursor: pointer;
 }
 
+/* Компактная кнопка «Отменить» — по центру, не на всю ширину (§7). */
+.cancelActionRow {
+  display: flex;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+.cancelInlineButton {
+  width: fit-content;
+}
+
+/* Крупный читаемый блок предупреждения после начала приготовления (§8). */
+.requestCancelBlock {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.requestWarningText {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid #e2e4e0;
+  border-radius: 12px;
+  background: #f8f9f7;
+  color: #202522;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.requestStatusBlock {
+  display: grid;
+  gap: 6px;
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid #cdd7cf;
+  border-radius: 12px;
+  background: #f2f7f2;
+  color: #2b3b30;
+}
+
 .emptyState {
   padding: 30px;
   border: 1px dashed #cfd5d0;
@@ -1831,6 +1872,74 @@
 .kitchenCountdownOverdue {
   background: #fbe7da;
   color: #9a3d12;
+}
+
+/* Управление звуком кухни. */
+.kitchenSoundControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.kitchenSoundOn {
+  font-size: 13px;
+  font-weight: 700;
+  color: #315d3d;
+}
+
+/* Заказ, требующий реакции (§3): тонкая акцентная рамка, без заливки. */
+.kitchenCardAttention {
+  border-color: #e0a97c;
+  box-shadow: inset 3px 0 0 #d97706;
+}
+
+.kitchenAttentionBadge {
+  width: fit-content;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #fdeede;
+  color: #92500f;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+/* Уведомление кухни о запросе клиента на отмену (§11). */
+.kitchenCancelRequest {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid #d9c3a6;
+  border-radius: 10px;
+  background: #fbf4ea;
+}
+
+.kitchenCancelRequest p {
+  margin: 0;
+  font-size: 14px;
+  color: #5a4634;
+}
+
+.kitchenCancelRequestBadge {
+  width: fit-content;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #f0e0c8;
+  color: #7a5a2c;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.kitchenCancelSummary {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid #d9c3a6;
+  border-radius: 10px;
+  background: #fbf4ea;
+  color: #7a5a2c;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 @media (max-width: 900px) {
