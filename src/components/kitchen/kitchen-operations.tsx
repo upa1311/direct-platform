@@ -6,6 +6,7 @@ import { Pause } from "lucide-react";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type {
   MenuItem,
+  Order,
   OperationalPauseMode,
   Restaurant,
 } from "@/prototype/models";
@@ -15,7 +16,30 @@ import {
   getRestaurantOperationalEvents,
   isMenuItemAvailableAt,
 } from "@/prototype/selectors";
+import {
+  computeDelayedEtaIso,
+  computeEarlierEtaIso,
+  computeEtaDeltaMinutes,
+  computeEtaFromNowIso,
+  validateEtaCandidate,
+} from "@/prototype/pricing-engine";
 import styles from "./kitchen.module.css";
+
+const DELAY_REASONS = [
+  "Высокая загрузка кухни",
+  "Блюдо готовится дольше",
+  "Проблема с ингредиентом",
+  "Техническая задержка",
+  "Недостаточно сотрудников",
+  "Другая причина",
+] as const;
+
+const EARLIER_REASONS = [
+  "Заказ будет готов раньше",
+  "Освободилась производственная мощность",
+  "Подготовка заняла меньше времени",
+  "Другая причина",
+] as const;
 
 const PAUSE_REASONS = [
   "Кухня перегружена",
@@ -103,6 +127,211 @@ function formatRemaining(resumeAtIso: string, nowMs: number): string {
     else if (last >= 2 && last <= 4) word = "минуты";
   }
   return `Осталось ${minutes} ${word}`;
+}
+
+/** §5–§9: панель корректировки ожидаемого времени готовности PREPARING-заказа. */
+export function EtaAdjustPanel({
+  order,
+  restaurant,
+  onDone,
+}: {
+  order: Order;
+  restaurant: Restaurant;
+  onDone: (success: boolean) => void;
+}) {
+  const { adjustOrderEta } = usePrototype();
+  const current = order.expectedReadyAt;
+  const tz = restaurant.timeZone;
+  const [candidateIso, setCandidateIso] = useState<string | null>(null);
+  const [customMinutes, setCustomMinutes] = useState("");
+  const [reason, setReason] = useState("");
+  const [customReason, setCustomReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const nowIso = () => new Date().toISOString();
+  const lastAdjustment = order.etaAdjustments.at(-1) ?? null;
+
+  const delta =
+    candidateIso && current ? computeEtaDeltaMinutes(current, candidateIso) : 0;
+  const isDelay = delta >= 0;
+  const reasons = isDelay ? DELAY_REASONS : EARLIER_REASONS;
+  const selectedReason = (reasons as readonly string[]).includes(reason)
+    ? reason
+    : reasons[0];
+  const isOther = selectedReason === "Другая причина";
+  const effectiveReason = isOther ? customReason : selectedReason;
+
+  const chooseDelay = (minutes: number) => {
+    if (!current) return;
+    setCandidateIso(computeDelayedEtaIso(current, minutes, nowIso()));
+    setCustomMinutes("");
+    setError(null);
+  };
+  const chooseEarlier = (minutes: number) => {
+    if (!current) return;
+    const candidate = computeEarlierEtaIso(current, minutes);
+    const validation = validateEtaCandidate(candidate, nowIso());
+    if (validation) {
+      setCandidateIso(null);
+      setError(validation);
+      return;
+    }
+    setCandidateIso(candidate);
+    setCustomMinutes("");
+    setError(null);
+  };
+  const chooseCustom = (value: string) => {
+    setCustomMinutes(value);
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 1 || n > 180) {
+      setCandidateIso(null);
+      return;
+    }
+    setCandidateIso(computeEtaFromNowIso(nowIso(), n));
+    setError(null);
+  };
+
+  const submit = () => {
+    if (!candidateIso) {
+      setError("Выберите новое время.");
+      return;
+    }
+    if (!effectiveReason.trim()) {
+      setError("Укажите причину.");
+      return;
+    }
+    const res = adjustOrderEta(
+      order.id,
+      candidateIso,
+      effectiveReason,
+      "RESTAURANT",
+    );
+    // §9: при ошибке панель не закрываем и показываем domain error рядом.
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    onDone(true);
+  };
+
+  const deltaLabel =
+    candidateIso === null
+      ? null
+      : delta > 0
+        ? `Задержка на ${delta} мин`
+        : delta < 0
+          ? `Будет готов на ${-delta} мин раньше`
+          : "Без изменений";
+
+  return (
+    <div className={styles.panel}>
+      <p className={styles.panelHint}>
+        Текущее ожидаемое: {formatTimeInZone(current, tz)} · Первоначальная
+        оценка: {order.preparationMinutes ?? "—"} мин
+      </p>
+      {lastAdjustment ? (
+        <p className={styles.panelHint}>
+          Последняя корректировка:{" "}
+          {formatTimeInZone(lastAdjustment.previousExpectedReadyAt, tz)} →{" "}
+          {formatTimeInZone(lastAdjustment.nextExpectedReadyAt, tz)} ·{" "}
+          {lastAdjustment.reason}
+        </p>
+      ) : null}
+
+      <div className={styles.field}>
+        <span>Задержка</span>
+        <div className={styles.btnRow}>
+          {[5, 10, 15].map((m) => (
+            <button
+              key={m}
+              className={`${styles.btn} ${styles.btnOutline}`}
+              type="button"
+              onClick={() => chooseDelay(m)}
+            >
+              +{m} мин
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className={styles.field}>
+        <span>Будет готов раньше</span>
+        <div className={styles.btnRow}>
+          {[5, 10].map((m) => (
+            <button
+              key={m}
+              className={`${styles.btn} ${styles.btnOutline}`}
+              type="button"
+              onClick={() => chooseEarlier(m)}
+            >
+              На {m} мин раньше
+            </button>
+          ))}
+        </div>
+      </div>
+      <label className={styles.field}>
+        <span>Будет готов через N минут</span>
+        <input
+          type="number"
+          min={1}
+          max={180}
+          value={customMinutes}
+          onChange={(e) => chooseCustom(e.target.value)}
+          placeholder="например, 20"
+        />
+      </label>
+
+      <label className={styles.field}>
+        <span>Причина</span>
+        <select value={selectedReason} onChange={(e) => setReason(e.target.value)}>
+          {reasons.map((r) => (
+            <option value={r} key={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+      </label>
+      {isOther ? (
+        <label className={styles.field}>
+          <span>Ваша причина</span>
+          <textarea
+            maxLength={300}
+            value={customReason}
+            onChange={(e) => setCustomReason(e.target.value)}
+            placeholder="Опишите причину"
+          />
+        </label>
+      ) : null}
+
+      {candidateIso ? (
+        <p className={styles.panelHint}>
+          Новое ожидаемое время: <strong>{formatTimeInZone(candidateIso, tz)}</strong>
+          {deltaLabel ? ` · ${deltaLabel}` : ""}
+        </p>
+      ) : null}
+      {error ? (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
+      ) : null}
+      <div className={styles.btnRowEnd}>
+        <button
+          className={`${styles.btn} ${styles.btnOutline}`}
+          type="button"
+          onClick={() => onDone(false)}
+        >
+          Отмена
+        </button>
+        <button
+          className={`${styles.btn} ${styles.btnDark}`}
+          type="button"
+          disabled={!candidateIso || !effectiveReason.trim()}
+          onClick={submit}
+        >
+          Обновить время
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /** Строгая встроенная форма причины + срока (KDS). */

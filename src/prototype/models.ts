@@ -395,10 +395,23 @@ export interface OrderHistoryEvent {
   id: string;
   occurredAt: string;
   actor: "CLIENT" | "RESTAURANT" | "SYSTEM" | "ADMIN";
-  type: "STATUS" | "PAYMENT";
+  type: "STATUS" | "PAYMENT" | "ETA";
   fromStatus: OrderStatus | null;
   toStatus: OrderStatus;
   message: string;
+}
+
+/**
+ * Структурированная запись корректировки ожидаемого времени готовности (§2).
+ * Хранит ISO старого и нового ETA — не только человекочитаемый текст.
+ */
+export interface OrderEtaAdjustment {
+  id: string;
+  occurredAt: string;
+  actor: "RESTAURANT" | "ADMIN";
+  previousExpectedReadyAt: string;
+  nextExpectedReadyAt: string;
+  reason: string;
 }
 
 export interface Order {
@@ -427,6 +440,8 @@ export interface Order {
   items: OrderItemSnapshot[];
   financials: FinancialSnapshot;
   history: OrderHistoryEvent[];
+  /** Аудит корректировок ожидаемого времени готовности (кухня, §2). */
+  etaAdjustments: OrderEtaAdjustment[];
 }
 
 export type CancellationRequestStatus = "PENDING" | "APPROVED" | "REJECTED";

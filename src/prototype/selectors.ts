@@ -1004,6 +1004,31 @@ export function getKitchenReadyOrders(
 
 // --- Отмена и запросы на отмену ----------------------------------------------
 
+/**
+ * Показывать ли клиенту нейтральное уведомление об обновлённом времени
+ * готовности (§10). Только для активного PREPARING с хотя бы одной
+ * корректировкой; для READY/завершённых — не показываем как активное.
+ */
+export function hasActiveEtaUpdate(order: Order): boolean {
+  return order.status === "PREPARING" && order.etaAdjustments.length > 0;
+}
+
+/** Часы HH:MM актуального ожидаемого времени заказа в часовом поясе ресторана. */
+export function formatOrderEtaClock(
+  state: PrototypeState,
+  order: Order,
+): string {
+  if (!order.expectedReadyAt) return "не задана";
+  const timeZone =
+    state.restaurants.find((r) => r.id === order.restaurant.id)?.timeZone ??
+    "Europe/Chisinau";
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone,
+  }).format(new Date(order.expectedReadyAt));
+}
+
 /** Может ли клиент бесплатно и сразу отменить заказ (§6): до приготовления. */
 export function canClientCancelDirectly(order: Order): boolean {
   return (

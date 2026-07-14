@@ -218,6 +218,13 @@ function normalizeOrder(value: unknown): Order {
   const history = Array.isArray(raw.history)
     ? (raw.history as Order["history"]).map((event) => ({ ...event }))
     : [];
+  // §2: старые заказы без аудита ETA получают пустой массив; существующие
+  // записи сохраняются как есть (не удаляем и не пересоздаём заказ).
+  const etaAdjustments = Array.isArray(raw.etaAdjustments)
+    ? (raw.etaAdjustments as Order["etaAdjustments"]).map((entry) => ({
+        ...entry,
+      }))
+    : [];
   const restaurant = isRecord(raw.restaurant) ? raw.restaurant : {};
   const customer = isRecord(raw.customer) ? raw.customer : {};
 
@@ -286,6 +293,7 @@ function normalizeOrder(value: unknown): Order {
     items: Array.isArray(raw.items) ? raw.items.map(normalizeOrderItem) : [],
     financials: normalizeFinancials(raw.financials, deliveryMode),
     history,
+    etaAdjustments,
   };
 }
 

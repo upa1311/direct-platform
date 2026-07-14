@@ -5,6 +5,7 @@ import { Bell, BellRing } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import {
+  EtaAdjustPanel,
   MenuAvailabilitySection,
   RestaurantPauseControl,
 } from "@/components/kitchen/kitchen-operations";
@@ -19,7 +20,6 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import { RESTAURANT_RESPONSE_TIMEOUT_MS } from "@/prototype/actions";
 import type { CancellationRequest, DeliveryMode, Order } from "@/prototype/models";
 import {
-  formatExpectedReady,
   formatKitchenCountdown,
   getAudibleKitchenReviewOrders,
   getCancellationRequestForOrder,
@@ -104,6 +104,16 @@ function defaultPrep(value: number | undefined): number {
 
 function totalUnits(order: Order): number {
   return order.items.reduce((sum, item) => sum + item.quantity, 0);
+}
+
+/** Часы HH:MM ожидаемой готовности в часовом поясе ресторана. */
+function etaClock(iso: string | null, timeZone: string): string {
+  if (!iso) return "не задана";
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: timeZone || "Europe/Chisinau",
+  }).format(new Date(iso));
 }
 
 /** Сколько времени прошло с момента `fromIso`. */
@@ -292,8 +302,12 @@ function PreparingCard({
   timeZone: string;
 }) {
   const { state, markReady } = usePrototype();
+  const restaurant = getRestaurant(state, order.restaurant.id);
   const countdown = formatKitchenCountdown(order.expectedReadyAt, nowMs);
   const request = getCancellationRequestForOrder(state, order.id);
+  const [etaOpen, setEtaOpen] = useState(false);
+  const [etaConfirm, setEtaConfirm] = useState(false);
+  const lastEta = order.etaAdjustments.at(-1) ?? null;
   const readyLabel =
     order.deliveryMode === "PICKUP"
       ? "Готово к выдаче"
@@ -320,11 +334,16 @@ function PreparingCard({
       <KitchenItems order={order} />
       <p className={kds.units}>Всего единиц: {totalUnits(order)}</p>
       <div className={kds.metaLine}>
-        Время приготовления: {order.preparationMinutes ?? "—"} мин
+        Первоначальная оценка: {order.preparationMinutes ?? "—"} мин
       </div>
       <p className={kds.units}>
-        {formatExpectedReady(order.expectedReadyAt, timeZone)}
+        Текущая ожидаемая готовность: {etaClock(order.expectedReadyAt, timeZone)}
       </p>
+      {lastEta ? (
+        <div className={kds.metaLine}>
+          <span className={kds.badge}>Время обновлено</span> {lastEta.reason}
+        </div>
+      ) : null}
       <div
         className={`${kds.countdown} ${countdown.overdue ? kds.countdownOverdue : ""}`}
       >
@@ -338,7 +357,35 @@ function PreparingCard({
         >
           {readyLabel}
         </button>
+        <button
+          className={`${kds.btn} ${kds.btnOutline}`}
+          type="button"
+          onClick={() => {
+            setEtaOpen((v) => !v);
+            setEtaConfirm(false);
+          }}
+        >
+          Изменить время
+        </button>
       </div>
+      {etaOpen && restaurant ? (
+        <EtaAdjustPanel
+          order={order}
+          restaurant={restaurant}
+          onDone={(success) => {
+            setEtaOpen(false);
+            if (success) setEtaConfirm(true);
+          }}
+        />
+      ) : null}
+      {etaConfirm ? (
+        <p className={kds.units}>Ожидаемое время готовности обновлено.</p>
+      ) : null}
+      {etaConfirm && order.assignedDriverId ? (
+        <p className={kds.metaLine}>
+          Водитель уже назначен. Администратор Direct увидит обновлённое время.
+        </p>
+      ) : null}
     </article>
   );
 }

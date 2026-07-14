@@ -3,11 +3,14 @@
 import Link from "next/link";
 
 import type { Order } from "@/prototype/models";
+import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatDateTime,
   formatMoney,
+  formatOrderEtaClock,
   getClientAutoCancelMessage,
+  hasActiveEtaUpdate,
   orderStatusLabels,
 } from "@/prototype/selectors";
 import { ClientOrderActions } from "./client-order-actions";
@@ -29,6 +32,7 @@ export function ClientOrderCard({
   order,
   linkLabel = "Подробнее",
 }: ClientOrderCardProps) {
+  const { state } = usePrototype();
   const autoCancelMessage = getClientAutoCancelMessage(order);
   return (
     <article className={styles.orderCard}>
@@ -62,6 +66,12 @@ export function ClientOrderCard({
       {autoCancelMessage ? (
         <p className={styles.summaryHint} role="status">
           {autoCancelMessage}
+        </p>
+      ) : null}
+      {hasActiveEtaUpdate(order) ? (
+        <p className={styles.summaryHint} role="status">
+          Ресторан обновил время готовности заказа. Ожидаемая готовность:{" "}
+          {formatOrderEtaClock(state, order)}.
         </p>
       ) : null}
       <div className={styles.submitArea}>

@@ -28,6 +28,42 @@ import type { CancellationRequest } from "@/prototype/models";
 
 const PREP_MINUTES = [10, 15, 20, 25, 30, 40];
 
+const ETA_ACTOR_LABELS: Record<string, string> = {
+  RESTAURANT: "Ресторан",
+  ADMIN: "Администратор Direct",
+};
+
+/** §11: сводка последней корректировки ожидаемого времени готовности. */
+function EtaAdjustmentSummary({ order }: { order: Order }) {
+  const last = order.etaAdjustments[order.etaAdjustments.length - 1];
+  const diff = Math.round(
+    (Date.parse(last.nextExpectedReadyAt) -
+      Date.parse(last.previousExpectedReadyAt)) /
+      60_000,
+  );
+  const diffLabel =
+    diff > 0
+      ? `+${diff} мин (задержка)`
+      : diff < 0
+        ? `${diff} мин (раньше)`
+        : "без изменений";
+  return (
+    <div className={flowStyles.zoneNotice}>
+      <strong>Последняя корректировка времени</strong>
+      <div className={flowStyles.inlineMeta}>
+        <span>
+          {formatDateTime(last.previousExpectedReadyAt)} →{" "}
+          {formatDateTime(last.nextExpectedReadyAt)}
+        </span>
+        <span>{diffLabel}</span>
+        <span>Причина: {last.reason}</span>
+        <span>{ETA_ACTOR_LABELS[last.actor] ?? last.actor}</span>
+        <span>{formatDateTime(last.occurredAt)}</span>
+      </div>
+    </div>
+  );
+}
+
 /** «Проблемный» заказ: ожидает оплаты, отменён, либо водитель Direct не назначен. */
 function isProblemOrder(order: Order): boolean {
   if (order.status === "AWAITING_PAYMENT" || order.status === "CANCELED") {
@@ -818,7 +854,7 @@ function OrdersConsole() {
                     <dd>{formatDateTime(order.createdAt)}</dd>
                   </div>
                   <div className={flowStyles.summaryRow}>
-                    <dt>Готовность</dt>
+                    <dt>Текущая готовность</dt>
                     <dd>
                       {order.expectedReadyAt
                         ? formatDateTime(order.expectedReadyAt)
@@ -826,10 +862,24 @@ function OrdersConsole() {
                     </dd>
                   </div>
                   <div className={flowStyles.summaryRow}>
+                    <dt>Первоначальная оценка</dt>
+                    <dd>{order.preparationMinutes ?? "—"} мин</dd>
+                  </div>
+                  {order.etaAdjustments.length > 0 ? (
+                    <div className={flowStyles.summaryRow}>
+                      <dt>Корректировок времени</dt>
+                      <dd>{order.etaAdjustments.length}</dd>
+                    </div>
+                  ) : null}
+                  <div className={flowStyles.summaryRow}>
                     <dt>Итог клиента</dt>
                     <dd>{formatMoney(order.financials.customerTotalCents)}</dd>
                   </div>
                 </dl>
+
+                {order.etaAdjustments.length > 0 ? (
+                  <EtaAdjustmentSummary order={order} />
+                ) : null}
 
                 <OrderActions order={order} />
 

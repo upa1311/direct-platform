@@ -14,6 +14,7 @@ import {
 import {
   acceptRestaurantOrder,
   addCartItem,
+  adjustOrderExpectedReadyAt,
   adminCancelOrder,
   adminSetPreparationMinutes,
   approveCancellationRequest,
@@ -60,6 +61,7 @@ import {
   updateRestaurant,
   upsertPromotion,
   type AddCartItemResult,
+  type AdjustOrderEtaResult,
   type AdminActionResult,
   type BulkOperationalResult,
   type ClientCancelResult,
@@ -182,6 +184,12 @@ interface PrototypeContextValue {
   ) => void;
   simulateOnlinePayment: (orderId: string) => void;
   markReady: (orderId: string, actor?: OrderActionActor) => void;
+  adjustOrderEta: (
+    orderId: string,
+    nextExpectedReadyAt: string,
+    reason: string,
+    actor?: "RESTAURANT" | "ADMIN",
+  ) => AdjustOrderEtaResult;
   completePickup: (
     orderId: string,
     code: string,
@@ -647,6 +655,29 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
+  const adjustOrderEta = useCallback(
+    (
+      orderId: string,
+      nextExpectedReadyAt: string,
+      reason: string,
+      actor: "RESTAURANT" | "ADMIN" = "RESTAURANT",
+    ) => {
+      const action = adjustOrderExpectedReadyAt(
+        stateRef.current,
+        orderId,
+        nextExpectedReadyAt,
+        reason,
+        actor,
+        new Date().toISOString(),
+      );
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
+    },
+    [replaceState],
+  );
+
   const completePickup = useCallback(
     (orderId: string, code: string, actor: OrderActionActor = "RESTAURANT") => {
       const action = completePickupWithCode(
@@ -863,6 +894,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       rejectOrder,
       simulateOnlinePayment,
       markReady,
+      adjustOrderEta,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
@@ -912,6 +944,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       rejectOrder,
       simulateOnlinePayment,
       markReady,
+      adjustOrderEta,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,

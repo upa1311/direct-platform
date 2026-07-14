@@ -11,9 +11,11 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import {
   deliveryModeLabels,
   formatMoney,
+  formatOrderEtaClock,
   getClientAutoCancelMessage,
   getDeliveryModeProviderLabel,
   getOrder,
+  hasActiveEtaUpdate,
   orderStatusLabels,
   paymentMethodLabels,
   paymentStatusLabels,
@@ -99,6 +101,13 @@ export default function ClientOrderPage() {
               </div>
             ) : null}
           </dl>
+          {hasActiveEtaUpdate(order) ? (
+            <div className={flowStyles.zoneNotice} role="status">
+              Ресторан обновил время готовности заказа.
+              <br />
+              Ожидаемая готовность: {formatOrderEtaClock(state, order)}.
+            </div>
+          ) : null}
           {order.deliveryMode === "PICKUP" &&
           order.pickupCode &&
           !order.pickupCodeUsed &&
@@ -189,7 +198,7 @@ export default function ClientOrderPage() {
 
         <section className={flowStyles.card}>
           <h2>История статусов</h2>
-          <OrderHistory events={order.history} />
+          <OrderHistory events={order.history} neutralizeEtaReason />
         </section>
       </div>
     </>

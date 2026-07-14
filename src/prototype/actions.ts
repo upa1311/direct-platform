@@ -21,6 +21,7 @@ import type {
   OperationalPause,
   OperationalPauseMode,
   Order,
+  OrderEtaAdjustment,
   OrderHistoryEvent,
   OrderItemSnapshot,
   OrderStatus,
@@ -57,6 +58,7 @@ import {
 import {
   computePickupSettlement,
   generatePickupCode,
+  validateEtaCandidate,
   validatePickupPayment,
 } from "./pricing-engine";
 import { finalizeMutation } from "./prototype-store";
@@ -527,6 +529,7 @@ export function createOrderFromCart(
     pickupCodeUsed: false,
     assignedDriverId: null,
     driverAssignedAt: null,
+    etaAdjustments: [],
     items,
     financials: {
       currencyCode: state.platformSettings.currencyCode,
@@ -1396,6 +1399,126 @@ export function markOrderReady(
     },
     now,
   );
+}
+
+export interface AdjustOrderEtaResult {
+  ok: boolean;
+  error: string | null;
+  previousExpectedReadyAt: string | null;
+  nextExpectedReadyAt: string | null;
+}
+
+/** Время HH:MM в часовом поясе ресторана (для текста истории ETA). */
+function formatEtaTimeInZone(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: timeZone || "Europe/Chisinau",
+  }).format(new Date(iso));
+}
+
+/**
+ * Корректировка ожидаемого времени готовности заказа кухней/админом (Кухня 3).
+ * Только для PREPARING; НЕ меняет статус, preparationMinutes, состав, цены,
+ * financial snapshot, paymentStatus/paidAt, settlement, назначенного водителя,
+ * CancellationRequest, createdAt и точку входа в PREPARING (событие type "ETA",
+ * fromStatus === toStatus, поэтому getOrderStatusSince не сбрасывается).
+ * Меняет только expectedReadyAt, updatedAt и добавляет одну audit-запись +
+ * одно history-событие. `nowIso` — явный аргумент для детерминированных тестов.
+ */
+export function adjustOrderExpectedReadyAt(
+  state: PrototypeState,
+  orderId: string,
+  nextExpectedReadyAt: string,
+  reason: string,
+  actor: "RESTAURANT" | "ADMIN",
+  nowIso: string,
+): ActionResult<AdjustOrderEtaResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const fail = (error: string): ActionResult<AdjustOrderEtaResult> => ({
+    state,
+    result: {
+      ok: false,
+      error,
+      previousExpectedReadyAt: null,
+      nextExpectedReadyAt: null,
+    },
+  });
+
+  if (!order) return fail("Заказ не найден.");
+  if (order.status !== "PREPARING") {
+    return fail("Изменить время можно только для заказа в приготовлении.");
+  }
+  const prev = order.expectedReadyAt;
+  if (!prev || Number.isNaN(Date.parse(prev))) {
+    return fail("У заказа нет корректного ожидаемого времени.");
+  }
+  const normReason = reason.trim();
+  if (!normReason) return fail("Укажите причину.");
+
+  const boundsError = validateEtaCandidate(nextExpectedReadyAt, nowIso);
+  if (boundsError) return fail(boundsError);
+
+  const nextMs = Date.parse(nextExpectedReadyAt);
+  // Новое ETA не должно совпадать со старым с точностью до секунды (идемпотентно:
+  // повторный идентичный вызов не создаёт дубликат — expectedReadyAt уже равен).
+  if (Math.floor(nextMs / 1000) === Math.floor(Date.parse(prev) / 1000)) {
+    return fail("Новое время совпадает с текущим.");
+  }
+
+  const timeZone =
+    state.restaurants.find((r) => r.id === order.restaurant.id)?.timeZone ??
+    "Europe/Chisinau";
+  const isDelay = nextMs > Date.parse(prev);
+  const message = isDelay
+    ? `Ресторан изменил ожидаемое время готовности с ${formatEtaTimeInZone(prev, timeZone)} на ${formatEtaTimeInZone(nextExpectedReadyAt, timeZone)}. Причина: ${normReason}`
+    : `Ресторан сообщил, что заказ будет готов раньше: новое время ${formatEtaTimeInZone(nextExpectedReadyAt, timeZone)}. Причина: ${normReason}`;
+
+  const adjustment: OrderEtaAdjustment = {
+    id: `eta-${orderId}-${order.etaAdjustments.length + 1}`,
+    occurredAt: nowIso,
+    actor,
+    previousExpectedReadyAt: prev,
+    nextExpectedReadyAt,
+    reason: normReason,
+  };
+
+  const updatedOrder: Order = {
+    ...order,
+    expectedReadyAt: nextExpectedReadyAt,
+    updatedAt: nowIso,
+    etaAdjustments: [...order.etaAdjustments, adjustment],
+    history: [
+      ...order.history,
+      {
+        id: `${order.id}-history-${order.history.length + 1}`,
+        occurredAt: nowIso,
+        actor,
+        type: "ETA",
+        fromStatus: "PREPARING",
+        toStatus: "PREPARING",
+        message,
+      },
+    ],
+  };
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+    },
+    nowIso,
+  );
+  return {
+    state: nextState,
+    result: {
+      ok: true,
+      error: null,
+      previousExpectedReadyAt: prev,
+      nextExpectedReadyAt,
+    },
+  };
 }
 
 /**
