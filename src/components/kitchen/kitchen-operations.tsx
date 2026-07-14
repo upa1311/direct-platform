@@ -10,10 +10,10 @@ import type {
   Restaurant,
 } from "@/prototype/models";
 import {
+  getKitchenAcceptanceState,
   getRestaurantMenu,
   getRestaurantOperationalEvents,
   isMenuItemAvailableAt,
-  isOperationalPauseActiveAt,
 } from "@/prototype/selectors";
 import styles from "./kitchen.module.css";
 
@@ -203,7 +203,8 @@ export function RestaurantPauseControl({
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
-  const paused = isOperationalPauseActiveAt(restaurant.orderPause, nowMs);
+  // Единый источник состояния приёма (§ единый helper).
+  const acceptance = getKitchenAcceptanceState(restaurant, nowMs);
 
   const confirmPause = (reason: string, choice: DurationChoice) => {
     const { mode, resumeAt } = durationToPause(choice);
@@ -217,7 +218,25 @@ export function RestaurantPauseControl({
     setOpen(false);
   };
 
-  if (paused && restaurant.orderPause) {
+  if (acceptance === "ADMIN_DISABLED") {
+    return (
+      <section className={styles.pauseWrap}>
+        <div className={styles.disabledBlock}>
+          <span className={`${styles.dot} ${styles.dotOff}`} aria-hidden="true" />
+          <div>
+            <p className={styles.pauseTitle}>
+              Приём заказов отключён администратором Direct.
+            </p>
+            <p className={styles.pauseMeta}>
+              Изменить этот статус можно в административном кабинете.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (acceptance === "OPERATIONAL_PAUSE" && restaurant.orderPause) {
     const pause = restaurant.orderPause;
     return (
       <section className={styles.pauseWrap} aria-live="polite">

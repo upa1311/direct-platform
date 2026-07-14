@@ -29,10 +29,10 @@ import {
   getKitchenReadyOrders,
   getOrderReadySince,
   getOrderStatusSince,
+  getKitchenAcceptanceState,
   getPendingCancellationRequestsForRestaurant,
   getRestaurant,
   isKitchenBeepDue,
-  isOperationalPauseActiveAt,
   paymentStatusLabels,
 } from "@/prototype/selectors";
 
@@ -391,6 +391,10 @@ export default function RestaurantKitchenPage() {
   const [soundBlocked, setSoundBlocked] = useState(false);
 
   const restaurant = getRestaurant(state, selectedRestaurantId);
+  // Единое состояние приёма для toolbar (тот же helper, что и в pause-контроле).
+  const acceptanceState = restaurant
+    ? getKitchenAcceptanceState(restaurant, nowMs)
+    : null;
   const newOrders = getKitchenNewOrders(state, selectedRestaurantId);
   const awaitingOrders = getKitchenAwaitingPaymentOrders(
     state,
@@ -488,15 +492,19 @@ export default function RestaurantKitchenPage() {
           <span className={kds.statusChip}>
             <span
               className={`${kds.dot} ${
-                restaurant && isOperationalPauseActiveAt(restaurant.orderPause, nowMs)
-                  ? kds.dotWarn
-                  : kds.dotOk
+                acceptanceState === "ACCEPTING"
+                  ? kds.dotOk
+                  : acceptanceState === "OPERATIONAL_PAUSE"
+                    ? kds.dotWarn
+                    : kds.dotOff
               }`}
               aria-hidden="true"
             />
-            {restaurant && isOperationalPauseActiveAt(restaurant.orderPause, nowMs)
-              ? "Приём на паузе"
-              : "Приём включён"}
+            {acceptanceState === "ACCEPTING"
+              ? "Приём включён"
+              : acceptanceState === "OPERATIONAL_PAUSE"
+                ? "Приём на паузе"
+                : "Приём отключён"}
           </span>
           <select
             className={kds.restaurantSelect}

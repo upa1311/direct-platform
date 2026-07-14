@@ -326,6 +326,33 @@ export function canPlacePrototypeOrder(restaurant: Restaurant): boolean {
   return isRestaurantAcceptingOrdersAt(restaurant, Date.now());
 }
 
+/**
+ * Единое состояние приёма заказов для UI кухни. Toolbar и RestaurantPauseControl
+ * обязаны использовать только этот helper (без дублирования условий).
+ * - OPERATIONAL_PAUSE — активна операционная пауза ресторана;
+ * - ACCEPTING — приём разрешён (в т.ч. истёкшая пауза до maintenance-sweep);
+ * - ADMIN_DISABLED — паузы нет, но domain-layer заказ запрещает (ручное
+ *   административное отключение или ресторан иначе не готов). Зелёный статус в
+ *   этом состоянии не показывается — кухня не обходит отключение админом.
+ */
+export type KitchenAcceptanceState =
+  | "ACCEPTING"
+  | "OPERATIONAL_PAUSE"
+  | "ADMIN_DISABLED";
+
+export function getKitchenAcceptanceState(
+  restaurant: Restaurant,
+  nowMs: number,
+): KitchenAcceptanceState {
+  if (isOperationalPauseActiveAt(restaurant.orderPause, nowMs)) {
+    return "OPERATIONAL_PAUSE";
+  }
+  if (isRestaurantAcceptingOrdersAt(restaurant, nowMs)) {
+    return "ACCEPTING";
+  }
+  return "ADMIN_DISABLED";
+}
+
 /** Доступно ли блюдо для НОВОГО заказа в момент nowMs (§12, §15). */
 export function isMenuItemAvailableAt(
   menuItem: MenuItem,
