@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Pause } from "lucide-react";
 
-import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type {
   MenuItem,
@@ -15,6 +15,7 @@ import {
   isMenuItemAvailableAt,
   isOperationalPauseActiveAt,
 } from "@/prototype/selectors";
+import styles from "./kitchen.module.css";
 
 const PAUSE_REASONS = [
   "Кухня перегружена",
@@ -88,7 +89,21 @@ function formatTimeInZone(iso: string | null, timeZone: string): string {
   }).format(new Date(iso));
 }
 
-/** Панель выбора причины + срока (общая для паузы ресторана и блюда). */
+/** Живой остаток времени паузы, слова с корректным склонением. */
+function formatRemaining(resumeAtIso: string, nowMs: number): string {
+  const diffMs = Date.parse(resumeAtIso) - nowMs;
+  const minutes = Math.max(0, Math.ceil(diffMs / 60_000));
+  const lastTwo = minutes % 100;
+  const last = minutes % 10;
+  let word = "минут";
+  if (lastTwo < 11 || lastTwo > 14) {
+    if (last === 1) word = "минуту";
+    else if (last >= 2 && last <= 4) word = "минуты";
+  }
+  return `Осталось ${minutes} ${word}`;
+}
+
+/** Строгая встроенная форма причины + срока (KDS). */
 function ReasonDurationPanel({
   reasons,
   durations,
@@ -96,6 +111,7 @@ function ReasonDurationPanel({
   onCancel,
   confirmLabel,
   affectedLabel,
+  error,
 }: {
   reasons: readonly string[];
   durations: { value: DurationChoice; label: string }[];
@@ -103,16 +119,17 @@ function ReasonDurationPanel({
   onCancel: () => void;
   confirmLabel: string;
   affectedLabel?: string;
+  error?: string | null;
 }) {
-  const [reason, setReason] = useState(reasons[0]);
+  const [reason, setReason] = useState<string>(reasons[0]);
   const [custom, setCustom] = useState("");
   const [choice, setChoice] = useState<DurationChoice>(durations[0].value);
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? custom : reason;
 
   return (
-    <div className={flowStyles.opPanel}>
-      <label className={flowStyles.field}>
+    <div className={styles.panel}>
+      <label className={styles.field}>
         <span>Причина</span>
         <select value={reason} onChange={(e) => setReason(e.target.value)}>
           {reasons.map((r) => (
@@ -123,7 +140,7 @@ function ReasonDurationPanel({
         </select>
       </label>
       {isOther ? (
-        <label className={flowStyles.field}>
+        <label className={styles.field}>
           <span>Ваша причина</span>
           <textarea
             value={custom}
@@ -132,7 +149,7 @@ function ReasonDurationPanel({
           />
         </label>
       ) : null}
-      <label className={flowStyles.field}>
+      <label className={styles.field}>
         <span>Срок</span>
         <select
           value={choice}
@@ -145,31 +162,34 @@ function ReasonDurationPanel({
           ))}
         </select>
       </label>
-      {affectedLabel ? (
-        <p className={flowStyles.summaryHint}>{affectedLabel}</p>
+      {affectedLabel ? <p className={styles.panelHint}>{affectedLabel}</p> : null}
+      {error ? (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
       ) : null}
-      <div className={flowStyles.buttonRow}>
+      <div className={styles.btnRowEnd}>
         <button
-          className={flowStyles.primaryButton}
+          className={`${styles.btn} ${styles.btnOutline}`}
+          type="button"
+          onClick={onCancel}
+        >
+          Отмена
+        </button>
+        <button
+          className={`${styles.btn} ${styles.btnDark}`}
           type="button"
           disabled={!effectiveReason.trim()}
           onClick={() => onConfirm(effectiveReason, choice)}
         >
           {confirmLabel}
         </button>
-        <button
-          className={flowStyles.secondaryButton}
-          type="button"
-          onClick={onCancel}
-        >
-          Отмена
-        </button>
       </div>
     </div>
   );
 }
 
-/** §2–4: операционная пауза приёма заказов выбранного ресторана. */
+/** §2–4, §7: операционная пауза приёма заказов выбранного ресторана. */
 export function RestaurantPauseControl({
   restaurant,
   nowMs,
@@ -184,8 +204,98 @@ export function RestaurantPauseControl({
 
   const confirmPause = (reason: string, choice: DurationChoice) => {
     const { mode, resumeAt } = durationToPause(choice);
-    const res = pauseRestaurant(
+    const res = pauseRestaurant(restaurant.id, reason, mode, resumeAt, "RESTAURANT");
+    // §11: панель не закрываем и показываем ошибку, если действие не прошло.
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setError(null);
+    setOpen(false);
+  };
+
+  if (paused && restaurant.orderPause) {
+    const pause = restaurant.orderPause;
+    return (
+      <section className={styles.pauseActive} aria-live="polite">
+        <div>
+          <p className={styles.pauseTitle}>Приём заказов приостановлен</p>
+          <p className={styles.pauseMeta}>
+            {pause.resumeAt
+              ? `${formatRemaining(pause.resumeAt, nowMs)} · Возобновление в ${formatTimeInZone(pause.resumeAt, restaurant.timeZone)}`
+              : "До ручного включения"}
+          </p>
+          <p className={styles.pauseMeta}>Причина: {pause.reason}</p>
+        </div>
+        <button
+          className={`${styles.btn} ${styles.btnDark}`}
+          type="button"
+          onClick={() => resumeRestaurant(restaurant.id, "RESTAURANT")}
+        >
+          Возобновить
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <section className={styles.acceptStatus}>
+      <div className={styles.acceptStatusLeft}>
+        <span className={`${styles.dot} ${styles.dotOk}`} aria-hidden="true" />
+        Приём заказов включён
+      </div>
+      {!open ? (
+        <button
+          className={`${styles.btn} ${styles.btnOutline}`}
+          type="button"
+          onClick={() => {
+            setOpen(true);
+            setError(null);
+          }}
+        >
+          <Pause size={16} aria-hidden="true" />
+          Пауза
+        </button>
+      ) : null}
+      {open ? (
+        <div className={styles.menuRowPanel} style={{ width: "100%" }}>
+          <ReasonDurationPanel
+            reasons={PAUSE_REASONS}
+            durations={RESTAURANT_DURATIONS}
+            confirmLabel="Приостановить приём"
+            error={error}
+            onConfirm={confirmPause}
+            onCancel={() => {
+              setOpen(false);
+              setError(null);
+            }}
+          />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** §9, §11: строка блюда с переключением доступности (плотная). */
+function MenuAvailabilityRow({
+  item,
+  restaurant,
+  nowMs,
+}: {
+  item: MenuItem;
+  restaurant: Restaurant;
+  nowMs: number;
+}) {
+  const { setMenuItemUnavailable, restoreMenuItem } = usePrototype();
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const available = isMenuItemAvailableAt(item, nowMs);
+
+  const confirm = (reason: string, choice: DurationChoice) => {
+    const { mode, resumeAt } = durationToPause(choice);
+    const res = setMenuItemUnavailable(
       restaurant.id,
+      item.id,
       reason,
       mode,
       resumeAt,
@@ -199,148 +309,76 @@ export function RestaurantPauseControl({
     setOpen(false);
   };
 
-  if (paused && restaurant.orderPause) {
-    const pause = restaurant.orderPause;
-    return (
-      <section className={flowStyles.opPauseActive} aria-live="polite">
-        <div>
-          <strong>Приём заказов приостановлен</strong>
-          <p className={flowStyles.summaryHint}>Причина: {pause.reason}</p>
-          <p className={flowStyles.summaryHint}>
-            Начало: {formatTimeInZone(pause.startedAt, restaurant.timeZone)}
-            {" · "}
-            {pause.resumeAt
-              ? `Возобновление примерно в ${formatTimeInZone(pause.resumeAt, restaurant.timeZone)}`
-              : "До ручного включения"}
-          </p>
-        </div>
-        <button
-          className={flowStyles.primaryButton}
-          type="button"
-          onClick={() => resumeRestaurant(restaurant.id, "RESTAURANT")}
-        >
-          Возобновить приём
-        </button>
-      </section>
-    );
-  }
-
-  return (
-    <section className={flowStyles.opPauseIdle}>
-      <div className={flowStyles.opPauseIdleHead}>
-        <strong>Приём заказов включён</strong>
-        {!open ? (
-          <button
-            className={flowStyles.secondaryButton}
-            type="button"
-            onClick={() => setOpen(true)}
-          >
-            Приостановить приём
-          </button>
-        ) : null}
-      </div>
-      {open ? (
-        <ReasonDurationPanel
-          reasons={PAUSE_REASONS}
-          durations={RESTAURANT_DURATIONS}
-          confirmLabel="Приостановить приём"
-          onConfirm={confirmPause}
-          onCancel={() => {
-            setOpen(false);
-            setError(null);
-          }}
-        />
-      ) : null}
-      {error ? (
-        <div className={flowStyles.warningNotice} role="alert">
-          {error}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-/** Строка блюда с переключением операционной доступности. */
-function MenuAvailabilityRow({
-  item,
-  restaurant,
-  nowMs,
-}: {
-  item: MenuItem;
-  restaurant: Restaurant;
-  nowMs: number;
-}) {
-  const { setMenuItemUnavailable, restoreMenuItem } = usePrototype();
-  const [open, setOpen] = useState(false);
-  const available = isMenuItemAvailableAt(item, nowMs);
-
-  const confirm = (reason: string, choice: DurationChoice) => {
-    const { mode, resumeAt } = durationToPause(choice);
-    setMenuItemUnavailable(
-      restaurant.id,
-      item.id,
-      reason,
-      mode,
-      resumeAt,
-      "RESTAURANT",
-    );
-    setOpen(false);
+  const restore = () => {
+    const res = restoreMenuItem(restaurant.id, item.id, "RESTAURANT");
+    setError(res.ok ? null : res.error);
   };
 
   return (
-    <div
-      className={`${flowStyles.opMenuRow} ${available ? "" : flowStyles.opMenuRowMuted}`}
-    >
-      <div className={flowStyles.opMenuRowTop}>
-        <div>
-          <strong>{item.name}</strong>
-          <div className={flowStyles.inlineMeta}>
-            <span>{item.category}</span>
-            <span>{available ? "В наличии" : "Временно нет"}</span>
-            {!available && item.availabilityPause?.resumeAt ? (
-              <span>
-                до {formatTimeInZone(item.availabilityPause.resumeAt, restaurant.timeZone)}
-              </span>
-            ) : null}
-          </div>
-          {!available && item.availabilityPause ? (
-            <p className={flowStyles.summaryHint}>
-              Причина: {item.availabilityPause.reason}
-            </p>
-          ) : null}
-        </div>
-        {available ? (
-          <button
-            className={flowStyles.secondaryButton}
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-          >
-            Временно нет
-          </button>
-        ) : (
-          <button
-            className={flowStyles.primaryButton}
-            type="button"
-            onClick={() => restoreMenuItem(restaurant.id, item.id, "RESTAURANT")}
-          >
-            В наличии
-          </button>
-        )}
-      </div>
-      {open && available ? (
-        <ReasonDurationPanel
-          reasons={ITEM_REASONS}
-          durations={ITEM_DURATIONS}
-          confirmLabel="Отключить блюдо"
-          onConfirm={confirm}
-          onCancel={() => setOpen(false)}
+    <div className={`${styles.menuRow} ${available ? "" : styles.menuRowOff}`}>
+      <div className={styles.menuName}>{item.name}</div>
+      <div className={styles.menuCategory}>{item.category}</div>
+      <div className={styles.menuStatus}>
+        <span
+          className={`${styles.dot} ${available ? styles.statusOk : styles.statusOff}`}
+          aria-hidden="true"
         />
+        {available ? "В наличии" : "Временно нет"}
+        {!available && item.availabilityPause?.resumeAt ? (
+          <span className={styles.menuUntil}>
+            {" "}
+            до {formatTimeInZone(item.availabilityPause.resumeAt, restaurant.timeZone)}
+          </span>
+        ) : null}
+      </div>
+      {available ? (
+        <button
+          className={`${styles.btn} ${styles.btnRedOutline}`}
+          type="button"
+          onClick={() => {
+            setOpen((v) => !v);
+            setError(null);
+          }}
+        >
+          Отключить
+        </button>
+      ) : (
+        <button
+          className={`${styles.btn} ${styles.btnGreen}`}
+          type="button"
+          onClick={restore}
+        >
+          Вернуть
+        </button>
+      )}
+      {!available && item.availabilityPause ? (
+        <p className={styles.menuReason}>Причина: {item.availabilityPause.reason}</p>
+      ) : null}
+      {error && !open ? (
+        <p className={styles.menuReason}>
+          <span className={styles.error}>{error}</span>
+        </p>
+      ) : null}
+      {open && available ? (
+        <div className={styles.menuRowPanel}>
+          <ReasonDurationPanel
+            reasons={ITEM_REASONS}
+            durations={ITEM_DURATIONS}
+            confirmLabel="Отключить блюдо"
+            error={error}
+            onConfirm={confirm}
+            onCancel={() => {
+              setOpen(false);
+              setError(null);
+            }}
+          />
+        </div>
       ) : null}
     </div>
   );
 }
 
-/** §9–14, §19: секция «Доступность меню» с поиском, фильтром и журналом. */
+/** §9–14: секция «Доступность меню» — плотный операционный список. */
 export function MenuAvailabilitySection({
   restaurant,
   nowMs,
@@ -355,6 +393,7 @@ export function MenuAvailabilitySection({
     "ALL" | "AVAILABLE" | "UNAVAILABLE"
   >("ALL");
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const menu = getRestaurantMenu(state, restaurant.id);
   const categories = useMemo(
@@ -366,9 +405,7 @@ export function MenuAvailabilitySection({
     const q = search.trim().toLocaleLowerCase("ru-RU");
     return menu
       .filter((m) => (category === "ALL" ? true : m.category === category))
-      .filter((m) =>
-        q ? m.name.toLocaleLowerCase("ru-RU").includes(q) : true,
-      )
+      .filter((m) => (q ? m.name.toLocaleLowerCase("ru-RU").includes(q) : true))
       .filter((m) => {
         if (statusFilter === "ALL") return true;
         const avail = isMenuItemAvailableAt(m, nowMs);
@@ -383,18 +420,22 @@ export function MenuAvailabilitySection({
       });
   }, [menu, search, category, statusFilter, nowMs]);
 
-  const bulkCategory = category === "ALL" ? categories[0] : category;
-  const bulkAffected = menu.filter(
-    (m) => m.category === bulkCategory && isMenuItemAvailableAt(m, nowMs),
-  ).length;
+  // §10: массовые действия — ТОЛЬКО при выбранной конкретной категории.
+  // «Все категории» не подставляет первую категорию.
+  const bulkCategory = category === "ALL" ? null : category;
+  const bulkAffected = bulkCategory
+    ? menu.filter(
+        (m) => m.category === bulkCategory && isMenuItemAvailableAt(m, nowMs),
+      ).length
+    : 0;
 
   const events = getRestaurantOperationalEvents(state, restaurant.id, 10);
 
   return (
-    <section className={flowStyles.card}>
-      <h2>Доступность меню</h2>
-      <div className={flowStyles.opFilters}>
-        <label className={flowStyles.field}>
+    <section className={styles.section}>
+      <h2 className={styles.sectionTitle}>Доступность меню</h2>
+      <div className={styles.filters}>
+        <label className={styles.field}>
           <span>Поиск блюда</span>
           <input
             value={search}
@@ -402,7 +443,7 @@ export function MenuAvailabilitySection({
             placeholder="Название"
           />
         </label>
-        <label className={flowStyles.field}>
+        <label className={styles.field}>
           <span>Категория</span>
           <select value={category} onChange={(e) => setCategory(e.target.value)}>
             <option value="ALL">Все категории</option>
@@ -413,13 +454,11 @@ export function MenuAvailabilitySection({
             ))}
           </select>
         </label>
-        <label className={flowStyles.field}>
+        <label className={styles.field}>
           <span>Статус</span>
           <select
             value={statusFilter}
-            onChange={(e) =>
-              setStatusFilter(e.target.value as typeof statusFilter)
-            }
+            onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
           >
             <option value="ALL">Все</option>
             <option value="AVAILABLE">В наличии</option>
@@ -429,34 +468,45 @@ export function MenuAvailabilitySection({
       </div>
 
       {bulkCategory ? (
-        <div className={flowStyles.opBulk}>
-          <div className={flowStyles.buttonRow}>
+        <div>
+          <div className={styles.bulkBar}>
+            <span className={styles.bulkCategory}>Категория: {bulkCategory}</span>
             <button
-              className={flowStyles.secondaryButton}
+              className={`${styles.btn} ${styles.btnRedOutline}`}
               type="button"
-              onClick={() => setBulkOpen((v) => !v)}
+              onClick={() => {
+                setBulkOpen((v) => !v);
+                setBulkError(null);
+              }}
             >
-              Временно отключить категорию «{bulkCategory}»
+              Отключить категорию
             </button>
             <button
-              className={flowStyles.secondaryButton}
+              className={`${styles.btn} ${styles.btnGreen}`}
               type="button"
-              onClick={() =>
-                restoreCategory(restaurant.id, bulkCategory, "RESTAURANT")
-              }
+              onClick={() => {
+                const res = restoreCategory(restaurant.id, bulkCategory, "RESTAURANT");
+                setBulkError(res.ok ? null : res.error);
+              }}
             >
-              Вернуть категорию в меню
+              Вернуть категорию
             </button>
           </div>
+          {bulkError && !bulkOpen ? (
+            <p className={styles.error} role="alert">
+              {bulkError}
+            </p>
+          ) : null}
           {bulkOpen ? (
             <ReasonDurationPanel
               reasons={ITEM_REASONS}
               durations={ITEM_DURATIONS}
               confirmLabel="Отключить категорию"
               affectedLabel={`Будет отключено: ${bulkAffected}`}
+              error={bulkError}
               onConfirm={(reason, choice) => {
                 const { mode, resumeAt } = durationToPause(choice);
-                pauseCategory(
+                const res = pauseCategory(
                   restaurant.id,
                   bulkCategory,
                   reason,
@@ -464,46 +514,65 @@ export function MenuAvailabilitySection({
                   resumeAt,
                   "RESTAURANT",
                 );
+                if (!res.ok) {
+                  setBulkError(res.error);
+                  return;
+                }
+                setBulkError(null);
                 setBulkOpen(false);
               }}
-              onCancel={() => setBulkOpen(false)}
+              onCancel={() => {
+                setBulkOpen(false);
+                setBulkError(null);
+              }}
             />
           ) : null}
         </div>
-      ) : null}
+      ) : (
+        <p className={styles.bulkHint}>
+          Выберите конкретную категорию для массового действия.
+        </p>
+      )}
 
-      <div className={flowStyles.opMenuList}>
-        {visible.length === 0 ? (
-          <div className={flowStyles.emptyState}>Блюда не найдены.</div>
-        ) : (
-          visible.map((item) => (
+      {visible.length === 0 ? (
+        <div className={styles.empty}>Блюда не найдены.</div>
+      ) : (
+        <div className={styles.menuList}>
+          {visible.map((item) => (
             <MenuAvailabilityRow
               item={item}
               restaurant={restaurant}
               nowMs={nowMs}
               key={item.id}
             />
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
 
-      <h3 className={flowStyles.sectionTitle}>Последние изменения</h3>
+      <h3 className={styles.sectionTitle} style={{ marginTop: 18 }}>
+        Последние изменения
+      </h3>
       {events.length === 0 ? (
-        <p className={flowStyles.summaryHint}>Изменений пока нет.</p>
+        <p className={styles.panelHint}>Изменений пока нет.</p>
       ) : (
-        <ul className={flowStyles.opEventLog}>
+        <ul className={styles.eventLog}>
           {events.map((event) => (
-            <li key={event.id}>
-              <span>{formatTimeInZone(event.occurredAt, restaurant.timeZone)}</span>
-              <span>{EVENT_ACTION_LABELS[event.action] ?? event.action}</span>
-              {event.menuItemId ? (
-                <span>
-                  {menu.find((m) => m.id === event.menuItemId)?.name ??
-                    "Блюдо"}
+            <li className={styles.eventRow} key={event.id}>
+              <span className={styles.eventTime}>
+                {formatTimeInZone(event.occurredAt, restaurant.timeZone)}
+              </span>
+              <span className={styles.eventMain}>
+                <span>{EVENT_ACTION_LABELS[event.action] ?? event.action}</span>
+                {event.menuItemId ? (
+                  <span>
+                    {menu.find((m) => m.id === event.menuItemId)?.name ?? "Блюдо"}
+                  </span>
+                ) : null}
+                <span className={styles.eventActor}>
+                  {ACTOR_LABELS[event.actor] ?? event.actor}
                 </span>
-              ) : null}
-              <span>{event.reason}</span>
-              <span>{ACTOR_LABELS[event.actor] ?? event.actor}</span>
+              </span>
+              <span className={styles.eventReason}>{event.reason}</span>
             </li>
           ))}
         </ul>

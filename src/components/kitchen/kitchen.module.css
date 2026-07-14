@@ -1,0 +1,536 @@
+/* Строгий KDS-дизайн рабочего места кухни. Только для /restaurant/kitchen и
+   кухонных компонентов. Клиентскую дизайн-систему не затрагивает. */
+
+.screen {
+  --kds-bg: #f2f3f1;
+  --kds-surface: #ffffff;
+  --kds-surface-subtle: #f7f8f6;
+  --kds-text: #161a17;
+  --kds-muted: #66706a;
+  --kds-border: #cfd5d1;
+  --kds-border-strong: #aeb7b1;
+  --kds-action: #202923;
+  --kds-action-hover: #111713;
+  --kds-success: #1f6b45;
+  --kds-warning: #b45309;
+  --kds-danger: #a8322d;
+
+  min-height: 100%;
+  padding: 16px;
+  background: var(--kds-bg);
+  color: var(--kds-text);
+}
+
+/* --- Toolbar ------------------------------------------------------------- */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--kds-border);
+}
+
+.toolbarLeft {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--kds-muted);
+}
+
+.restaurantName {
+  font-size: 20px;
+  font-weight: 750;
+  color: var(--kds-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbarRight {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.restaurantSelect {
+  height: 40px;
+  max-width: 220px;
+  padding: 0 10px;
+  border: 1px solid var(--kds-border-strong);
+  border-radius: 7px;
+  background: var(--kds-surface);
+  color: var(--kds-text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+/* --- Sound bell icon button --------------------------------------------- */
+.soundBtn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--kds-border-strong);
+  border-radius: 7px;
+  background: var(--kds-surface);
+  color: var(--kds-text);
+  cursor: pointer;
+}
+
+.soundBtn:hover {
+  background: var(--kds-surface-subtle);
+}
+
+.soundBtn:focus-visible {
+  outline: 2px solid var(--kds-action);
+  outline-offset: 2px;
+}
+
+.soundBtnOn {
+  background: var(--kds-action);
+  border-color: var(--kds-action);
+  color: #fff;
+}
+
+.soundBtnOn:hover {
+  background: var(--kds-action-hover);
+}
+
+.soundDot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #38c172;
+  box-shadow: 0 0 0 2px var(--kds-action);
+}
+
+.soundError {
+  width: 100%;
+  margin: -6px 0 12px;
+  color: var(--kds-danger);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* --- Buttons ------------------------------------------------------------ */
+.btn {
+  min-height: 40px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--kds-action);
+  outline-offset: 2px;
+}
+
+/* Основное действие — тёмный графит. */
+.btnDark {
+  background: var(--kds-action);
+  border-color: var(--kds-action);
+  color: #fff;
+  min-height: 44px;
+}
+
+.btnDark:hover:not(:disabled) {
+  background: var(--kds-action-hover);
+}
+
+/* Готово/вернуть — тёмно-зелёный. */
+.btnGreen {
+  background: var(--kds-success);
+  border-color: var(--kds-success);
+  color: #fff;
+  min-height: 44px;
+}
+
+.btnGreen:hover:not(:disabled) {
+  background: #185534;
+}
+
+/* Отклонить — белый фон, красная рамка/текст. */
+.btnRedOutline {
+  background: var(--kds-surface);
+  border-color: var(--kds-danger);
+  color: var(--kds-danger);
+}
+
+.btnRedOutline:hover:not(:disabled) {
+  background: #fbf1f0;
+}
+
+/* Нейтральное вторичное действие. */
+.btnOutline {
+  background: var(--kds-surface);
+  border-color: var(--kds-border-strong);
+  color: var(--kds-text);
+}
+
+.btnOutline:hover:not(:disabled) {
+  background: var(--kds-surface-subtle);
+}
+
+.btnRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btnRowEnd {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* --- Accept status line -------------------------------------------------- */
+.acceptStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--kds-border);
+  border-radius: 8px;
+  background: var(--kds-surface);
+}
+
+.acceptStatusLeft {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 700;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dotOk {
+  background: var(--kds-success);
+}
+
+.dotOff {
+  background: var(--kds-danger);
+}
+
+/* --- Pause active block --------------------------------------------------- */
+.pauseActive {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 12px 14px 12px 16px;
+  border: 1px solid var(--kds-border);
+  border-left: 4px solid var(--kds-warning);
+  border-radius: 8px;
+  background: var(--kds-surface);
+}
+
+.pauseTitle {
+  margin: 0 0 2px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.pauseMeta {
+  margin: 0;
+  color: var(--kds-muted);
+  font-size: 13px;
+}
+
+/* --- Reason/duration panel ----------------------------------------------- */
+.panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid var(--kds-border-strong);
+  border-radius: 8px;
+  background: var(--kds-surface);
+}
+
+.field {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--kds-muted);
+}
+
+.field select,
+.field input,
+.field textarea {
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 1px solid var(--kds-border-strong);
+  border-radius: 6px;
+  background: var(--kds-surface);
+  color: var(--kds-text);
+  font-size: 14px;
+}
+
+.field textarea {
+  min-height: 60px;
+  resize: vertical;
+}
+
+.panelHint {
+  margin: 0;
+  color: var(--kds-muted);
+  font-size: 13px;
+}
+
+.error {
+  margin: 4px 0 0;
+  color: var(--kds-danger);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* --- Menu availability --------------------------------------------------- */
+.section {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--kds-border);
+  border-radius: 8px;
+  background: var(--kds-surface);
+}
+
+.sectionTitle {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.bulkBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--kds-border);
+}
+
+.bulkCategory {
+  font-weight: 750;
+}
+
+.bulkHint {
+  margin: 0 0 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--kds-border);
+  color: var(--kds-muted);
+  font-size: 13px;
+}
+
+.menuList {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--kds-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.menuRow {
+  display: grid;
+  grid-template-columns: 2fr 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--kds-border);
+  background: var(--kds-surface);
+}
+
+.menuRow:last-child {
+  border-bottom: 0;
+}
+
+.menuRowOff {
+  background: var(--kds-surface-subtle);
+}
+
+.menuName {
+  min-width: 0;
+  font-weight: 700;
+}
+
+.menuCategory {
+  color: var(--kds-muted);
+  font-size: 13px;
+}
+
+.menuStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.statusOk {
+  background: var(--kds-success);
+}
+
+.statusOff {
+  background: var(--kds-danger);
+}
+
+.menuUntil {
+  color: var(--kds-muted);
+  font-size: 12px;
+}
+
+.menuReason {
+  grid-column: 1 / -1;
+  margin: -4px 0 0;
+  color: var(--kds-muted);
+  font-size: 12px;
+}
+
+.menuRowPanel {
+  grid-column: 1 / -1;
+}
+
+/* --- Event log ----------------------------------------------------------- */
+.eventLog {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eventRow {
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--kds-border);
+  font-size: 13px;
+}
+
+.eventRow:last-child {
+  border-bottom: 0;
+}
+
+.eventTime {
+  color: var(--kds-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.eventMain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.eventActor {
+  color: var(--kds-muted);
+}
+
+.eventReason {
+  grid-column: 2;
+  color: var(--kds-muted);
+  font-size: 12px;
+}
+
+.empty {
+  padding: 16px;
+  color: var(--kds-muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* --- Mobile -------------------------------------------------------------- */
+@media (max-width: 720px) {
+  .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .menuRow {
+    grid-template-columns: 1fr auto;
+    row-gap: 6px;
+  }
+
+  .menuCategory {
+    grid-column: 1;
+  }
+
+  .menuStatus {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 430px) {
+  .toolbar {
+    align-items: stretch;
+  }
+
+  .toolbarRight {
+    justify-content: space-between;
+  }
+
+  .restaurantSelect {
+    flex: 1;
+    max-width: none;
+  }
+
+  .pauseActive {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .acceptStatus {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .menuRow {
+    grid-template-columns: 1fr;
+  }
+}

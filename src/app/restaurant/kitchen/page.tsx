@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Bell, BellRing } from "lucide-react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import kds from "@/components/kitchen/kitchen.module.css";
 import {
   MenuAvailabilitySection,
   RestaurantPauseControl,
@@ -218,16 +220,16 @@ function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
               ))}
             </select>
           </label>
-          <div className={flowStyles.buttonRow}>
+          <div className={kds.btnRow}>
             <button
-              className={flowStyles.primaryButton}
+              className={`${kds.btn} ${kds.btnDark}`}
               type="button"
               onClick={() => acceptOrder(order.id, prep)}
             >
               Принять
             </button>
             <button
-              className={flowStyles.secondaryButton}
+              className={`${kds.btn} ${kds.btnRedOutline}`}
               type="button"
               onClick={() => setRejectOpen(true)}
             >
@@ -261,21 +263,21 @@ function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
               />
             </label>
           ) : null}
-          <div className={flowStyles.buttonRow}>
+          <div className={kds.btnRowEnd}>
             <button
-              className={flowStyles.dangerButton}
+              className={`${kds.btn} ${kds.btnOutline}`}
+              type="button"
+              onClick={() => setRejectOpen(false)}
+            >
+              Не отклонять
+            </button>
+            <button
+              className={`${kds.btn} ${kds.btnRedOutline}`}
               type="button"
               disabled={!effectiveReason.trim()}
               onClick={() => rejectOrder(order.id, effectiveReason)}
             >
               Подтвердить отклонение
-            </button>
-            <button
-              className={flowStyles.secondaryButton}
-              type="button"
-              onClick={() => setRejectOpen(false)}
-            >
-              Не отклонять
             </button>
           </div>
         </div>
@@ -332,9 +334,9 @@ function PreparingCard({
       >
         {countdown.overdue ? countdown.text : `До готовности: ${countdown.text}`}
       </div>
-      <div className={flowStyles.buttonRow}>
+      <div className={kds.btnRow}>
         <button
-          className={flowStyles.primaryButton}
+          className={`${kds.btn} ${kds.btnGreen}`}
           type="button"
           onClick={() => markReady(order.id)}
         >
@@ -480,48 +482,16 @@ export default function RestaurantKitchenPage() {
   };
 
   return (
-    <div className={flowStyles.kitchenScreen}>
-      <header className={flowStyles.kitchenHeader}>
-        <div>
-          <h1>Кухня: {restaurant?.name ?? "—"}</h1>
-          <div className={flowStyles.kitchenSoundControls}>
-            {!soundEnabled ? (
-              <button
-                className={flowStyles.secondaryButton}
-                type="button"
-                onClick={handleEnableSound}
-              >
-                Включить звук
-              </button>
-            ) : (
-              <>
-                <span className={flowStyles.kitchenSoundOn}>Звук включён</span>
-                <button
-                  className={flowStyles.secondaryButton}
-                  type="button"
-                  onClick={() => playKitchenBeep()}
-                >
-                  Проверить звук
-                </button>
-                <button
-                  className={flowStyles.secondaryButton}
-                  type="button"
-                  onClick={handleDisableSound}
-                >
-                  Выключить звук
-                </button>
-              </>
-            )}
-            {soundBlocked ? (
-              <span className={flowStyles.summaryHint}>
-                Браузер заблокировал звук. Нажмите «Включить звук» ещё раз.
-              </span>
-            ) : null}
-          </div>
+    <div className={kds.screen}>
+      <div className={kds.toolbar}>
+        <div className={kds.toolbarLeft}>
+          <span className={kds.brand}>Кухня</span>
+          <span className={kds.restaurantName}>{restaurant?.name ?? "—"}</span>
         </div>
-        <label className={flowStyles.field}>
-          <span>Сменить ресторан</span>
+        <div className={kds.toolbarRight}>
           <select
+            className={kds.restaurantSelect}
+            aria-label="Сменить ресторан"
             value={selectedRestaurantId}
             onChange={(event) => setSelectedRestaurantId(event.target.value)}
           >
@@ -531,8 +501,33 @@ export default function RestaurantKitchenPage() {
               </option>
             ))}
           </select>
-        </label>
-      </header>
+          <button
+            className={`${kds.soundBtn} ${soundEnabled ? kds.soundBtnOn : ""}`}
+            type="button"
+            onClick={soundEnabled ? handleDisableSound : handleEnableSound}
+            aria-label={soundEnabled ? "Выключить звук" : "Включить звук"}
+            title={
+              soundEnabled
+                ? "Звук включён. Нажмите, чтобы выключить"
+                : "Включить звук"
+            }
+          >
+            {soundEnabled ? (
+              <BellRing size={18} aria-hidden="true" />
+            ) : (
+              <Bell size={18} aria-hidden="true" />
+            )}
+            {soundEnabled ? (
+              <span className={kds.soundDot} aria-hidden="true" />
+            ) : null}
+          </button>
+        </div>
+      </div>
+      {soundBlocked ? (
+        <p className={kds.soundError} role="alert">
+          Браузер заблокировал звук. Нажмите значок звука ещё раз.
+        </p>
+      ) : null}
 
       {!isHydrated ? (
         <div className={flowStyles.emptyState}>Загружаем кухню…</div>

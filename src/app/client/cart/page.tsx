@@ -16,6 +16,7 @@ import {
   getDeliveryModeProviderLabel,
   getPickupPaymentSummary,
   getRestaurant,
+  getRestaurantResumeHint,
   getSmallOrderMissingAmountCents,
   isAddressReady,
   isCustomerNameValid,
@@ -189,6 +190,12 @@ export default function ClientCartPage() {
         <div className={flowStyles.warningNotice} role="status">
           Ресторан временно не принимает новые заказы. Попробуйте позже или
           выберите другой ресторан.
+          {restaurant && getRestaurantResumeHint(restaurant, nowMs) ? (
+            <>
+              {" "}
+              {getRestaurantResumeHint(restaurant, nowMs)}
+            </>
+          ) : null}
         </div>
       ) : null}
       {hasUnavailableItem ? (

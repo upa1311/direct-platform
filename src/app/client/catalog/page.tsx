@@ -15,6 +15,7 @@ import {
   formatMoney,
   getAvailablePlatformDeliveryFeeCents,
   getRestaurantPromotion,
+  getRestaurantResumeHint,
   getValidatedAddressZoneId,
   isOperationalPauseActiveAt,
   sortPublishedRestaurants,
@@ -236,6 +237,12 @@ export default function ClientCatalogPage() {
                         ? "Принимает заказы"
                         : "Меню для просмотра"}
                   </span>
+                  {isOperationalPauseActiveAt(restaurant.orderPause, nowMs) &&
+                  getRestaurantResumeHint(restaurant, nowMs) ? (
+                    <span className={flowStyles.deliveryConditions}>
+                      {getRestaurantResumeHint(restaurant, nowMs)}
+                    </span>
+                  ) : null}
                   {promotion ? (
                     <span className={flowStyles.promoInline}>
                       <Gift

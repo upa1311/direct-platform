@@ -276,6 +276,28 @@ export function isOperationalPauseActiveAt(
 }
 
 /**
+ * Клиентская подсказка о времени возобновления приёма (§12), в часовом поясе
+ * ресторана. Показывается только для активной паузы с конкретным resumeAt;
+ * для MANUAL/«до ручного включения» возвращает null. Единый форматтер для
+ * каталога, страницы ресторана и корзины (без дублирования Intl-кода).
+ */
+export function getRestaurantResumeHint(
+  restaurant: Restaurant,
+  nowMs: number,
+): string | null {
+  const pause = restaurant.orderPause;
+  if (!isOperationalPauseActiveAt(pause, nowMs) || !pause?.resumeAt) {
+    return null;
+  }
+  const time = new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: restaurant.timeZone || "Europe/Chisinau",
+  }).format(new Date(pause.resumeAt));
+  return `Приём заказов возобновится примерно в ${time}.`;
+}
+
+/**
  * Принимает ли ресторан НОВЫЕ заказы в момент nowMs (§7). Учитывает publication
  * status, оплату, режимы доставки, ручной приём и операционную паузу. Истёкшая
  * пауза (resumeAt <= now) уже не блокирует, даже если sweep ещё не нормализовал

@@ -16,6 +16,7 @@ import {
   getRestaurant,
   getRestaurantMenu,
   getRestaurantPromotion,
+  getRestaurantResumeHint,
   isAddressReady,
   isMenuItemAvailableAt,
   isOperationalPauseActiveAt,
@@ -155,6 +156,12 @@ export default function ClientRestaurantPage() {
       {isOperationalPauseActiveAt(restaurant.orderPause, nowMs) ? (
         <div className={flowStyles.warningNotice} role="status">
           Ресторан временно не принимает новые заказы.
+          {getRestaurantResumeHint(restaurant, nowMs) ? (
+            <>
+              {" "}
+              {getRestaurantResumeHint(restaurant, nowMs)}
+            </>
+          ) : null}
         </div>
       ) : !canOrder ? (
         <div className={flowStyles.warningNotice}>
