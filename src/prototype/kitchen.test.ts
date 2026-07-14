@@ -12,12 +12,20 @@ import {
   updateCartAddress,
 } from "./actions.ts";
 import {
+  formatExpectedReady,
+  formatKitchenCountdown,
   getKitchenAwaitingPaymentOrders,
   getKitchenNewOrders,
   getKitchenPreparingOrders,
   getKitchenReadyOrders,
+  getOrderStatusSince,
 } from "./selectors.ts";
-import type { Order, OrderStatus, PrototypeState } from "./models.ts";
+import type {
+  Order,
+  OrderHistoryEvent,
+  OrderStatus,
+  PrototypeState,
+} from "./models.ts";
 
 const ADDR = { street: "Тестовая улица 1", house: "1" };
 
@@ -303,4 +311,135 @@ test("вызов kitchen-селекторов не мутирует данные
   getKitchenPreparingOrders(state, "restaurant-3");
   getKitchenReadyOrders(state, "restaurant-2");
   assert.equal(JSON.stringify(state.orders), before);
+});
+
+// --- §8: точки отсчёта статусов и форматирование времени --------------------
+
+function statusEvent(
+  toStatus: OrderStatus,
+  occurredAt: string,
+): OrderHistoryEvent {
+  return {
+    id: `ev-${toStatus}`,
+    occurredAt,
+    actor: "RESTAURANT",
+    type: "STATUS",
+    fromStatus: null,
+    toStatus,
+    message: toStatus,
+  };
+}
+
+/** Реальный заказ-шаблон для клонирования с искусственной историей. */
+function templateOrder(): Order {
+  const { state, orderId } = addPickupOrder(
+    createDefaultState(),
+    "restaurant-2-item-1",
+  );
+  return orderOf(state, orderId);
+}
+
+test("getOrderStatusSince: RESTAURANT_REVIEW считается от createdAt", () => {
+  const order: Order = {
+    ...templateOrder(),
+    createdAt: "2026-07-13T10:00:00.000Z",
+    updatedAt: "2026-07-13T10:30:00.000Z",
+    history: [statusEvent("RESTAURANT_REVIEW", "2026-07-13T10:05:00.000Z")],
+  };
+  assert.equal(
+    getOrderStatusSince(order, "RESTAURANT_REVIEW"),
+    "2026-07-13T10:00:00.000Z",
+  );
+});
+
+test("getOrderStatusSince: PREPARING считается от перехода, не от createdAt", () => {
+  const order: Order = {
+    ...templateOrder(),
+    createdAt: "2026-07-13T10:00:00.000Z",
+    updatedAt: "2026-07-13T11:00:00.000Z",
+    status: "PREPARING",
+    history: [
+      statusEvent("RESTAURANT_REVIEW", "2026-07-13T10:00:00.000Z"),
+      statusEvent("PREPARING", "2026-07-13T10:20:00.000Z"),
+    ],
+  };
+  assert.equal(
+    getOrderStatusSince(order, "PREPARING"),
+    "2026-07-13T10:20:00.000Z",
+  );
+});
+
+test("getOrderStatusSince: READY и READY_FOR_PICKUP от своих переходов", () => {
+  const base = templateOrder();
+  const ready: Order = {
+    ...base,
+    status: "READY",
+    history: [statusEvent("READY", "2026-07-13T10:40:00.000Z")],
+  };
+  assert.equal(getOrderStatusSince(ready, "READY"), "2026-07-13T10:40:00.000Z");
+  const pickup: Order = {
+    ...base,
+    status: "READY_FOR_PICKUP",
+    history: [statusEvent("READY_FOR_PICKUP", "2026-07-13T10:45:00.000Z")],
+  };
+  assert.equal(
+    getOrderStatusSince(pickup, "READY_FOR_PICKUP"),
+    "2026-07-13T10:45:00.000Z",
+  );
+});
+
+test("getOrderStatusSince: без history-события — fallback updatedAt", () => {
+  const order: Order = {
+    ...templateOrder(),
+    updatedAt: "2026-07-13T12:00:00.000Z",
+    history: [],
+  };
+  assert.equal(
+    getOrderStatusSince(order, "PREPARING"),
+    "2026-07-13T12:00:00.000Z",
+  );
+});
+
+test("getOrderStatusSince не мутирует order.history", () => {
+  const order = {
+    ...templateOrder(),
+    status: "PREPARING" as OrderStatus,
+    history: [statusEvent("PREPARING", "2026-07-13T10:20:00.000Z")],
+  };
+  const before = JSON.stringify(order.history);
+  getOrderStatusSince(order, "PREPARING");
+  assert.equal(JSON.stringify(order.history), before);
+});
+
+test("formatExpectedReady использует часовой пояс ресторана", () => {
+  // 2026-07-13T11:35:00Z: Кишинёв (UTC+3 летом) → 14:35.
+  const iso = "2026-07-13T11:35:00.000Z";
+  assert.equal(
+    formatExpectedReady(iso, "Europe/Chisinau"),
+    "Ожидаемая готовность: 14:35",
+  );
+  // Тот же момент в UTC → 11:35 (не время компьютера).
+  assert.equal(formatExpectedReady(iso, "UTC"), "Ожидаемая готовность: 11:35");
+  // Без времени.
+  assert.equal(
+    formatExpectedReady(null, "Europe/Chisinau"),
+    "Ожидаемая готовность: не задана",
+  );
+});
+
+test("formatKitchenCountdown: просрочка увеличивается после 0:00", () => {
+  const expected = "2026-07-13T10:00:00.000Z";
+  const t = (iso: string) => Date.parse(iso);
+  // До срока.
+  assert.equal(
+    formatKitchenCountdown(expected, t("2026-07-13T09:48:00.000Z")).overdue,
+    false,
+  );
+  // На 3 минуты позже срока.
+  const late3 = formatKitchenCountdown(expected, t("2026-07-13T10:03:00.000Z"));
+  assert.equal(late3.overdue, true);
+  assert.equal(late3.text, "Просрочено на 3 мин");
+  // На 7 минут позже — просрочка растёт.
+  const late7 = formatKitchenCountdown(expected, t("2026-07-13T10:07:00.000Z"));
+  assert.equal(late7.text, "Просрочено на 7 мин");
 });

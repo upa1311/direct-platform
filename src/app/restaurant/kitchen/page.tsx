@@ -7,11 +7,14 @@ import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-works
 import { usePrototype } from "@/prototype/prototype-provider";
 import type { DeliveryMode, Order } from "@/prototype/models";
 import {
+  formatExpectedReady,
+  formatKitchenCountdown,
   getKitchenAwaitingPaymentOrders,
   getKitchenNewOrders,
   getKitchenPreparingOrders,
   getKitchenReadyOrders,
   getOrderReadySince,
+  getOrderStatusSince,
   getRestaurant,
   paymentStatusLabels,
 } from "@/prototype/selectors";
@@ -53,30 +56,6 @@ function formatElapsed(fromIso: string, nowMs: number): string {
   return `${sec} сек`;
 }
 
-/** Обратный отсчёт до готовности / просрочка (§10). */
-function formatCountdown(
-  expectedReadyAt: string | null,
-  nowMs: number,
-): { text: string; overdue: boolean } {
-  if (!expectedReadyAt) {
-    return { text: "Время не задано", overdue: false };
-  }
-  if (nowMs === 0) return { text: "—", overdue: false };
-  const diffMs = Date.parse(expectedReadyAt) - nowMs;
-  if (diffMs <= 0) {
-    const overdueMin = Math.floor(-diffMs / 60_000);
-    return { text: `Просрочено на ${overdueMin} мин`, overdue: true };
-  }
-  const totalSec = Math.ceil(diffMs / 1000);
-  if (totalSec >= 60) {
-    return { text: `${Math.floor(totalSec / 60)} мин`, overdue: false };
-  }
-  return {
-    text: `0:${String(totalSec % 60).padStart(2, "0")}`,
-    overdue: false,
-  };
-}
-
 /** Общий блок позиций заказа с заметными комментариями (§6). */
 function KitchenItems({ order }: { order: Order }) {
   return (
@@ -99,14 +78,16 @@ function KitchenItems({ order }: { order: Order }) {
   );
 }
 
-/** Заголовок карточки: номер, время ожидания, способ, оплата. */
+/** Заголовок карточки: номер, способ, оплата, время в текущем статусе. */
 function KitchenCardHead({
   order,
   waitingLabel,
+  sinceIso,
   nowMs,
 }: {
   order: Order;
   waitingLabel: string;
+  sinceIso: string;
   nowMs: number;
 }) {
   return (
@@ -119,13 +100,13 @@ function KitchenCardHead({
         </div>
       </div>
       <span className={flowStyles.statusBadge}>
-        {waitingLabel} {formatElapsed(order.createdAt, nowMs)}
+        {waitingLabel} {formatElapsed(sinceIso, nowMs)}
       </span>
     </div>
   );
 }
 
-function NewOrderCard({ order }: { order: Order }) {
+function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
   const { state, acceptOrder, rejectOrder } = usePrototype();
   const restaurant = getRestaurant(state, order.restaurant.id);
   const [prep, setPrep] = useState(() =>
@@ -140,7 +121,12 @@ function NewOrderCard({ order }: { order: Order }) {
 
   return (
     <article className={flowStyles.kitchenCard}>
-      <KitchenCardHead order={order} waitingLabel="Ждёт" nowMs={0} />
+      <KitchenCardHead
+        order={order}
+        waitingLabel="Ждёт"
+        sinceIso={getOrderStatusSince(order, "RESTAURANT_REVIEW")}
+        nowMs={nowMs}
+      />
       <KitchenItems order={order} />
       <p className={flowStyles.kitchenUnits}>Всего единиц: {totalUnits(order)}</p>
 
@@ -225,9 +211,17 @@ function NewOrderCard({ order }: { order: Order }) {
   );
 }
 
-function PreparingCard({ order, nowMs }: { order: Order; nowMs: number }) {
+function PreparingCard({
+  order,
+  nowMs,
+  timeZone,
+}: {
+  order: Order;
+  nowMs: number;
+  timeZone: string;
+}) {
   const { markReady } = usePrototype();
-  const countdown = formatCountdown(order.expectedReadyAt, nowMs);
+  const countdown = formatKitchenCountdown(order.expectedReadyAt, nowMs);
   const readyLabel =
     order.deliveryMode === "PICKUP"
       ? "Готово к выдаче"
@@ -239,7 +233,12 @@ function PreparingCard({ order, nowMs }: { order: Order; nowMs: number }) {
     <article
       className={`${flowStyles.kitchenCard} ${countdown.overdue ? flowStyles.kitchenCardDelayed : ""}`}
     >
-      <KitchenCardHead order={order} waitingLabel="Принят" nowMs={nowMs} />
+      <KitchenCardHead
+        order={order}
+        waitingLabel="Готовится"
+        sinceIso={getOrderStatusSince(order, "PREPARING")}
+        nowMs={nowMs}
+      />
       {countdown.overdue ? (
         <span className={flowStyles.kitchenDelayBadge}>Задержка</span>
       ) : null}
@@ -248,6 +247,9 @@ function PreparingCard({ order, nowMs }: { order: Order; nowMs: number }) {
       <div className={flowStyles.inlineMeta}>
         <span>Время приготовления: {order.preparationMinutes ?? "—"} мин</span>
       </div>
+      <p className={flowStyles.kitchenUnits}>
+        {formatExpectedReady(order.expectedReadyAt, timeZone)}
+      </p>
       <div
         className={`${flowStyles.kitchenCountdown} ${countdown.overdue ? flowStyles.kitchenCountdownOverdue : ""}`}
       >
@@ -284,6 +286,9 @@ function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
           </div>
         </div>
         <span className={flowStyles.statusBadge}>{waitingFor}</span>
+      </div>
+      <div className={flowStyles.inlineMeta}>
+        <span>Оплата: {paymentStatusLabels[order.paymentStatus]}</span>
       </div>
       <KitchenItems order={order} />
       <p className={flowStyles.kitchenUnits}>Всего единиц: {totalUnits(order)}</p>
@@ -358,7 +363,17 @@ export default function RestaurantKitchenPage() {
                         {kitchenDeliveryLabel(order.deliveryMode)}
                       </span>
                     </div>
+                    <div className={flowStyles.inlineMeta}>
+                      <span>Оплата: {paymentStatusLabels[order.paymentStatus]}</span>
+                    </div>
                     <KitchenItems order={order} />
+                    <p className={flowStyles.kitchenUnits}>
+                      Всего единиц: {totalUnits(order)}
+                    </p>
+                    <p className={flowStyles.kitchenUnits}>
+                      Приготовление после оплаты: {order.preparationMinutes ?? "—"}{" "}
+                      мин
+                    </p>
                     <p className={flowStyles.summaryHint}>
                       Приготовление начнётся после подтверждения оплаты.
                     </p>
@@ -377,7 +392,7 @@ export default function RestaurantKitchenPage() {
                 <div className={flowStyles.emptyState}>Новых заказов нет.</div>
               ) : (
                 newOrders.map((order) => (
-                  <NewOrderCard order={order} key={order.id} />
+                  <NewOrderCard order={order} nowMs={nowMs} key={order.id} />
                 ))
               )}
             </section>
@@ -392,7 +407,12 @@ export default function RestaurantKitchenPage() {
                 </div>
               ) : (
                 preparingOrders.map((order) => (
-                  <PreparingCard order={order} nowMs={nowMs} key={order.id} />
+                  <PreparingCard
+                    order={order}
+                    nowMs={nowMs}
+                    timeZone={restaurant?.timeZone ?? "Europe/Chisinau"}
+                    key={order.id}
+                  />
                 ))
               )}
             </section>

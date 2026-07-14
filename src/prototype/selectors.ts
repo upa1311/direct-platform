@@ -778,16 +778,71 @@ function kitchenOrders(
   );
 }
 
-/** Момент готовности заказа (из истории), иначе updatedAt. */
-export function getOrderReadySince(order: Order): string {
+/**
+ * Момент входа заказа в указанный статус (§2). Разные секции кухни считают
+ * время от РАЗНЫХ точек:
+ * - RESTAURANT_REVIEW — от createdAt (ожидание ресторана);
+ * - PREPARING/READY/READY_FOR_PICKUP — от последнего history-перехода в этот
+ *   статус (время приготовления/готовности), не от createdAt.
+ * Если подходящего события нет — безопасный fallback updatedAt. Чистая
+ * функция, историю не мутирует.
+ */
+export function getOrderStatusSince(order: Order, status: OrderStatus): string {
+  if (status === "RESTAURANT_REVIEW") {
+    return order.createdAt;
+  }
   const event = [...order.history]
     .reverse()
-    .find(
-      (e) =>
-        e.type === "STATUS" &&
-        (e.toStatus === "READY" || e.toStatus === "READY_FOR_PICKUP"),
-    );
+    .find((e) => e.type === "STATUS" && e.toStatus === status);
   return event?.occurredAt ?? order.updatedAt;
+}
+
+/** Ожидаемое время готовности (HH:MM) в часовом поясе ресторана (§3). */
+export function formatExpectedReady(
+  expectedReadyAt: string | null,
+  timeZone: string,
+): string {
+  if (!expectedReadyAt) {
+    return "Ожидаемая готовность: не задана";
+  }
+  const time = new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone,
+  }).format(new Date(expectedReadyAt));
+  return `Ожидаемая готовность: ${time}`;
+}
+
+/**
+ * Обратный отсчёт до готовности / просрочка (§3, §10). `nowMs === 0` — часы
+ * ещё не инициализированы (SSR). Чистая функция.
+ */
+export function formatKitchenCountdown(
+  expectedReadyAt: string | null,
+  nowMs: number,
+): { text: string; overdue: boolean } {
+  if (!expectedReadyAt) {
+    return { text: "Время не задано", overdue: false };
+  }
+  if (nowMs === 0) return { text: "—", overdue: false };
+  const diffMs = Date.parse(expectedReadyAt) - nowMs;
+  if (diffMs <= 0) {
+    const overdueMin = Math.floor(-diffMs / 60_000);
+    return { text: `Просрочено на ${overdueMin} мин`, overdue: true };
+  }
+  const totalSec = Math.ceil(diffMs / 1000);
+  if (totalSec >= 60) {
+    return { text: `${Math.floor(totalSec / 60)} мин`, overdue: false };
+  }
+  return {
+    text: `0:${String(totalSec % 60).padStart(2, "0")}`,
+    overdue: false,
+  };
+}
+
+/** Момент готовности заказа (READY/READY_FOR_PICKUP), иначе updatedAt. */
+export function getOrderReadySince(order: Order): string {
+  return getOrderStatusSince(order, order.status);
 }
 
 /** «Новые» — RESTAURANT_REVIEW, самые старые сверху (ждут дольше всех). */

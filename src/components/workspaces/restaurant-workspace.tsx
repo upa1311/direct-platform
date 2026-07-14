@@ -64,6 +64,14 @@ export function RestaurantWorkspaceProvider({
       ? selectedRestaurantId
       : (availableIds[0] ?? DEFAULT_RESTAURANT_ID);
 
+  // §7: если сохранённый ресторан пропал — фиксируем исправленный fallback
+  // обратно в localStorage, чтобы выбор оставался согласованным.
+  useEffect(() => {
+    if (resolvedId !== selectedRestaurantId) {
+      window.localStorage.setItem(WORKSPACE_RESTAURANT_KEY, resolvedId);
+    }
+  }, [resolvedId, selectedRestaurantId]);
+
   const setSelectedRestaurantId = useCallback((restaurantId: string) => {
     setSelected(restaurantId);
     window.localStorage.setItem(WORKSPACE_RESTAURANT_KEY, restaurantId);
