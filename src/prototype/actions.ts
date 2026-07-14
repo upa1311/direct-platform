@@ -15,6 +15,11 @@ import type {
   DriverStatus,
   FulfillmentChoice,
   MenuItemVariant,
+  OperationalActor,
+  OperationalEvent,
+  OperationalEventAction,
+  OperationalPause,
+  OperationalPauseMode,
   Order,
   OrderHistoryEvent,
   OrderItemSnapshot,
@@ -35,6 +40,7 @@ import type {
 import {
   calculateCartPricing,
   canPlacePrototypeOrder,
+  computeNextOpeningIso,
   detectZoneId,
   getCartDeliveryMode,
   getCartItemViews,
@@ -43,6 +49,9 @@ import {
   isAddressReady,
   isCustomerNameValid,
   isCustomerPhoneValid,
+  isMenuItemAvailableAt,
+  isOperationalPauseActiveAt,
+  isRestaurantAcceptingOrdersAt,
   WORKING_RESTAURANT_IDS,
 } from "./selectors";
 import {
@@ -84,7 +93,7 @@ export function addCartItem(
 ): ActionResult<AddCartItemResult> {
   const menuItem = state.menuItems.find((item) => item.id === menuItemId);
 
-  if (!menuItem?.available) {
+  if (!menuItem || !isMenuItemAvailableAt(menuItem, Date.now())) {
     return { state, result: "NOT_AVAILABLE" };
   }
 
@@ -301,9 +310,13 @@ export function createOrderFromCart(
       "Корзина содержит некорректные позиции. Удалите их и добавьте блюда заново.",
     );
   }
-  if (!canPlacePrototypeOrder(restaurant)) {
+  if (!isRestaurantAcceptingOrdersAt(restaurant, Date.now())) {
+    // §7: активная операционная пауза — свой нейтральный текст.
+    const paused = isOperationalPauseActiveAt(restaurant.orderPause, Date.now());
     return fail(
-      "Ресторан сейчас не принимает заказы. Выберите другой ресторан или повторите позже.",
+      paused
+        ? "Ресторан временно не принимает новые заказы. Попробуйте позже или выберите другой ресторан."
+        : "Ресторан сейчас не принимает заказы. Выберите другой ресторан или повторите позже.",
     );
   }
   if (!restaurant.deliveryModes.includes(deliveryMode)) {
@@ -313,14 +326,17 @@ export function createOrderFromCart(
     return fail("Выберите оплату онлайн.");
   }
 
+  // §15: каждая позиция перепроверяется на операционную доступность.
   const hasMissingOrUnavailable = state.cart.items.some((cartItem) => {
     const menuItem = state.menuItems.find(
       (candidate) => candidate.id === cartItem.menuItemId,
     );
-    return !menuItem || !menuItem.available;
+    return !menuItem || !isMenuItemAvailableAt(menuItem, Date.now());
   });
   if (hasMissingOrUnavailable) {
-    return fail("Некоторые блюда больше недоступны. Обновите корзину.");
+    return fail(
+      "Некоторые блюда больше недоступны. Удалите их из корзины или выберите замену.",
+    );
   }
 
   const itemViews = getCartItemViews(state);
@@ -1780,24 +1796,573 @@ function adminHistoryEvent(
   };
 }
 
-/** Приостановка/возобновление приёма заказов рестораном. Заказы не трогаются. */
+/**
+ * Приостановка/возобновление приёма заказов рестораном (админ). Заказы не
+ * трогаются. §21: административное решение всегда очищает stale orderPause —
+ * временная пауза не подменяет ручное решение админа.
+ */
 export function setRestaurantAcceptingOrders(
   state: PrototypeState,
   restaurantId: string,
   accepting: boolean,
 ): PrototypeState {
   const target = state.restaurants.find((r) => r.id === restaurantId);
-  if (!target || target.isAcceptingOrders === accepting) {
+  if (!target) {
+    return state;
+  }
+  const needsChange =
+    target.isAcceptingOrders !== accepting || target.orderPause !== null;
+  if (!needsChange) {
     return state;
   }
   return finalizeMutation(state, {
     ...state,
     restaurants: state.restaurants.map((restaurant) =>
       restaurant.id === restaurantId
-        ? { ...restaurant, isAcceptingOrders: accepting }
+        ? { ...restaurant, isAcceptingOrders: accepting, orderPause: null }
         : restaurant,
     ),
   });
+}
+
+// --- Операционная пауза приёма и доступность меню (Этап кухни 2) ------------
+
+export interface OperationalActionResult {
+  ok: boolean;
+  error: string | null;
+}
+
+export interface BulkOperationalResult {
+  ok: boolean;
+  error: string | null;
+  /** Сколько блюд реально изменено. */
+  affected: number;
+}
+
+function makeOperationalEvent(
+  index: number,
+  occurredAt: string,
+  actor: OperationalActor,
+  action: OperationalEventAction,
+  restaurantId: string,
+  menuItemId: string | null,
+  reason: string,
+  resumeAt: string | null,
+): OperationalEvent {
+  return {
+    id: `op-${restaurantId}-${menuItemId ?? "restaurant"}-${index}`,
+    occurredAt,
+    actor,
+    action,
+    restaurantId,
+    menuItemId,
+    reason,
+    resumeAt,
+  };
+}
+
+/**
+ * Разрешает срок паузы в конкретный resumeAt. Возвращает `{ resumeAt }` или
+ * `{ error }`. MANUAL → null; UNTIL_TIME → переданное время (в будущем);
+ * UNTIL_NEXT_OPEN → ближайшее открытие по графику ресторана.
+ */
+function resolvePauseResumeAt(
+  restaurant: Restaurant,
+  mode: OperationalPauseMode,
+  resumeAt: string | null,
+  nowMs: number,
+): { resumeAt: string | null } | { error: string } {
+  if (mode === "MANUAL") {
+    return { resumeAt: null };
+  }
+  if (mode === "UNTIL_TIME") {
+    if (!resumeAt) return { error: "Укажите время возобновления." };
+    if (Date.parse(resumeAt) <= nowMs) {
+      return { error: "Время возобновления должно быть в будущем." };
+    }
+    return { resumeAt };
+  }
+  // UNTIL_NEXT_OPEN
+  const next = resumeAt ?? computeNextOpeningIso(restaurant, nowMs);
+  if (!next) {
+    return {
+      error:
+        "В графике нет рабочих дней. Выберите «До ручного включения».",
+    };
+  }
+  if (Date.parse(next) <= nowMs) {
+    return { error: "Время возобновления должно быть в будущем." };
+  }
+  return { resumeAt: next };
+}
+
+/**
+ * Операционная пауза приёма новых заказов рестораном (§2, §6). Блокирует только
+ * новые заказы: активные заказы, цены, snapshots, settlement, водители и запросы
+ * на отмену не трогаются. Причина обязательна. Идентичная активная пауза не
+ * создаёт лишней мутации.
+ */
+export function pauseRestaurantOrders(
+  state: PrototypeState,
+  restaurantId: string,
+  reason: string,
+  mode: OperationalPauseMode,
+  resumeAt: string | null,
+  actor: OperationalActor,
+): ActionResult<OperationalActionResult> {
+  const restaurant = state.restaurants.find((r) => r.id === restaurantId);
+  const fail = (error: string): ActionResult<OperationalActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  if (!restaurant) return fail("Ресторан не найден.");
+  const normReason = reason.trim();
+  if (!normReason) return fail("Укажите причину паузы.");
+
+  const now = new Date().toISOString();
+  const nowMs = Date.parse(now);
+  const resolved = resolvePauseResumeAt(restaurant, mode, resumeAt, nowMs);
+  if ("error" in resolved) return fail(resolved.error);
+
+  const pause: OperationalPause = {
+    startedAt: now,
+    reason: normReason,
+    mode,
+    resumeAt: resolved.resumeAt,
+    startedBy: actor,
+  };
+
+  // Идемпотентность: идентичная активная пауза не мутирует состояние.
+  const existing = restaurant.orderPause;
+  if (
+    existing &&
+    !restaurant.isAcceptingOrders &&
+    existing.reason === normReason &&
+    existing.mode === mode &&
+    existing.resumeAt === resolved.resumeAt
+  ) {
+    return { state, result: { ok: true, error: null } };
+  }
+
+  const event = makeOperationalEvent(
+    state.operationalEvents.length + 1,
+    now,
+    actor,
+    "RESTAURANT_PAUSED",
+    restaurantId,
+    null,
+    normReason,
+    resolved.resumeAt,
+  );
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      restaurants: state.restaurants.map((r) =>
+        r.id === restaurantId
+          ? { ...r, isAcceptingOrders: false, orderPause: pause }
+          : r,
+      ),
+      operationalEvents: [...state.operationalEvents, event],
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Возобновление приёма заказов рестораном (§6). Ручное (RESTAURANT/ADMIN) либо
+ * автоматическое (SYSTEM). Идемпотентно: уже принимающий без паузы не мутирует.
+ */
+export function resumeRestaurantOrders(
+  state: PrototypeState,
+  restaurantId: string,
+  actor: OperationalActor,
+  reason = "",
+): ActionResult<OperationalActionResult> {
+  const restaurant = state.restaurants.find((r) => r.id === restaurantId);
+  const fail = (error: string): ActionResult<OperationalActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  if (!restaurant) return fail("Ресторан не найден.");
+  if (restaurant.isAcceptingOrders && !restaurant.orderPause) {
+    return { state, result: { ok: true, error: null } };
+  }
+
+  const now = new Date().toISOString();
+  const message =
+    reason.trim() ||
+    (actor === "SYSTEM"
+      ? "Автоматическое возобновление приёма"
+      : "Возобновление приёма заказов");
+  const event = makeOperationalEvent(
+    state.operationalEvents.length + 1,
+    now,
+    actor,
+    "RESTAURANT_RESUMED",
+    restaurantId,
+    null,
+    message,
+    null,
+  );
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      restaurants: state.restaurants.map((r) =>
+        r.id === restaurantId
+          ? { ...r, isAcceptingOrders: true, orderPause: null }
+          : r,
+      ),
+      operationalEvents: [...state.operationalEvents, event],
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Временная операционная недоступность блюда (§13). Меняет только available и
+ * availabilityPause выбранного блюда выбранного ресторана. Цену, variants и
+ * исторические snapshot не трогает. Идемпотентно для идентичной паузы.
+ */
+export function setMenuItemOperationallyUnavailable(
+  state: PrototypeState,
+  restaurantId: string,
+  menuItemId: string,
+  reason: string,
+  mode: OperationalPauseMode,
+  resumeAt: string | null,
+  actor: OperationalActor,
+): ActionResult<OperationalActionResult> {
+  const restaurant = state.restaurants.find((r) => r.id === restaurantId);
+  const item = state.menuItems.find((m) => m.id === menuItemId);
+  const fail = (error: string): ActionResult<OperationalActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  if (!restaurant) return fail("Ресторан не найден.");
+  if (!item) return fail("Блюдо не найдено.");
+  if (item.restaurantId !== restaurantId) {
+    return fail("Блюдо относится к другому ресторану.");
+  }
+  const normReason = reason.trim();
+  if (!normReason) return fail("Укажите причину.");
+
+  const now = new Date().toISOString();
+  const nowMs = Date.parse(now);
+  const resolved = resolvePauseResumeAt(restaurant, mode, resumeAt, nowMs);
+  if ("error" in resolved) return fail(resolved.error);
+
+  const pause: OperationalPause = {
+    startedAt: now,
+    reason: normReason,
+    mode,
+    resumeAt: resolved.resumeAt,
+    startedBy: actor,
+  };
+  const existing = item.availabilityPause;
+  if (
+    existing &&
+    !item.available &&
+    existing.reason === normReason &&
+    existing.mode === mode &&
+    existing.resumeAt === resolved.resumeAt
+  ) {
+    return { state, result: { ok: true, error: null } };
+  }
+
+  const event = makeOperationalEvent(
+    state.operationalEvents.length + 1,
+    now,
+    actor,
+    "MENU_ITEM_UNAVAILABLE",
+    restaurantId,
+    menuItemId,
+    normReason,
+    resolved.resumeAt,
+  );
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      menuItems: state.menuItems.map((m) =>
+        m.id === menuItemId
+          ? { ...m, available: false, availabilityPause: pause }
+          : m,
+      ),
+      operationalEvents: [...state.operationalEvents, event],
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Возврат блюда в меню (§13). Очищает availabilityPause, ставит available. */
+export function restoreMenuItemAvailability(
+  state: PrototypeState,
+  restaurantId: string,
+  menuItemId: string,
+  actor: OperationalActor,
+  reason = "",
+): ActionResult<OperationalActionResult> {
+  const item = state.menuItems.find((m) => m.id === menuItemId);
+  const fail = (error: string): ActionResult<OperationalActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  if (!state.restaurants.some((r) => r.id === restaurantId)) {
+    return fail("Ресторан не найден.");
+  }
+  if (!item) return fail("Блюдо не найдено.");
+  if (item.restaurantId !== restaurantId) {
+    return fail("Блюдо относится к другому ресторану.");
+  }
+  if (item.available && !item.availabilityPause) {
+    return { state, result: { ok: true, error: null } };
+  }
+
+  const now = new Date().toISOString();
+  const message =
+    reason.trim() ||
+    (actor === "SYSTEM"
+      ? "Автоматическое возвращение в меню"
+      : "Блюдо возвращено в меню");
+  const event = makeOperationalEvent(
+    state.operationalEvents.length + 1,
+    now,
+    actor,
+    "MENU_ITEM_AVAILABLE",
+    restaurantId,
+    menuItemId,
+    message,
+    null,
+  );
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      menuItems: state.menuItems.map((m) =>
+        m.id === menuItemId
+          ? { ...m, available: true, availabilityPause: null }
+          : m,
+      ),
+      operationalEvents: [...state.operationalEvents, event],
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Массовое отключение категории (§14). По умолчанию меняет только СЕЙЧАС
+ * доступные блюда выбранной категории выбранного ресторана. Каждое реально
+ * изменённое блюдо даёт одно событие журнала.
+ */
+export function pauseCategoryItems(
+  state: PrototypeState,
+  restaurantId: string,
+  category: string,
+  reason: string,
+  mode: OperationalPauseMode,
+  resumeAt: string | null,
+  actor: OperationalActor,
+): ActionResult<BulkOperationalResult> {
+  const restaurant = state.restaurants.find((r) => r.id === restaurantId);
+  const fail = (error: string): ActionResult<BulkOperationalResult> => ({
+    state,
+    result: { ok: false, error, affected: 0 },
+  });
+  if (!restaurant) return fail("Ресторан не найден.");
+  const normReason = reason.trim();
+  if (!normReason) return fail("Укажите причину.");
+
+  const now = new Date().toISOString();
+  const nowMs = Date.parse(now);
+  const resolved = resolvePauseResumeAt(restaurant, mode, resumeAt, nowMs);
+  if ("error" in resolved) return fail(resolved.error);
+
+  const targets = state.menuItems.filter(
+    (m) =>
+      m.restaurantId === restaurantId &&
+      m.category === category &&
+      isMenuItemAvailableAt(m, nowMs),
+  );
+  if (targets.length === 0) {
+    return { state, result: { ok: true, error: null, affected: 0 } };
+  }
+  const targetIds = new Set(targets.map((m) => m.id));
+  const pause: OperationalPause = {
+    startedAt: now,
+    reason: normReason,
+    mode,
+    resumeAt: resolved.resumeAt,
+    startedBy: actor,
+  };
+  const events = targets.map((m, i) =>
+    makeOperationalEvent(
+      state.operationalEvents.length + 1 + i,
+      now,
+      actor,
+      "MENU_ITEM_UNAVAILABLE",
+      restaurantId,
+      m.id,
+      normReason,
+      resolved.resumeAt,
+    ),
+  );
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      menuItems: state.menuItems.map((m) =>
+        targetIds.has(m.id)
+          ? { ...m, available: false, availabilityPause: pause }
+          : m,
+      ),
+      operationalEvents: [...state.operationalEvents, ...events],
+    },
+    now,
+  );
+  return {
+    state: nextState,
+    result: { ok: true, error: null, affected: targets.length },
+  };
+}
+
+/** Массовый возврат категории (§14): только сейчас недоступные блюда. */
+export function restoreCategoryItems(
+  state: PrototypeState,
+  restaurantId: string,
+  category: string,
+  actor: OperationalActor,
+): ActionResult<BulkOperationalResult> {
+  const restaurant = state.restaurants.find((r) => r.id === restaurantId);
+  const fail = (error: string): ActionResult<BulkOperationalResult> => ({
+    state,
+    result: { ok: false, error, affected: 0 },
+  });
+  if (!restaurant) return fail("Ресторан не найден.");
+
+  const now = new Date().toISOString();
+  const nowMs = Date.parse(now);
+  const targets = state.menuItems.filter(
+    (m) =>
+      m.restaurantId === restaurantId &&
+      m.category === category &&
+      !isMenuItemAvailableAt(m, nowMs),
+  );
+  if (targets.length === 0) {
+    return { state, result: { ok: true, error: null, affected: 0 } };
+  }
+  const targetIds = new Set(targets.map((m) => m.id));
+  const events = targets.map((m, i) =>
+    makeOperationalEvent(
+      state.operationalEvents.length + 1 + i,
+      now,
+      actor,
+      "MENU_ITEM_AVAILABLE",
+      restaurantId,
+      m.id,
+      "Категория возвращена в меню",
+      null,
+    ),
+  );
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      menuItems: state.menuItems.map((m) =>
+        targetIds.has(m.id)
+          ? { ...m, available: true, availabilityPause: null }
+          : m,
+      ),
+      operationalEvents: [...state.operationalEvents, ...events],
+    },
+    now,
+  );
+  return {
+    state: nextState,
+    result: { ok: true, error: null, affected: targets.length },
+  };
+}
+
+/**
+ * Автоматическое снятие истёкших операционных пауз (§17). Возобновляет
+ * рестораны и блюда с resumeAt <= now (MANUAL/«до ручного» не трогает).
+ * Идемпотентно; при отсутствии изменений возвращает исходную ссылку state.
+ * Заказы, финансы, settlement, корзину и запросы на отмену не меняет.
+ */
+export function resumeExpiredOperationalPauses(
+  state: PrototypeState,
+  nowIso: string,
+): PrototypeState {
+  const nowMs = Date.parse(nowIso);
+  const isExpired = (pause: OperationalPause | null | undefined): boolean =>
+    Boolean(pause && pause.resumeAt !== null && Date.parse(pause.resumeAt) <= nowMs);
+
+  const expiredRestaurants = state.restaurants.filter((r) =>
+    isExpired(r.orderPause),
+  );
+  const expiredItems = state.menuItems.filter((m) =>
+    isExpired(m.availabilityPause),
+  );
+  if (expiredRestaurants.length === 0 && expiredItems.length === 0) {
+    return state;
+  }
+
+  const restaurantIds = new Set(expiredRestaurants.map((r) => r.id));
+  const itemIds = new Set(expiredItems.map((m) => m.id));
+  let index = state.operationalEvents.length + 1;
+  const events: OperationalEvent[] = [];
+  for (const r of expiredRestaurants) {
+    events.push(
+      makeOperationalEvent(
+        index++,
+        nowIso,
+        "SYSTEM",
+        "RESTAURANT_RESUMED",
+        r.id,
+        null,
+        "Автоматическое возобновление приёма",
+        null,
+      ),
+    );
+  }
+  for (const m of expiredItems) {
+    events.push(
+      makeOperationalEvent(
+        index++,
+        nowIso,
+        "SYSTEM",
+        "MENU_ITEM_AVAILABLE",
+        m.restaurantId,
+        m.id,
+        "Автоматическое возвращение в меню",
+        null,
+      ),
+    );
+  }
+
+  return finalizeMutation(
+    state,
+    {
+      ...state,
+      restaurants: state.restaurants.map((r) =>
+        restaurantIds.has(r.id)
+          ? { ...r, isAcceptingOrders: true, orderPause: null }
+          : r,
+      ),
+      menuItems: state.menuItems.map((m) =>
+        itemIds.has(m.id)
+          ? { ...m, available: true, availabilityPause: null }
+          : m,
+      ),
+      operationalEvents: [...state.operationalEvents, ...events],
+    },
+    nowIso,
+  );
 }
 
 /** Назначение свободного водителя Direct на заказ PLATFORM_DRIVER. */

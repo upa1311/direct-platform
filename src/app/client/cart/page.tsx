@@ -7,6 +7,7 @@ import { Gift } from "lucide-react";
 
 import { REPEAT_NOTICE_KEY } from "@/components/order-flow/client-order-actions";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   calculateCartPricing,
@@ -19,6 +20,9 @@ import {
   isAddressReady,
   isCustomerNameValid,
   isCustomerPhoneValid,
+  isMenuItemAvailableAt,
+  isOperationalPauseActiveAt,
+  isRestaurantAcceptingOrdersAt,
   pluralizePizza,
 } from "@/prototype/selectors";
 
@@ -33,6 +37,7 @@ export default function ClientCartPage() {
     updateCustomer,
     createOrder,
   } = usePrototype();
+  const nowMs = useNowMs();
   const [submitError, setSubmitError] = useState("");
   const [addressError, setAddressError] = useState("");
   const [repeatNotice, setRepeatNotice] = useState("");
@@ -74,6 +79,13 @@ export default function ClientCartPage() {
   // Кнопка отправки не блокируется молча из-за адреса: для доставки адрес
   // проверяется при клике (handleSubmit покажет ошибку и сфокусирует поле).
   // Так клиент всегда может нажать «Отправить заказ» и получить подсказку.
+  // Операционная пауза приёма и доступность каждой позиции (Этап кухни 2).
+  const restaurantPaused = restaurant
+    ? isOperationalPauseActiveAt(restaurant.orderPause, nowMs)
+    : false;
+  const hasUnavailableItem = itemViews.some(
+    ({ menuItem }) => !isMenuItemAvailableAt(menuItem, nowMs),
+  );
   const canSubmitOrder =
     selectedModeIsSupported &&
     restaurantDeliveryReady &&
@@ -81,9 +93,10 @@ export default function ClientCartPage() {
     customerPhoneIsValid &&
     itemViews.length > 0 &&
     state.cart.paymentMethod === "ONLINE" &&
-    restaurant?.isAcceptingOrders === true &&
-    restaurant.paymentMethods.includes("ONLINE") &&
-    itemViews.every(({ menuItem }) => menuItem.available) &&
+    (restaurant
+      ? isRestaurantAcceptingOrdersAt(restaurant, nowMs)
+      : false) &&
+    !hasUnavailableItem &&
     (isPickup ? pricing.customerTotalCents !== null : true);
 
   const focusAddressSection = () => {
@@ -172,6 +185,19 @@ export default function ClientCartPage() {
         </p>
       ) : null}
 
+      {restaurantPaused ? (
+        <div className={flowStyles.warningNotice} role="status">
+          Ресторан временно не принимает новые заказы. Попробуйте позже или
+          выберите другой ресторан.
+        </div>
+      ) : null}
+      {hasUnavailableItem ? (
+        <div className={flowStyles.warningNotice} role="alert">
+          Некоторые блюда больше недоступны. Удалите их из корзины или выберите
+          замену.
+        </div>
+      ) : null}
+
       <div className={flowStyles.cartLayout}>
         <div className={flowStyles.panelStack}>
           <section className={flowStyles.card}>
@@ -191,6 +217,11 @@ export default function ClientCartPage() {
                           : ""}
                       </strong>
                       <p>{formatMoney(lineTotalCents)}</p>
+                      {!isMenuItemAvailableAt(menuItem, nowMs) ? (
+                        <p className={flowStyles.cartLineUnavailable}>
+                          Сейчас недоступно
+                        </p>
+                      ) : null}
                     </div>
                     <div className={flowStyles.quantityControls}>
                       <button

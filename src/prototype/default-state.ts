@@ -45,6 +45,7 @@ type RestaurantExtras = Pick<
   | "internalAdminNote"
   | "weeklySchedule"
   | "timeZone"
+  | "orderPause"
 >;
 
 /** Часовой пояс по умолчанию (Бендеры / Приднестровье). */
@@ -68,6 +69,7 @@ export function createRestaurantExtras(
       ? cloneWeeklySchedule(overrides.weeklySchedule)
       : createDefaultWeeklySchedule(),
     timeZone: overrides.timeZone || DEFAULT_RESTAURANT_TIME_ZONE,
+    orderPause: overrides.orderPause ?? null,
   };
 }
 
@@ -510,5 +512,6 @@ export function createDefaultState(): PrototypeState {
     orders: [],
     settlements: [],
     cancellationRequests: [],
+    operationalEvents: [],
   };
 }

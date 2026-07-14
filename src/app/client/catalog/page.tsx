@@ -9,12 +9,14 @@ import {
   useClientAddressConfirmation,
 } from "@/components/order-flow/client-address-confirmation";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   formatMoney,
   getAvailablePlatformDeliveryFeeCents,
   getRestaurantPromotion,
   getValidatedAddressZoneId,
+  isOperationalPauseActiveAt,
   sortPublishedRestaurants,
   type CatalogSort,
 } from "@/prototype/selectors";
@@ -28,6 +30,7 @@ export default function ClientCatalogPage() {
     beginAddressEdit,
   } = useClientAddressConfirmation();
   const [sort, setSort] = useState<CatalogSort>("RECOMMENDED");
+  const nowMs = useNowMs();
   const streetFieldRef = useRef<HTMLSelectElement>(null);
   const hasValidAddress =
     getValidatedAddressZoneId(state.cart.address, state) !== null;
@@ -227,9 +230,11 @@ export default function ClientCatalogPage() {
                   </div>
                   <p>{restaurant.description}</p>
                   <span className={flowStyles.statusBadge}>
-                    {restaurant.isAcceptingOrders
-                      ? "Принимает заказы"
-                      : "Меню для просмотра"}
+                    {isOperationalPauseActiveAt(restaurant.orderPause, nowMs)
+                      ? "Временно не принимает заказы"
+                      : restaurant.isAcceptingOrders
+                        ? "Принимает заказы"
+                        : "Меню для просмотра"}
                   </span>
                   {promotion ? (
                     <span className={flowStyles.promoInline}>

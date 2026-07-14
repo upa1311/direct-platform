@@ -133,6 +133,42 @@ export interface DaySchedule {
 /** Структурированный недельный график работы ресторана. */
 export type WeeklySchedule = Record<WeekdayId, DaySchedule>;
 
+/** Как задан срок операционной паузы приёма/доступности. */
+export type OperationalPauseMode = "UNTIL_TIME" | "UNTIL_NEXT_OPEN" | "MANUAL";
+
+/** Кто выполнил операционное действие. */
+export type OperationalActor = "RESTAURANT" | "ADMIN" | "SYSTEM";
+
+/**
+ * Операционная пауза приёма заказов ресторана или доступности блюда. Отдельное
+ * состояние, НЕ связанное с publication status. Для MANUAL resumeAt = null.
+ */
+export interface OperationalPause {
+  startedAt: string;
+  reason: string;
+  mode: OperationalPauseMode;
+  resumeAt: string | null;
+  startedBy: OperationalActor;
+}
+
+export type OperationalEventAction =
+  | "RESTAURANT_PAUSED"
+  | "RESTAURANT_RESUMED"
+  | "MENU_ITEM_UNAVAILABLE"
+  | "MENU_ITEM_AVAILABLE";
+
+/** Запись операционного журнала (пауза/возобновление ресторана и блюд). */
+export interface OperationalEvent {
+  id: string;
+  occurredAt: string;
+  actor: OperationalActor;
+  action: OperationalEventAction;
+  restaurantId: string;
+  menuItemId: string | null;
+  reason: string;
+  resumeAt: string | null;
+}
+
 export interface Restaurant {
   id: string;
   name: string;
@@ -177,6 +213,8 @@ export interface Restaurant {
   weeklySchedule: WeeklySchedule;
   /** Часовой пояс ресторана (IANA), например «Europe/Chisinau». */
   timeZone: string;
+  /** Операционная пауза приёма заказов (отдельно от publication status). */
+  orderPause: OperationalPause | null;
 }
 
 export interface MenuItemVariant {
@@ -198,6 +236,8 @@ export interface MenuItem {
   available: boolean;
   /** Варианты размеров. Пусто/undefined — товар без размеров (старый flow). */
   variants?: MenuItemVariant[];
+  /** Операционная временная недоступность блюда (кухня). null — нет паузы. */
+  availabilityPause?: OperationalPause | null;
 }
 
 export interface Promotion {
@@ -424,6 +464,7 @@ export interface PrototypeState {
   orders: Order[];
   settlements: SettlementEntry[];
   cancellationRequests: CancellationRequest[];
+  operationalEvents: OperationalEvent[];
 }
 
 /** Результат расчёта корзины для клиентского оформления. */

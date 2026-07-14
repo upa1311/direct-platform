@@ -9,6 +9,8 @@ import type {
   DriverStatus,
   MenuItem,
   MenuItemVariant,
+  OperationalEvent,
+  OperationalPause,
   Order,
   OrderHistoryEvent,
   OrderStatus,
@@ -22,6 +24,7 @@ import type {
   WeekdayId,
   ZoneId,
 } from "./models";
+import { WEEKDAY_ORDER } from "./models";
 import {
   getDefaultRecommendationRank,
   TEST_RESTAURANT_ID,
@@ -261,15 +264,56 @@ export function getDeliveryModeProviderLabel(
   return null;
 }
 
-export function canPlacePrototypeOrder(restaurant: Restaurant): boolean {
-  return (
+/** Активна ли операционная пауза в момент nowMs (истёкшая — уже НЕ активна). */
+export function isOperationalPauseActiveAt(
+  pause: OperationalPause | null | undefined,
+  nowMs: number,
+): boolean {
+  if (!pause) return false;
+  // MANUAL / «до ручного включения» — активна, пока не сняли вручную.
+  if (pause.resumeAt === null) return true;
+  return Date.parse(pause.resumeAt) > nowMs;
+}
+
+/**
+ * Принимает ли ресторан НОВЫЕ заказы в момент nowMs (§7). Учитывает publication
+ * status, оплату, режимы доставки, ручной приём и операционную паузу. Истёкшая
+ * пауза (resumeAt <= now) уже не блокирует, даже если sweep ещё не нормализовал
+ * isAcceptingOrders. Чистая функция.
+ */
+export function isRestaurantAcceptingOrdersAt(
+  restaurant: Restaurant,
+  nowMs: number,
+): boolean {
+  const baseOk =
     restaurant.status === "PUBLISHED" &&
-    restaurant.isAcceptingOrders &&
     restaurant.paymentMethods.includes("ONLINE") &&
     (restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
       restaurant.deliveryModes.includes("RESTAURANT_DELIVERY") ||
-      restaurant.deliveryModes.includes("PICKUP"))
-  );
+      restaurant.deliveryModes.includes("PICKUP"));
+  if (!baseOk) return false;
+  if (restaurant.orderPause) {
+    // Пауза есть — решает её активность (истёкшая разрешает приём).
+    return !isOperationalPauseActiveAt(restaurant.orderPause, nowMs);
+  }
+  // Паузы нет — административный ручной приём.
+  return restaurant.isAcceptingOrders;
+}
+
+export function canPlacePrototypeOrder(restaurant: Restaurant): boolean {
+  return isRestaurantAcceptingOrdersAt(restaurant, Date.now());
+}
+
+/** Доступно ли блюдо для НОВОГО заказа в момент nowMs (§12, §15). */
+export function isMenuItemAvailableAt(
+  menuItem: MenuItem,
+  nowMs: number,
+): boolean {
+  if (menuItem.availabilityPause) {
+    // Пауза есть — истёкшая делает блюдо доступным ещё до sweep.
+    return !isOperationalPauseActiveAt(menuItem.availabilityPause, nowMs);
+  }
+  return menuItem.available;
 }
 
 export function isCustomerNameValid(name: string): boolean {
@@ -1367,6 +1411,133 @@ export function isRestaurantOpenNow(
   }
 
   return false;
+}
+
+/** Смещение часового пояса (мс) для момента utcMs. */
+function tzOffsetMs(utcMs: number, timeZone: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(utcMs));
+    const map: Record<string, string> = {};
+    for (const p of parts) map[p.type] = p.value;
+    const asIfUtc = Date.UTC(
+      Number(map.year),
+      Number(map.month) - 1,
+      Number(map.day),
+      Number(map.hour),
+      Number(map.minute),
+      Number(map.second),
+    );
+    return asIfUtc - utcMs;
+  } catch {
+    return 0;
+  }
+}
+
+/** Локальное настенное время (в timeZone) → UTC-инстант в мс. */
+function zonedWallToUtcMs(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): number {
+  const guess = Date.UTC(year, month - 1, day, hour, minute);
+  const off1 = tzOffsetMs(guess, timeZone);
+  let instant = guess - off1;
+  const off2 = tzOffsetMs(instant, timeZone);
+  if (off2 !== off1) instant = guess - off2;
+  return instant;
+}
+
+/** Календарные Y-M-D локальной даты ресторана для момента utcMs. */
+function localDateParts(
+  utcMs: number,
+  timeZone: string,
+): { year: number; month: number; day: number } {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(utcMs));
+    const map: Record<string, string> = {};
+    for (const p of parts) map[p.type] = p.value;
+    return {
+      year: Number(map.year),
+      month: Number(map.month),
+      day: Number(map.day),
+    };
+  } catch {
+    const d = new Date(utcMs);
+    return {
+      year: d.getUTCFullYear(),
+      month: d.getUTCMonth() + 1,
+      day: d.getUTCDate(),
+    };
+  }
+}
+
+/**
+ * Ближайшее будущее открытие ресторана по графику (§4), в его часовом поясе
+ * (IANA, не UTC-offset). Возвращает ISO-инстант или null, если ни один день не
+ * рабочий. Выбирает первое открытие строго позже nowMs: закрыт до сегодняшнего
+ * открытия → сегодня; открыт/открытие прошло → следующий рабочий день;
+ * выключенные дни пропускаются. weeklySchedule не мутируется.
+ */
+export function computeNextOpeningIso(
+  restaurant: Restaurant,
+  nowMs: number,
+): string | null {
+  const timeZone = restaurant.timeZone || "Europe/Chisinau";
+  const { year, month, day } = localDateParts(nowMs, timeZone);
+  const startWeekday = getRestaurantLocalNow(restaurant, new Date(nowMs)).weekdayId;
+  const startIndex = WEEKDAY_ORDER.indexOf(startWeekday);
+
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const weekday = WEEKDAY_ORDER[(startIndex + offset) % 7];
+    const schedule = restaurant.weeklySchedule[weekday];
+    if (!schedule?.enabled) continue;
+    const openMinutes = timeToMinutes(schedule.openTime);
+    if (openMinutes === null) continue;
+
+    // Локальная календарная дата (year,month,day) + offset дней.
+    const shifted = new Date(Date.UTC(year, month - 1, day) + offset * 86_400_000);
+    const instant = zonedWallToUtcMs(
+      shifted.getUTCFullYear(),
+      shifted.getUTCMonth() + 1,
+      shifted.getUTCDate(),
+      Math.floor(openMinutes / 60),
+      openMinutes % 60,
+      timeZone,
+    );
+    if (instant > nowMs) {
+      return new Date(instant).toISOString();
+    }
+  }
+  return null;
+}
+
+/** Последние операционные события ресторана (журнал кухни), новые сверху. */
+export function getRestaurantOperationalEvents(
+  state: PrototypeState,
+  restaurantId: string,
+  limit = 10,
+): OperationalEvent[] {
+  return state.operationalEvents
+    .filter((event) => event.restaurantId === restaurantId)
+    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
+    .slice(0, limit);
 }
 
 export { TEST_RESTAURANT_ID };

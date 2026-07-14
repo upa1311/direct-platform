@@ -366,6 +366,55 @@ function normalizeWeeklySchedule(value: unknown): WeeklySchedule {
   }, {} as WeeklySchedule);
 }
 
+/** Валидная операционная пауза из хранилища, иначе null (§5, §12). */
+function normalizeOperationalPause(
+  value: unknown,
+): PrototypeState["restaurants"][number]["orderPause"] {
+  if (!isRecord(value)) return null;
+  const mode = value.mode;
+  if (mode !== "UNTIL_TIME" && mode !== "UNTIL_NEXT_OPEN" && mode !== "MANUAL") {
+    return null;
+  }
+  const startedBy = value.startedBy;
+  return {
+    startedAt: str(value.startedAt, new Date(0).toISOString()),
+    reason: str(value.reason, ""),
+    mode,
+    resumeAt: typeof value.resumeAt === "string" ? value.resumeAt : null,
+    startedBy:
+      startedBy === "ADMIN" || startedBy === "SYSTEM" ? startedBy : "RESTAURANT",
+  };
+}
+
+/** Дозаполняет операционные поля блюда (§12): availabilityPause по умолчанию null. */
+function normalizeMenuItem(
+  value: unknown,
+): PrototypeState["menuItems"][number] {
+  const raw = isRecord(value) ? value : {};
+  return {
+    ...(raw as unknown as PrototypeState["menuItems"][number]),
+    // Старое available сохраняется как есть (в т.ч. ручная недоступность false).
+    availabilityPause: normalizeOperationalPause(raw.availabilityPause),
+  };
+}
+
+/** Записи операционного журнала; у старых состояний — пустой массив (§18). */
+function normalizeOperationalEvents(
+  value: unknown,
+): PrototypeState["operationalEvents"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      typeof entry.restaurantId !== "string"
+    ) {
+      return [];
+    }
+    return [entry as unknown as PrototypeState["operationalEvents"][number]];
+  });
+}
+
 function normalizeRestaurantV5(
   value: unknown,
 ): PrototypeState["restaurants"][number] {
@@ -408,6 +457,7 @@ function normalizeRestaurantV5(
     internalAdminNote: str(raw.internalAdminNote, ""),
     weeklySchedule: normalizeWeeklySchedule(raw.weeklySchedule),
     timeZone: str(raw.timeZone, "Europe/Chisinau"),
+    orderPause: normalizeOperationalPause(raw.orderPause),
   };
 }
 
@@ -558,7 +608,7 @@ export function normalizePrototypeState(
       ? state.restaurants.map(normalizeRestaurantV5)
       : defaults.restaurants,
     menuItems: Array.isArray(state.menuItems)
-      ? state.menuItems
+      ? state.menuItems.map(normalizeMenuItem)
       : defaults.menuItems,
     promotions: Array.isArray(state.promotions)
       ? state.promotions.map(normalizeSeedPromotion)
@@ -573,6 +623,7 @@ export function normalizePrototypeState(
     cancellationRequests: normalizeCancellationRequests(
       state.cancellationRequests,
     ),
+    operationalEvents: normalizeOperationalEvents(state.operationalEvents),
   };
 }
 
@@ -623,6 +674,7 @@ export function upgradeToV6(raw: unknown): PrototypeState {
     cancellationRequests: normalizeCancellationRequests(
       source.cancellationRequests,
     ),
+    operationalEvents: normalizeOperationalEvents(source.operationalEvents),
   };
   return normalizePrototypeState(merged);
 }

@@ -1947,3 +1947,102 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Этап кухни 2: операционная пауза и доступность меню ------------------ */
+.opPauseIdle,
+.opPauseActive {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid #dfe3df;
+  border-radius: 12px;
+  background: #f6f7f5;
+}
+
+.opPauseActive {
+  border-color: #ead0be;
+  background: #fff7f1;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.opPauseIdleHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.opPanel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dfe3df;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.opFilters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.opBulk {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #eceeec;
+}
+
+.opMenuList {
+  display: grid;
+  gap: 10px;
+}
+
+.opMenuRow {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e4e7e3;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.opMenuRowMuted {
+  opacity: 0.72;
+  background: #f7f8f6;
+}
+
+.opMenuRowTop {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.opEventLog {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.opEventLog li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 13px;
+  color: #59625c;
+}
+
+.cartLineUnavailable {
+  margin: 4px 0 0;
+  color: #8f431c;
+  font-size: 13px;
+  font-weight: 700;
+}

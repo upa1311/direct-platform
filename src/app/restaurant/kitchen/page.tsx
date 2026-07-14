@@ -3,6 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import {
+  MenuAvailabilitySection,
+  RestaurantPauseControl,
+} from "@/components/kitchen/kitchen-operations";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import {
   disableKitchenSound,
@@ -534,6 +538,9 @@ export default function RestaurantKitchenPage() {
         <div className={flowStyles.emptyState}>Загружаем кухню…</div>
       ) : (
         <>
+          {restaurant ? (
+            <RestaurantPauseControl restaurant={restaurant} nowMs={nowMs} />
+          ) : null}
           {awaitingOrders.length > 0 ? (
             <section className={flowStyles.kitchenAwaitingStrip}>
               <h2>Ожидают оплаты — {awaitingOrders.length}</h2>
@@ -623,6 +630,9 @@ export default function RestaurantKitchenPage() {
               )}
             </section>
           </div>
+          {restaurant ? (
+            <MenuAvailabilitySection restaurant={restaurant} nowMs={nowMs} />
+          ) : null}
         </>
       )}
     </div>

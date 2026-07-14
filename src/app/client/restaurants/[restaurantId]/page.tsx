@@ -8,6 +8,7 @@ import { Gift } from "lucide-react";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { useClientAddressConfirmation } from "@/components/order-flow/client-address-confirmation";
 import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
+import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   canPlacePrototypeOrder,
@@ -16,6 +17,8 @@ import {
   getRestaurantMenu,
   getRestaurantPromotion,
   isAddressReady,
+  isMenuItemAvailableAt,
+  isOperationalPauseActiveAt,
   resolveVariant,
 } from "@/prototype/selectors";
 import { shouldAutoConfirmAddress } from "@/prototype/pricing-engine";
@@ -29,6 +32,7 @@ export default function ClientRestaurantPage() {
   const [selectedVariants, setSelectedVariants] = useState<
     Record<string, string>
   >({});
+  const nowMs = useNowMs();
 
   // При открытии ресторана с уже валидным кратким адресом можно тихо
   // подтвердить его (не блокируя переход). Пустой/неполный адрес не мешает
@@ -148,7 +152,11 @@ export default function ClientRestaurantPage() {
         ) : null}
       </div>
 
-      {!canOrder ? (
+      {isOperationalPauseActiveAt(restaurant.orderPause, nowMs) ? (
+        <div className={flowStyles.warningNotice} role="status">
+          Ресторан временно не принимает новые заказы.
+        </div>
+      ) : !canOrder ? (
         <div className={flowStyles.warningNotice}>
           Демонстрационный ресторан — заказы пока недоступны
         </div>
@@ -184,11 +192,12 @@ export default function ClientRestaurantPage() {
           const quantity = cartItem?.quantity ?? 0;
           const isEligible =
             promotion?.eligibleMenuItemIds.includes(menuItem.id) ?? false;
+          const itemAvailable = isMenuItemAvailableAt(menuItem, nowMs);
 
           return (
             <article
               className={`${flowStyles.menuItem} ${
-                menuItem.available ? "" : flowStyles.menuItemUnavailable
+                itemAvailable ? "" : flowStyles.menuItemUnavailable
               }`}
               key={menuItem.id}
             >
@@ -197,7 +206,7 @@ export default function ClientRestaurantPage() {
                 <p>{menuItem.description}</p>
                 <div className={flowStyles.cardMeta}>
                   <span>{menuItem.category}</span>
-                  <span>{menuItem.available ? "В наличии" : "Недоступно"}</span>
+                  <span>{itemAvailable ? "В наличии" : "Временно нет"}</span>
                 </div>
                 {isEligible ? (
                   <p className={flowStyles.itemPromoTag}>Участвует в акции</p>
@@ -235,7 +244,7 @@ export default function ClientRestaurantPage() {
                 <span className={flowStyles.price}>
                   {formatMoney(unitPriceCents, menuItem.currencyCode)}
                 </span>
-                {quantity > 0 && menuItem.available && canOrder ? (
+                {quantity > 0 && itemAvailable && canOrder ? (
                   <div
                     className={flowStyles.menuQuantity}
                     aria-label={`Количество: ${menuItem.name}`}
@@ -264,7 +273,7 @@ export default function ClientRestaurantPage() {
                   <button
                     className={flowStyles.primaryButton}
                     type="button"
-                    disabled={!menuItem.available || !canOrder}
+                    disabled={!itemAvailable || !canOrder}
                     onClick={(event) =>
                       handleAdd(menuItem.id, lineVariantId, event)
                     }

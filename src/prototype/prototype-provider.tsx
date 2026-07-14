@@ -25,6 +25,13 @@ import {
   createRestaurant,
   expireUnansweredRestaurantOrders,
   issuePickupWithoutCode,
+  pauseCategoryItems,
+  pauseRestaurantOrders,
+  restoreCategoryItems,
+  restoreMenuItemAvailability,
+  resumeExpiredOperationalPauses,
+  resumeRestaurantOrders,
+  setMenuItemOperationallyUnavailable,
   markOrderArriving,
   markOrderDelivered,
   markOrderDeliveredByDriver,
@@ -54,10 +61,12 @@ import {
   upsertPromotion,
   type AddCartItemResult,
   type AdminActionResult,
+  type BulkOperationalResult,
   type ClientCancelResult,
   type CompletePickupResult,
   type CreateOrderResult,
   type CreateRestaurantResult,
+  type OperationalActionResult,
   type OrderActionActor,
   type RepeatOrderResult,
   type RequestCancellationResult,
@@ -69,6 +78,8 @@ import type {
   DeliveryAddress,
   FulfillmentChoice,
   MenuItemVariant,
+  OperationalActor,
+  OperationalPauseMode,
   OrderStatus,
   PaymentMethod,
   Promotion,
@@ -122,6 +133,43 @@ interface PrototypeContextValue {
   ) => RequestCancellationResult;
   approveCancellation: (requestId: string, note: string) => AdminActionResult;
   rejectCancellation: (requestId: string, note: string) => AdminActionResult;
+  pauseRestaurant: (
+    restaurantId: string,
+    reason: string,
+    mode: OperationalPauseMode,
+    resumeAt: string | null,
+    actor: OperationalActor,
+  ) => OperationalActionResult;
+  resumeRestaurant: (
+    restaurantId: string,
+    actor: OperationalActor,
+  ) => OperationalActionResult;
+  setMenuItemUnavailable: (
+    restaurantId: string,
+    menuItemId: string,
+    reason: string,
+    mode: OperationalPauseMode,
+    resumeAt: string | null,
+    actor: OperationalActor,
+  ) => OperationalActionResult;
+  restoreMenuItem: (
+    restaurantId: string,
+    menuItemId: string,
+    actor: OperationalActor,
+  ) => OperationalActionResult;
+  pauseCategory: (
+    restaurantId: string,
+    category: string,
+    reason: string,
+    mode: OperationalPauseMode,
+    resumeAt: string | null,
+    actor: OperationalActor,
+  ) => BulkOperationalResult;
+  restoreCategory: (
+    restaurantId: string,
+    category: string,
+    actor: OperationalActor,
+  ) => BulkOperationalResult;
   acceptOrder: (
     orderId: string,
     preparationMinutes: number,
@@ -287,10 +335,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       return;
     }
     const sweep = () => {
-      const next = expireUnansweredRestaurantOrders(
-        stateRef.current,
-        new Date().toISOString(),
-      );
+      const nowIso = new Date().toISOString();
+      // Единый maintenance-цикл: автоотмена неотвеченных + снятие истёкших
+      // операционных пауз (§17). Оба идемпотентны и возвращают ту же ссылку
+      // state при отсутствии изменений.
+      let next = expireUnansweredRestaurantOrders(stateRef.current, nowIso);
+      next = resumeExpiredOperationalPauses(next, nowIso);
       if (next !== stateRef.current) {
         replaceState(next);
       }
@@ -438,6 +488,117 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       if (action.state !== stateRef.current) {
         replaceState(action.state);
       }
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const pauseRestaurant = useCallback(
+    (
+      restaurantId: string,
+      reason: string,
+      mode: OperationalPauseMode,
+      resumeAt: string | null,
+      actor: OperationalActor,
+    ) => {
+      const action = pauseRestaurantOrders(
+        stateRef.current,
+        restaurantId,
+        reason,
+        mode,
+        resumeAt,
+        actor,
+      );
+      if (action.state !== stateRef.current) replaceState(action.state);
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const resumeRestaurant = useCallback(
+    (restaurantId: string, actor: OperationalActor) => {
+      const action = resumeRestaurantOrders(
+        stateRef.current,
+        restaurantId,
+        actor,
+      );
+      if (action.state !== stateRef.current) replaceState(action.state);
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const setMenuItemUnavailable = useCallback(
+    (
+      restaurantId: string,
+      menuItemId: string,
+      reason: string,
+      mode: OperationalPauseMode,
+      resumeAt: string | null,
+      actor: OperationalActor,
+    ) => {
+      const action = setMenuItemOperationallyUnavailable(
+        stateRef.current,
+        restaurantId,
+        menuItemId,
+        reason,
+        mode,
+        resumeAt,
+        actor,
+      );
+      if (action.state !== stateRef.current) replaceState(action.state);
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const restoreMenuItem = useCallback(
+    (restaurantId: string, menuItemId: string, actor: OperationalActor) => {
+      const action = restoreMenuItemAvailability(
+        stateRef.current,
+        restaurantId,
+        menuItemId,
+        actor,
+      );
+      if (action.state !== stateRef.current) replaceState(action.state);
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const pauseCategory = useCallback(
+    (
+      restaurantId: string,
+      category: string,
+      reason: string,
+      mode: OperationalPauseMode,
+      resumeAt: string | null,
+      actor: OperationalActor,
+    ) => {
+      const action = pauseCategoryItems(
+        stateRef.current,
+        restaurantId,
+        category,
+        reason,
+        mode,
+        resumeAt,
+        actor,
+      );
+      if (action.state !== stateRef.current) replaceState(action.state);
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const restoreCategory = useCallback(
+    (restaurantId: string, category: string, actor: OperationalActor) => {
+      const action = restoreCategoryItems(
+        stateRef.current,
+        restaurantId,
+        category,
+        actor,
+      );
+      if (action.state !== stateRef.current) replaceState(action.state);
       return action.result;
     },
     [replaceState],
@@ -692,6 +853,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       requestCancellation,
       approveCancellation,
       rejectCancellation,
+      pauseRestaurant,
+      resumeRestaurant,
+      setMenuItemUnavailable,
+      restoreMenuItem,
+      pauseCategory,
+      restoreCategory,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,
@@ -735,6 +902,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       requestCancellation,
       approveCancellation,
       rejectCancellation,
+      pauseRestaurant,
+      resumeRestaurant,
+      setMenuItemUnavailable,
+      restoreMenuItem,
+      pauseCategory,
+      restoreCategory,
       acceptOrder,
       rejectOrder,
       simulateOnlinePayment,
