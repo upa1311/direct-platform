@@ -6,11 +6,11 @@ import styles from "./workspace-shell.module.css";
 
 const adminNavigation = [
   { href: "/admin", label: "Обзор" },
-  { href: "/admin/restaurants", label: "Рестораны" },
-  { href: "/admin/menu", label: "Меню и акции" },
   { href: "/admin/orders", label: "Заказы" },
-  { href: "/admin/settlements", label: "Расчёты" },
+  { href: "/admin/restaurants", label: "Рестораны" },
+  { href: "/admin/restaurant-builder", label: "Конструктор ресторанов" },
   { href: "/admin/drivers", label: "Водители" },
+  { href: "/admin/settlements", label: "Расчёты" },
   { href: "/admin/zones", label: "Зоны и тарифы" },
 ] as const;
 

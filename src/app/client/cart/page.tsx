@@ -123,8 +123,9 @@ export default function ClientCartPage() {
     );
   }
 
+  // Самовывоз в итогах — цифра 0 (не «Бесплатно»); финансово deliveryFee = 0.
   const deliveryValue = isPickup
-    ? "Бесплатно"
+    ? "0"
     : pricing.deliveryFeeCents !== null
       ? formatMoney(pricing.deliveryFeeCents)
       : isRestaurantDelivery
@@ -132,11 +133,11 @@ export default function ClientCartPage() {
         : "Укажите адрес";
   const pickupPaymentSummary = getPickupPaymentSummary(restaurant);
 
-  // Прогресс акции показываем только до первого применения (пока ни одна
-  // пицца не стала бесплатной). После применения клиент видит скидку в итогах.
+  // Прогресс акции показываем всегда, пока акция активна и до следующего
+  // подарка осталось несколько участвующих единиц (в т.ч. после уже
+  // применённых бесплатных пицц). Реальные скидки — отдельными строками итогов.
   const promoProgressUnits =
     pricing.promotionEligibleUnits > 0 &&
-    pricing.promotionFreeUnitCount === 0 &&
     pricing.promotionUnitsToNextFree !== null
       ? pricing.promotionUnitsToNextFree
       : null;
@@ -146,6 +147,12 @@ export default function ClientCartPage() {
       <header className={flowStyles.checkoutHeading}>
         <h1>Ваш заказ</h1>
         <p>{restaurant.name}</p>
+        <Link
+          className={flowStyles.backToMenuLink}
+          href={`/client/restaurants/${restaurant.id}`}
+        >
+          ← Вернуться в меню
+        </Link>
       </header>
 
       <div className={flowStyles.cartLayout}>
@@ -515,19 +522,11 @@ export default function ClientCartPage() {
           {isRestaurantDelivery &&
           pricing.restaurantDeliveryStatus === "BELOW_MINIMUM" &&
           pricing.restaurantDeliveryMissingCents !== null ? (
-            <>
-              <p className={flowStyles.summaryHint} role="status">
-                До минимальной суммы заказа не хватает{" "}
-                {formatMoney(pricing.restaurantDeliveryMissingCents)}. Добавьте
-                блюда, чтобы оформить доставку, или воспользуйтесь самовывозом.
-              </p>
-              <Link
-                className={flowStyles.backToMenuLink}
-                href={`/client/restaurants/${restaurant.id}`}
-              >
-                ← Вернуться в меню ресторана
-              </Link>
-            </>
+            <p className={flowStyles.summaryHint} role="status">
+              До минимальной суммы заказа не хватает{" "}
+              {formatMoney(pricing.restaurantDeliveryMissingCents)}. Добавьте
+              блюда, чтобы оформить доставку, или воспользуйтесь самовывозом.
+            </p>
           ) : null}
           {isRestaurantDelivery &&
           pricing.restaurantDeliveryStatus === "OK" &&

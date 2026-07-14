@@ -123,7 +123,9 @@ export default function ClientRestaurantPage() {
   return (
     <div className={flowStyles.restaurantMenuPage}>
       <div className={flowStyles.detailHeader}>
-        <Link href="/client/catalog">← Каталог</Link>
+        <Link className={flowStyles.backLink} href="/client/catalog">
+          ← Список ресторанов
+        </Link>
         <div>
           <h1>{restaurant.name}</h1>
           <p>{restaurant.description}</p>

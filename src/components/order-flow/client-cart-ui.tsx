@@ -57,8 +57,10 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
   const cartQuantity = state.cart.items.reduce((sum, item) => sum + item.quantity, 0);
   const isPickup = state.cart.fulfillmentChoice === "PICKUP";
   const fulfillmentLabel = isPickup ? "Самовывоз" : "Доставка";
-  const fulfillmentValue =
-    pricing.deliveryFeeCents === null
+  // Самовывоз — цифра 0 (не «Бесплатно»), как в основных итогах корзины.
+  const fulfillmentValue = isPickup
+    ? "0"
+    : pricing.deliveryFeeCents === null
       ? "Укажите адрес"
       : formatMoney(pricing.deliveryFeeCents);
   const checkoutHref = "/client/cart#checkout-cart";

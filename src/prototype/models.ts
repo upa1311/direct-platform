@@ -91,6 +91,48 @@ export interface Zone {
 
 export type TariffMatrix = Record<ZoneId, Record<ZoneId, number>>;
 
+/** Идентификаторы дней недели графика работы (пн–вс). */
+export type WeekdayId =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
+/** Порядок дней недели для отображения. */
+export const WEEKDAY_ORDER: WeekdayId[] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
+
+/** Русские названия дней недели для админки. */
+export const WEEKDAY_LABELS: Record<WeekdayId, string> = {
+  monday: "Понедельник",
+  tuesday: "Вторник",
+  wednesday: "Среда",
+  thursday: "Четверг",
+  friday: "Пятница",
+  saturday: "Суббота",
+  sunday: "Воскресенье",
+};
+
+/** График одного дня: открыт/закрыт и часы работы (формат «09:00»). */
+export interface DaySchedule {
+  enabled: boolean;
+  openTime: string;
+  closeTime: string;
+}
+
+/** Структурированный недельный график работы ресторана. */
+export type WeeklySchedule = Record<WeekdayId, DaySchedule>;
+
 export interface Restaurant {
   id: string;
   name: string;
@@ -115,6 +157,24 @@ export interface Restaurant {
   pickupCommissionRateBps: number;
   /** Порог предоплаты самовывоза. Пока не активирован (null). */
   pickupPrepaymentThresholdCents: number | null;
+  /** Публичный телефон ресторана (можно показывать клиенту в будущем). */
+  publicPhone: string;
+  /** Имя основного контактного лица (внутреннее, только для /admin). */
+  contactPersonName: string;
+  /** Роль: владелец/управляющий/администратор/бухгалтер/другое (внутреннее). */
+  contactPersonRole: string;
+  /** Прямой телефон контактного лица (внутреннее). */
+  contactPhone: string;
+  /** Рабочий email (внутреннее). */
+  contactEmail: string;
+  /** Необязательный мессенджер: Telegram/Viber/WhatsApp (внутреннее). */
+  contactMessenger: string;
+  /** Необязательный номер для срочных операционных проблем (внутреннее). */
+  emergencyPhone: string;
+  /** Внутренний комментарий Direct; клиент и ресторан его не видят. */
+  internalAdminNote: string;
+  /** Структурированный недельный график работы. */
+  weeklySchedule: WeeklySchedule;
 }
 
 export interface MenuItemVariant {
@@ -178,10 +238,17 @@ export interface CustomerProfile {
   noShowPickupCount: number;
 }
 
+/** Оперативный статус водителя Direct. */
+export type DriverStatus = "AVAILABLE" | "BUSY" | "OFFLINE";
+
 export interface DriverProfile {
   id: string;
   name: string;
   cashEnabled: boolean;
+  /** Доступен / занят / не на смене. Для назначения годятся только AVAILABLE. */
+  status: DriverStatus;
+  /** Телефон водителя (для связи из админки). */
+  phone: string;
 }
 
 export interface CartItem {
@@ -285,7 +352,7 @@ export interface FinancialSnapshot {
 export interface OrderHistoryEvent {
   id: string;
   occurredAt: string;
-  actor: "CLIENT" | "RESTAURANT" | "SYSTEM";
+  actor: "CLIENT" | "RESTAURANT" | "SYSTEM" | "ADMIN";
   type: "STATUS" | "PAYMENT";
   fromStatus: OrderStatus | null;
   toStatus: OrderStatus;
@@ -311,6 +378,10 @@ export interface Order {
   /** Одноразовый код выдачи самовывоза (только для PICKUP). */
   pickupCode: string | null;
   pickupCodeUsed: boolean;
+  /** Назначенный водитель Direct (только PLATFORM_DRIVER). */
+  assignedDriverId: string | null;
+  /** Время назначения водителя. */
+  driverAssignedAt: string | null;
   items: OrderItemSnapshot[];
   financials: FinancialSnapshot;
   history: OrderHistoryEvent[];

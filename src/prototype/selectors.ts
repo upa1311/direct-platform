@@ -4,6 +4,8 @@ import type {
   CartPricing,
   DeliveryAddress,
   DeliveryMode,
+  DriverProfile,
+  DriverStatus,
   MenuItem,
   MenuItemVariant,
   Order,
@@ -16,6 +18,7 @@ import type {
   PublicationStatus,
   Restaurant,
   SettlementEntry,
+  WeekdayId,
   ZoneId,
 } from "./models";
 import {
@@ -109,6 +112,13 @@ export const orderActorLabels: Record<OrderHistoryEvent["actor"], string> = {
   CLIENT: "Клиент",
   RESTAURANT: "Ресторан",
   SYSTEM: "Система",
+  ADMIN: "Администратор Direct",
+};
+
+export const driverStatusLabels: Record<DriverStatus, string> = {
+  AVAILABLE: "Свободен",
+  BUSY: "Занят",
+  OFFLINE: "Не на смене",
 };
 
 export const publicationStatusLabels: Record<PublicationStatus, string> = {
@@ -843,6 +853,91 @@ export function getPickupStats(
     noShowPercent: total > 0 ? Math.round((noShow / total) * 100) : 0,
     suspiciousAfterReady: noShow,
   };
+}
+
+// --- Водители и операционные показатели админки -----------------------------
+
+export function getAvailableDrivers(state: PrototypeState): DriverProfile[] {
+  return state.drivers.filter((driver) => driver.status === "AVAILABLE");
+}
+
+export function getDriverById(
+  state: PrototypeState,
+  driverId: string | null,
+): DriverProfile | null {
+  if (!driverId) return null;
+  return state.drivers.find((driver) => driver.id === driverId) ?? null;
+}
+
+/** Активные (не завершённые) статусы заказа. */
+export const ACTIVE_ORDER_STATUSES: readonly OrderStatus[] = [
+  "RESTAURANT_REVIEW",
+  "AWAITING_PAYMENT",
+  "PREPARING",
+  "READY",
+  "READY_FOR_PICKUP",
+  "OUT_FOR_DELIVERY",
+  "ARRIVING",
+];
+
+export function getRestaurantActiveOrderCount(
+  state: PrototypeState,
+  restaurantId: string,
+): number {
+  return state.orders.filter(
+    (order) =>
+      order.restaurant.id === restaurantId &&
+      ACTIVE_ORDER_STATUSES.includes(order.status),
+  ).length;
+}
+
+/** Совокупная задолженность ресторана перед Direct (самовывоз + доставка). */
+export function getRestaurantTotalDebtCents(
+  state: PrototypeState,
+  restaurantId: string,
+): number {
+  return (
+    getRestaurantPickupDebtCents(state, restaurantId) +
+    getRestaurantDeliveryCommissionDebtCents(state, restaurantId)
+  );
+}
+
+const WEEKDAY_BY_JS_DAY: WeekdayId[] = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
+
+/** Идентификатор дня недели по объекту Date (0=вс..6=сб). */
+export function getWeekdayId(date: Date): WeekdayId {
+  return WEEKDAY_BY_JS_DAY[date.getDay()];
+}
+
+/** Строка часов работы на указанный день, либо «Закрыто». */
+export function getScheduleLabel(
+  restaurant: Restaurant,
+  weekdayId: WeekdayId,
+): string {
+  const day = restaurant.weeklySchedule[weekdayId];
+  if (!day || !day.enabled) return "Закрыто";
+  return `${day.openTime || "—"}–${day.closeTime || "—"}`;
+}
+
+/** Открыт ли ресторан по графику в указанный день/время («HH:MM»). */
+export function isRestaurantOpenNow(
+  restaurant: Restaurant,
+  weekdayId: WeekdayId,
+  currentHHMM: string,
+): boolean {
+  const day = restaurant.weeklySchedule[weekdayId];
+  if (!day || !day.enabled || !day.openTime || !day.closeTime) {
+    return false;
+  }
+  return currentHHMM >= day.openTime && currentHHMM <= day.closeTime;
 }
 
 export { TEST_RESTAURANT_ID };

@@ -343,6 +343,150 @@
   border-radius: 4px;
 }
 
+/* Обычная текстовая ссылка-возврат со стрелкой (без капсулы). */
+.backLink {
+  width: fit-content;
+  color: #b85f2c;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.backLink:hover {
+  text-decoration: underline;
+}
+
+.backLink:focus-visible {
+  outline: 2px solid #b85f2c;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* Компактная админ-сводка «Контакты и работа». */
+.adminContactSummary {
+  margin: 4px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid #e4e7e3;
+  border-radius: 10px;
+  background: #f7f8f6;
+}
+
+.adminContactSummary a {
+  color: #b85f2c;
+  font-weight: 650;
+  text-underline-offset: 3px;
+}
+
+/* Редактор недельного графика работы. */
+.scheduleGrid {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.scheduleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+}
+
+.scheduleRow > label {
+  min-width: 160px;
+}
+
+.scheduleTimes {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scheduleTimes input {
+  width: 120px;
+}
+
+.scheduleClosed {
+  color: #8f6a58;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* Конструктор ресторанов: верхняя панель и вкладки. */
+.builderTopbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.builderTopbar h2 {
+  margin: 0 0 6px;
+}
+
+.builderTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 18px;
+  border-bottom: 1px solid #e4e7e3;
+  padding-bottom: 10px;
+}
+
+.builderTab {
+  padding: 7px 12px;
+  border: 1px solid #d8ddd8;
+  border-radius: 999px;
+  background: #fff;
+  color: #4f5852;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.builderTab:hover {
+  border-color: #b85f2c;
+}
+
+.builderTabActive {
+  background: #b85f2c;
+  border-color: #b85f2c;
+  color: #fff;
+}
+
+.builderTab:focus-visible {
+  outline: 2px solid #b85f2c;
+  outline-offset: 2px;
+}
+
+/* Оперативные действия заказа в админке. */
+.orderActions {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+  padding-top: 14px;
+  border-top: 1px solid #eceee9;
+}
+
+.orderActionBlock {
+  padding: 10px 12px;
+  border: 1px solid #e4e7e3;
+  border-radius: 10px;
+  background: #f7f8f6;
+}
+
+.orderActionBlock summary {
+  cursor: pointer;
+  font-weight: 650;
+  color: #4f5852;
+}
+
+.orderActionBlock h4 {
+  margin: 0 0 8px;
+}
+
 .sizeSelector {
   display: inline-flex;
   flex-wrap: wrap;

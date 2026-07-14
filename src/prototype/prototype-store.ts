@@ -1,14 +1,21 @@
 import {
   PROTOTYPE_SCHEMA_VERSION,
+  WEEKDAY_ORDER,
   type Cart,
+  type DaySchedule,
   type DeliveryMode,
   type FinancialSnapshot,
   type Order,
   type OrderItemSnapshot,
   type PrototypeState,
   type RestaurantDeliveryProvider,
+  type WeeklySchedule,
 } from "./models";
-import { createDefaultState, createEmptyCart } from "./default-state";
+import {
+  createDefaultState,
+  createDefaultWeeklySchedule,
+  createEmptyCart,
+} from "./default-state";
 import { migrateFulfillmentChoice } from "./pricing-engine";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v6";
@@ -271,6 +278,11 @@ function normalizeOrder(value: unknown): Order {
         : null,
     pickupCode: typeof raw.pickupCode === "string" ? raw.pickupCode : null,
     pickupCodeUsed: raw.pickupCodeUsed === true,
+    // Назначение водителя: у старых заказов отсутствует → null (без пересчётов).
+    assignedDriverId:
+      typeof raw.assignedDriverId === "string" ? raw.assignedDriverId : null,
+    driverAssignedAt:
+      typeof raw.driverAssignedAt === "string" ? raw.driverAssignedAt : null,
     items: Array.isArray(raw.items) ? raw.items.map(normalizeOrderItem) : [],
     financials: normalizeFinancials(raw.financials, deliveryMode),
     history,
@@ -326,6 +338,34 @@ function normalizeDeliveryPaymentMethods(): PrototypeState["restaurants"][number
   return ["ONLINE"];
 }
 
+/** Нормализация графика одного дня; недостающее — безопасный стандарт. */
+function normalizeDaySchedule(value: unknown): DaySchedule {
+  const raw = isRecord(value) ? value : {};
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : true,
+    openTime: str(raw.openTime, "09:00"),
+    closeTime: str(raw.closeTime, "22:00"),
+  };
+}
+
+/**
+ * Нормализация недельного графика. Отсутствующий график заменяется безопасным
+ * стандартным (09:00–22:00 все дни); присутствующие дни сохраняются, недостающие
+ * дозаполняются стандартом. Существующие рестораны при этом не удаляются.
+ */
+function normalizeWeeklySchedule(value: unknown): WeeklySchedule {
+  if (!isRecord(value)) {
+    return createDefaultWeeklySchedule();
+  }
+  return WEEKDAY_ORDER.reduce((schedule, day) => {
+    schedule[day] =
+      value[day] !== undefined
+        ? normalizeDaySchedule(value[day])
+        : { enabled: true, openTime: "09:00", closeTime: "22:00" };
+    return schedule;
+  }, {} as WeeklySchedule);
+}
+
 function normalizeRestaurantV5(
   value: unknown,
 ): PrototypeState["restaurants"][number] {
@@ -356,6 +396,17 @@ function normalizeRestaurantV5(
       typeof raw.pickupPrepaymentThresholdCents === "number"
         ? raw.pickupPrepaymentThresholdCents
         : null,
+    // Новые контактные/операционные поля: у старых ресторанов отсутствуют →
+    // безопасные пустые значения; ресторан при этом сохраняется, не удаляется.
+    publicPhone: str(raw.publicPhone, ""),
+    contactPersonName: str(raw.contactPersonName, ""),
+    contactPersonRole: str(raw.contactPersonRole, ""),
+    contactPhone: str(raw.contactPhone, ""),
+    contactEmail: str(raw.contactEmail, ""),
+    contactMessenger: str(raw.contactMessenger, ""),
+    emergencyPhone: str(raw.emergencyPhone, ""),
+    internalAdminNote: str(raw.internalAdminNote, ""),
+    weeklySchedule: normalizeWeeklySchedule(raw.weeklySchedule),
   };
 }
 
@@ -370,6 +421,40 @@ function normalizeCustomer(
     ...(value as unknown as PrototypeState["customer"]),
     noShowPickupCount: num(value.noShowPickupCount, 0),
   };
+}
+
+/** Нормализация одного водителя: добавляет безопасный статус и телефон. */
+function normalizeDriver(value: unknown): PrototypeState["drivers"][number] {
+  const raw = isRecord(value) ? value : {};
+  const status =
+    raw.status === "AVAILABLE" ||
+    raw.status === "BUSY" ||
+    raw.status === "OFFLINE"
+      ? raw.status
+      : "OFFLINE"; // безопасный статус для старых водителей
+  return {
+    id: str(raw.id, ""),
+    name: str(raw.name, ""),
+    cashEnabled: raw.cashEnabled === true,
+    status,
+    phone: str(raw.phone, ""),
+  };
+}
+
+/**
+ * Нормализация списка водителей. Существующие водители сохраняются (с безопасным
+ * статусом OFFLINE, если статус не задан); пустой/отсутствующий список — дефолт.
+ */
+function normalizeDrivers(
+  value: unknown,
+  fallback: PrototypeState["drivers"],
+): PrototypeState["drivers"] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return fallback;
+  }
+  return value
+    .filter((d) => isRecord(d) && typeof d.id === "string")
+    .map(normalizeDriver);
 }
 
 function normalizeSettlements(value: unknown): PrototypeState["settlements"] {
@@ -418,7 +503,7 @@ export function normalizePrototypeState(
       ? state.promotions
       : defaults.promotions,
     customer: normalizeCustomer(state.customer, defaults.customer),
-    drivers: Array.isArray(state.drivers) ? state.drivers : defaults.drivers,
+    drivers: normalizeDrivers(state.drivers, defaults.drivers),
     cart: normalizeCart(state.cart, defaults.cart),
     orders: Array.isArray(state.orders)
       ? state.orders.map(normalizeOrder)

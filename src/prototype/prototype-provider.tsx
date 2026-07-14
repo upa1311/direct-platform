@@ -14,14 +14,21 @@ import {
 import {
   acceptRestaurantOrder,
   addCartItem,
+  adminCancelOrder,
+  adminSetPreparationMinutes,
+  assignDriverToOrder,
   completePickupWithCode,
+  correctOrderStatus,
   createOrderFromCart,
   createRestaurant,
+  issuePickupWithoutCode,
   markOrderArriving,
   markOrderDelivered,
+  markOrderDeliveredByDriver,
   markOrderOutForDelivery,
   markOrderReady,
   markPickupNoShow as runPickupNoShow,
+  reassignDriverForOrder,
   rejectRestaurantOrder,
   resetPrototypeState,
   restoreDefaultTariffs,
@@ -31,13 +38,16 @@ import {
   setCartItemQuantity,
   setCartPaymentMethod,
   setPromotionEnabled,
+  setRestaurantAcceptingOrders,
   simulateSuccessfulOnlinePayment,
+  unassignDriverFromOrder,
   updateCartAddress,
   updateCustomerProfile,
   updateMenuItemVariants,
   updateRestaurant,
   upsertPromotion,
   type AddCartItemResult,
+  type AdminActionResult,
   type CompletePickupResult,
   type CreateOrderResult,
   type CreateRestaurantResult,
@@ -49,6 +59,7 @@ import type {
   DeliveryAddress,
   FulfillmentChoice,
   MenuItemVariant,
+  OrderStatus,
   PaymentMethod,
   Promotion,
   PrototypeState,
@@ -102,6 +113,23 @@ interface PrototypeContextValue {
   markOutForDelivery: (orderId: string) => void;
   markArriving: (orderId: string) => void;
   markDelivered: (orderId: string) => void;
+  markDeliveredByDriver: (orderId: string) => void;
+  setPreparationMinutes: (orderId: string, minutes: number) => void;
+  setRestaurantAccepting: (restaurantId: string, accepting: boolean) => void;
+  assignDriver: (orderId: string, driverId: string) => AdminActionResult;
+  reassignDriver: (
+    orderId: string,
+    newDriverId: string,
+    reason: string,
+  ) => AdminActionResult;
+  unassignDriver: (orderId: string, reason: string) => AdminActionResult;
+  cancelOrderByAdmin: (orderId: string, reason: string) => AdminActionResult;
+  correctStatus: (
+    orderId: string,
+    newStatus: OrderStatus,
+    reason: string,
+  ) => AdminActionResult;
+  issuePickupNoCode: (orderId: string, reason: string) => AdminActionResult;
   saveTariffMatrix: (tariffs: TariffMatrix) => void;
   restoreTariffs: () => void;
   createRestaurantEntry: (input: RestaurantFormInput) => CreateRestaurantResult;
@@ -363,6 +391,91 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
+  const markDeliveredByDriver = useCallback(
+    (orderId: string) => {
+      replaceState(markOrderDeliveredByDriver(stateRef.current, orderId));
+    },
+    [replaceState],
+  );
+
+  const setPreparationMinutes = useCallback(
+    (orderId: string, minutes: number) => {
+      replaceState(
+        adminSetPreparationMinutes(stateRef.current, orderId, minutes),
+      );
+    },
+    [replaceState],
+  );
+
+  const setRestaurantAccepting = useCallback(
+    (restaurantId: string, accepting: boolean) => {
+      replaceState(
+        setRestaurantAcceptingOrders(
+          stateRef.current,
+          restaurantId,
+          accepting,
+        ),
+      );
+    },
+    [replaceState],
+  );
+
+  const runAdminOrderAction = useCallback(
+    (
+      action: (state: PrototypeState) => {
+        state: PrototypeState;
+        result: AdminActionResult;
+      },
+    ): AdminActionResult => {
+      const outcome = action(stateRef.current);
+      if (outcome.state !== stateRef.current) {
+        replaceState(outcome.state);
+      }
+      return outcome.result;
+    },
+    [replaceState],
+  );
+
+  const assignDriver = useCallback(
+    (orderId: string, driverId: string) =>
+      runAdminOrderAction((s) => assignDriverToOrder(s, orderId, driverId)),
+    [runAdminOrderAction],
+  );
+
+  const reassignDriver = useCallback(
+    (orderId: string, newDriverId: string, reason: string) =>
+      runAdminOrderAction((s) =>
+        reassignDriverForOrder(s, orderId, newDriverId, reason),
+      ),
+    [runAdminOrderAction],
+  );
+
+  const unassignDriver = useCallback(
+    (orderId: string, reason: string) =>
+      runAdminOrderAction((s) => unassignDriverFromOrder(s, orderId, reason)),
+    [runAdminOrderAction],
+  );
+
+  const cancelOrderByAdmin = useCallback(
+    (orderId: string, reason: string) =>
+      runAdminOrderAction((s) => adminCancelOrder(s, orderId, reason)),
+    [runAdminOrderAction],
+  );
+
+  const correctStatus = useCallback(
+    (orderId: string, newStatus: OrderStatus, reason: string) =>
+      runAdminOrderAction((s) =>
+        correctOrderStatus(s, orderId, newStatus, reason),
+      ),
+    [runAdminOrderAction],
+  );
+
+  const issuePickupNoCode = useCallback(
+    (orderId: string, reason: string) =>
+      runAdminOrderAction((s) => issuePickupWithoutCode(s, orderId, reason)),
+    [runAdminOrderAction],
+  );
+
   const saveTariffMatrix = useCallback(
     (tariffs: TariffMatrix) => {
       replaceState(saveTariffs(stateRef.current, tariffs));
@@ -444,6 +557,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       markOutForDelivery,
       markArriving,
       markDelivered,
+      markDeliveredByDriver,
+      setPreparationMinutes,
+      setRestaurantAccepting,
+      assignDriver,
+      reassignDriver,
+      unassignDriver,
+      cancelOrderByAdmin,
+      correctStatus,
+      issuePickupNoCode,
       saveTariffMatrix,
       restoreTariffs,
       createRestaurantEntry,
@@ -473,6 +595,15 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       markOutForDelivery,
       markArriving,
       markDelivered,
+      markDeliveredByDriver,
+      setPreparationMinutes,
+      setRestaurantAccepting,
+      assignDriver,
+      reassignDriver,
+      unassignDriver,
+      cancelOrderByAdmin,
+      correctStatus,
+      issuePickupNoCode,
       saveTariffMatrix,
       restoreTariffs,
       createRestaurantEntry,

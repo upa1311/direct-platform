@@ -1,16 +1,22 @@
 import {
+  cloneWeeklySchedule,
   createDefaultState,
   createDefaultTariffs,
   createEmptyCart,
+  createRestaurantExtras,
 } from "./default-state";
 import type {
   AppliedPromotionSnapshot,
   DeliveryAddress,
   DeliveryMode,
+  DriverProfile,
+  DriverStatus,
   FulfillmentChoice,
   MenuItemVariant,
   Order,
+  OrderHistoryEvent,
   OrderItemSnapshot,
+  OrderStatus,
   PaymentMethod,
   PaymentStatus,
   PickupPaymentMethod,
@@ -22,6 +28,7 @@ import type {
   RestaurantDeliverySettings,
   SettlementEntry,
   TariffMatrix,
+  WeeklySchedule,
 } from "./models";
 import {
   calculateCartPricing,
@@ -499,6 +506,8 @@ export function createOrderFromCart(
     cancellationReason: null,
     pickupCode,
     pickupCodeUsed: false,
+    assignedDriverId: null,
+    driverAssignedAt: null,
     items,
     financials: {
       currencyCode: state.platformSettings.currencyCode,
@@ -1125,6 +1134,573 @@ export function markPickupNoShow(
   );
 }
 
+// --- Оперативные административные действия -----------------------------------
+
+export interface AdminActionResult {
+  ok: boolean;
+  error: string | null;
+}
+
+const TERMINAL_ORDER_STATUSES: readonly OrderStatus[] = [
+  "DELIVERED",
+  "PICKED_UP",
+  "CANCELED",
+];
+
+function isTerminalOrderStatus(status: OrderStatus): boolean {
+  return TERMINAL_ORDER_STATUSES.includes(status);
+}
+
+/** Освобождает назначенного водителя заказа (переводит в AVAILABLE). */
+function releaseAssignedDriver(
+  drivers: DriverProfile[],
+  driverId: string | null,
+): DriverProfile[] {
+  if (!driverId) {
+    return drivers;
+  }
+  return drivers.map((driver) =>
+    driver.id === driverId ? { ...driver, status: "AVAILABLE" } : driver,
+  );
+}
+
+function setDriverStatus(
+  drivers: DriverProfile[],
+  driverId: string,
+  status: DriverStatus,
+): DriverProfile[] {
+  return drivers.map((driver) =>
+    driver.id === driverId ? { ...driver, status } : driver,
+  );
+}
+
+function adminHistoryEvent(
+  order: Order,
+  offset: number,
+  occurredAt: string,
+  type: OrderHistoryEvent["type"],
+  fromStatus: OrderStatus | null,
+  toStatus: OrderStatus,
+  message: string,
+): OrderHistoryEvent {
+  return {
+    id: `${order.id}-history-${order.history.length + offset}`,
+    occurredAt,
+    actor: "ADMIN",
+    type,
+    fromStatus,
+    toStatus,
+    message,
+  };
+}
+
+/** Приостановка/возобновление приёма заказов рестораном. Заказы не трогаются. */
+export function setRestaurantAcceptingOrders(
+  state: PrototypeState,
+  restaurantId: string,
+  accepting: boolean,
+): PrototypeState {
+  const target = state.restaurants.find((r) => r.id === restaurantId);
+  if (!target || target.isAcceptingOrders === accepting) {
+    return state;
+  }
+  return finalizeMutation(state, {
+    ...state,
+    restaurants: state.restaurants.map((restaurant) =>
+      restaurant.id === restaurantId
+        ? { ...restaurant, isAcceptingOrders: accepting }
+        : restaurant,
+    ),
+  });
+}
+
+/** Назначение свободного водителя Direct на заказ PLATFORM_DRIVER. */
+export function assignDriverToOrder(
+  state: PrototypeState,
+  orderId: string,
+  driverId: string,
+): ActionResult<AdminActionResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const driver = state.drivers.find((d) => d.id === driverId);
+  const fail = (error: string): ActionResult<AdminActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
+  if (!order) return fail("Заказ не найден.");
+  if (order.deliveryMode !== "PLATFORM_DRIVER") {
+    return fail("Водитель Direct назначается только доставке водителем Direct.");
+  }
+  if (isTerminalOrderStatus(order.status)) {
+    return fail("Заказ завершён или отменён.");
+  }
+  if (order.assignedDriverId) {
+    return fail("Водитель уже назначен — используйте переназначение.");
+  }
+  if (!driver) return fail("Водитель не найден.");
+  if (driver.status !== "AVAILABLE") {
+    return fail("Водитель недоступен.");
+  }
+
+  const now = new Date().toISOString();
+  const updatedOrder: Order = {
+    ...order,
+    assignedDriverId: driverId,
+    driverAssignedAt: now,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      adminHistoryEvent(
+        order,
+        1,
+        now,
+        "STATUS",
+        order.status,
+        order.status,
+        `Администратор Direct назначил водителя ${driver.name}.`,
+      ),
+    ],
+  };
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+      drivers: setDriverStatus(state.drivers, driverId, "BUSY"),
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Переназначение водителя: старый освобождается, причина обязательна. */
+export function reassignDriverForOrder(
+  state: PrototypeState,
+  orderId: string,
+  newDriverId: string,
+  reason: string,
+): ActionResult<AdminActionResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const newDriver = state.drivers.find((d) => d.id === newDriverId);
+  const normalizedReason = reason.trim();
+  const fail = (error: string): ActionResult<AdminActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
+  if (!order) return fail("Заказ не найден.");
+  if (order.deliveryMode !== "PLATFORM_DRIVER") {
+    return fail("Водитель Direct назначается только доставке водителем Direct.");
+  }
+  if (isTerminalOrderStatus(order.status)) {
+    return fail("Заказ завершён или отменён.");
+  }
+  if (!order.assignedDriverId) {
+    return fail("Водитель ещё не назначен.");
+  }
+  if (!normalizedReason) return fail("Укажите причину переназначения.");
+  if (!newDriver) return fail("Водитель не найден.");
+  if (newDriver.id === order.assignedDriverId) {
+    return fail("Этот водитель уже назначен.");
+  }
+  if (newDriver.status !== "AVAILABLE") {
+    return fail("Водитель недоступен.");
+  }
+
+  const now = new Date().toISOString();
+  const updatedOrder: Order = {
+    ...order,
+    assignedDriverId: newDriverId,
+    driverAssignedAt: now,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      adminHistoryEvent(
+        order,
+        1,
+        now,
+        "STATUS",
+        order.status,
+        order.status,
+        `Администратор Direct переназначил водителя на ${newDriver.name}. Причина: ${normalizedReason}`,
+      ),
+    ],
+  };
+  // Сначала освобождаем старого, затем занимаем нового.
+  const drivers = setDriverStatus(
+    releaseAssignedDriver(state.drivers, order.assignedDriverId),
+    newDriverId,
+    "BUSY",
+  );
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+      drivers,
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Снятие назначения: водитель освобождается, причина обязательна. */
+export function unassignDriverFromOrder(
+  state: PrototypeState,
+  orderId: string,
+  reason: string,
+): ActionResult<AdminActionResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const normalizedReason = reason.trim();
+  const fail = (error: string): ActionResult<AdminActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
+  if (!order) return fail("Заказ не найден.");
+  if (!order.assignedDriverId) return fail("Водитель не назначен.");
+  if (!normalizedReason) return fail("Укажите причину снятия назначения.");
+
+  const now = new Date().toISOString();
+  const driver = state.drivers.find((d) => d.id === order.assignedDriverId);
+  const updatedOrder: Order = {
+    ...order,
+    assignedDriverId: null,
+    driverAssignedAt: null,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      adminHistoryEvent(
+        order,
+        1,
+        now,
+        "STATUS",
+        order.status,
+        order.status,
+        `Администратор Direct снял назначение водителя${driver ? ` ${driver.name}` : ""}. Причина: ${normalizedReason}`,
+      ),
+    ],
+  };
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+      drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Завершение доставки заказа водителем Direct (PLATFORM_DRIVER). Оплата уже
+ * ONLINE (PAID), поэтому финансы и settlement не затрагиваются; назначенный
+ * водитель освобождается.
+ */
+export function markOrderDeliveredByDriver(
+  state: PrototypeState,
+  orderId: string,
+): PrototypeState {
+  const order = state.orders.find((o) => o.id === orderId);
+  if (
+    !order ||
+    order.deliveryMode !== "PLATFORM_DRIVER" ||
+    isTerminalOrderStatus(order.status) ||
+    order.status === "RESTAURANT_REVIEW" ||
+    order.status === "AWAITING_PAYMENT"
+  ) {
+    return state;
+  }
+  const now = new Date().toISOString();
+  const updatedOrder: Order = {
+    ...order,
+    status: "DELIVERED",
+    updatedAt: now,
+    history: [
+      ...order.history,
+      adminHistoryEvent(
+        order,
+        1,
+        now,
+        "STATUS",
+        order.status,
+        "DELIVERED",
+        "Заказ доставлен водителем Direct.",
+      ),
+    ],
+  };
+  return finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+      drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+    },
+    now,
+  );
+}
+
+/**
+ * Отмена заказа администратором (§12). Причина обязательна. Завершённый заказ
+ * отменить нельзя. Новый settlement не создаётся, уже созданные начисления не
+ * удаляются; назначенный водитель освобождается.
+ */
+export function adminCancelOrder(
+  state: PrototypeState,
+  orderId: string,
+  reason: string,
+): ActionResult<AdminActionResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const normalizedReason = reason.trim();
+  const fail = (error: string): ActionResult<AdminActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
+  if (!order) return fail("Заказ не найден.");
+  if (!normalizedReason) return fail("Укажите причину отмены.");
+  if (order.status === "CANCELED") return fail("Заказ уже отменён.");
+  if (order.status === "DELIVERED" || order.status === "PICKED_UP") {
+    return fail("Завершённый заказ отменить нельзя.");
+  }
+
+  const now = new Date().toISOString();
+  const updatedOrder: Order = {
+    ...order,
+    status: "CANCELED",
+    cancellationReason: normalizedReason,
+    assignedDriverId: null,
+    driverAssignedAt: null,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      adminHistoryEvent(
+        order,
+        1,
+        now,
+        "STATUS",
+        order.status,
+        "CANCELED",
+        `Заказ отменён администратором Direct. Причина: ${normalizedReason}`,
+      ),
+    ],
+  };
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+      drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Безопасные статусы для административного исправления (без финансов). */
+export const SAFE_STATUS_CORRECTIONS: readonly OrderStatus[] = [
+  "RESTAURANT_REVIEW",
+  "PREPARING",
+  "READY",
+  "READY_FOR_PICKUP",
+  "OUT_FOR_DELIVERY",
+  "ARRIVING",
+];
+
+/**
+ * Безопасное административное исправление статуса (§11). Только операционные
+ * статусы из белого списка; причина обязательна. НЕ меняет оплату, settlement,
+ * финансовый snapshot и не назначает водителя. Не может перевести в DELIVERED,
+ * PICKED_UP, CANCELED или AWAITING_PAYMENT.
+ */
+export function correctOrderStatus(
+  state: PrototypeState,
+  orderId: string,
+  newStatus: OrderStatus,
+  reason: string,
+): ActionResult<AdminActionResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const normalizedReason = reason.trim();
+  const fail = (error: string): ActionResult<AdminActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
+  if (!order) return fail("Заказ не найден.");
+  if (!normalizedReason) return fail("Укажите причину исправления.");
+  if (!SAFE_STATUS_CORRECTIONS.includes(newStatus)) {
+    return fail("Этот статус нельзя выставить обычным исправлением.");
+  }
+  if (isTerminalOrderStatus(order.status)) {
+    return fail("Заказ завершён или отменён.");
+  }
+  if (order.status === newStatus) {
+    return fail("Статус уже установлен.");
+  }
+
+  const now = new Date().toISOString();
+  const updatedOrder: Order = {
+    ...order,
+    status: newStatus,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      adminHistoryEvent(
+        order,
+        1,
+        now,
+        "STATUS",
+        order.status,
+        newStatus,
+        `Администратор Direct исправил статус. Причина: ${normalizedReason}`,
+      ),
+    ],
+  };
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Аварийная выдача самовывоза без кода (§9). Доступна только администратору,
+ * требует причину. Логика оплаты и начисления идентична выдаче по коду; вторая
+ * комиссия не создаётся (settlement идемпотентен по id заказа).
+ */
+export function issuePickupWithoutCode(
+  state: PrototypeState,
+  orderId: string,
+  reason: string,
+): ActionResult<AdminActionResult> {
+  const order = state.orders.find((o) => o.id === orderId);
+  const normalizedReason = reason.trim();
+  const done = (error: string | null): ActionResult<AdminActionResult> => ({
+    state,
+    result: { ok: error === null, error },
+  });
+
+  if (!order || order.deliveryMode !== "PICKUP") {
+    return done("Заказ не найден или не является самовывозом.");
+  }
+  if (order.status === "PICKED_UP" || order.pickupCodeUsed) {
+    return done("Заказ уже выдан.");
+  }
+  if (order.status !== "READY_FOR_PICKUP") {
+    return done("Заказ ещё не готов к выдаче.");
+  }
+  if (!normalizedReason) {
+    return done("Укажите причину аварийной выдачи.");
+  }
+
+  const now = new Date().toISOString();
+  const nextHistoryNumber = order.history.length + 1;
+  const updatedOrder: Order = {
+    ...order,
+    status: "PICKED_UP",
+    paymentStatus: "PAID_AT_RESTAURANT",
+    paidAt: now,
+    pickupCodeUsed: true,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      {
+        id: `${order.id}-history-${nextHistoryNumber}`,
+        occurredAt: now,
+        actor: "ADMIN",
+        type: "PAYMENT",
+        fromStatus: "READY_FOR_PICKUP",
+        toStatus: "READY_FOR_PICKUP",
+        message: "Оплата получена в ресторане (аварийная выдача).",
+      },
+      {
+        id: `${order.id}-history-${nextHistoryNumber + 1}`,
+        occurredAt: now,
+        actor: "ADMIN",
+        type: "STATUS",
+        fromStatus: "READY_FOR_PICKUP",
+        toStatus: "PICKED_UP",
+        message: `Аварийная выдача без кода администратором Direct. Причина: ${normalizedReason}`,
+      },
+    ],
+  };
+
+  const settlementId = `settlement-${orderId}`;
+  const alreadySettled = state.settlements.some(
+    (entry) => entry.id === settlementId || entry.orderId === orderId,
+  );
+  const settlement: SettlementEntry = {
+    id: settlementId,
+    orderId,
+    restaurantId: order.restaurant.id,
+    type: "PICKUP_COMMISSION",
+    amountCents: order.financials.platformCommissionReceivableCents,
+    status: "PENDING",
+    createdAt: now,
+  };
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+      settlements: alreadySettled
+        ? state.settlements
+        : [...state.settlements, settlement],
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Административное изменение времени приготовления (§9, статус PREPARING).
+ * Пересчитывает ожидаемое время готовности; финансы и оплату не трогает.
+ */
+export function adminSetPreparationMinutes(
+  state: PrototypeState,
+  orderId: string,
+  minutes: number,
+): PrototypeState {
+  const allowed = [10, 15, 20, 25, 30, 40];
+  const order = state.orders.find((o) => o.id === orderId);
+  if (!order || order.status !== "PREPARING" || !allowed.includes(minutes)) {
+    return state;
+  }
+  const now = new Date().toISOString();
+  const expectedReadyAt = new Date(
+    new Date(now).getTime() + minutes * 60_000,
+  ).toISOString();
+  return replaceOrder(
+    state,
+    orderId,
+    (o) => ({
+      ...o,
+      preparationMinutes: minutes,
+      expectedReadyAt,
+      updatedAt: now,
+      history: [
+        ...o.history,
+        adminHistoryEvent(
+          o,
+          1,
+          now,
+          "STATUS",
+          "PREPARING",
+          "PREPARING",
+          `Администратор Direct изменил время приготовления на ${minutes} минут.`,
+        ),
+      ],
+    }),
+    now,
+  );
+}
+
 // --- Административные действия ---------------------------------------------
 
 const ZONE_IDS = ["zone-1", "zone-2", "zone-3", "zone-4"] as const;
@@ -1168,6 +1744,16 @@ export interface RestaurantFormInput {
   isAcceptingOrders: boolean;
   restaurantDeliverySettings: RestaurantDeliverySettings | null;
   pickupPaymentMethods?: PickupPaymentMethod[];
+  // Контактные/операционные поля (необязательны; по умолчанию пустые).
+  publicPhone?: string;
+  contactPersonName?: string;
+  contactPersonRole?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  contactMessenger?: string;
+  emergencyPhone?: string;
+  internalAdminNote?: string;
+  weeklySchedule?: WeeklySchedule;
 }
 
 export interface CreateRestaurantResult {
@@ -1215,6 +1801,18 @@ export function createRestaurant(
     pickupPaymentMethods,
     pickupCommissionRateBps: 1500,
     pickupPrepaymentThresholdCents: null,
+    // Контакты и график: из формы либо безопасные пустые/стандартные значения.
+    ...createRestaurantExtras({
+      publicPhone: input.publicPhone,
+      contactPersonName: input.contactPersonName,
+      contactPersonRole: input.contactPersonRole,
+      contactPhone: input.contactPhone,
+      contactEmail: input.contactEmail,
+      contactMessenger: input.contactMessenger,
+      emergencyPhone: input.emergencyPhone,
+      internalAdminNote: input.internalAdminNote,
+      weeklySchedule: input.weeklySchedule,
+    }),
   };
   const nextState = finalizeMutation(state, {
     ...state,
@@ -1273,6 +1871,19 @@ export function updateRestaurant(
         ? (settings ?? defaultRestaurantDeliverySettings())
         : settings,
     pickupPaymentMethods,
+    // Контакты и график: обновляем только явно переданные поля; остальные
+    // сохраняются. Заказы и финансовые snapshots не затрагиваются.
+    publicPhone: patch.publicPhone ?? target.publicPhone,
+    contactPersonName: patch.contactPersonName ?? target.contactPersonName,
+    contactPersonRole: patch.contactPersonRole ?? target.contactPersonRole,
+    contactPhone: patch.contactPhone ?? target.contactPhone,
+    contactEmail: patch.contactEmail ?? target.contactEmail,
+    contactMessenger: patch.contactMessenger ?? target.contactMessenger,
+    emergencyPhone: patch.emergencyPhone ?? target.emergencyPhone,
+    internalAdminNote: patch.internalAdminNote ?? target.internalAdminNote,
+    weeklySchedule: patch.weeklySchedule
+      ? cloneWeeklySchedule(patch.weeklySchedule)
+      : target.weeklySchedule,
   };
 
   const nextState = finalizeMutation(state, {

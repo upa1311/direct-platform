@@ -1,5 +1,6 @@
 import {
   PROTOTYPE_SCHEMA_VERSION,
+  WEEKDAY_ORDER,
   type Cart,
   type MenuItem,
   type MenuItemVariant,
@@ -7,12 +8,63 @@ import {
   type PrototypeState,
   type Restaurant,
   type TariffMatrix,
+  type WeeklySchedule,
   type Zone,
 } from "./models";
 
 const INITIAL_TIMESTAMP = "2026-07-12T00:00:00.000Z";
 
 export const TEST_RESTAURANT_ID = "restaurant-1";
+
+/** Безопасный стандартный график: все дни 09:00–22:00. */
+export function createDefaultWeeklySchedule(): WeeklySchedule {
+  return WEEKDAY_ORDER.reduce((schedule, day) => {
+    schedule[day] = { enabled: true, openTime: "09:00", closeTime: "22:00" };
+    return schedule;
+  }, {} as WeeklySchedule);
+}
+
+/** Глубокая копия недельного графика. */
+export function cloneWeeklySchedule(source: WeeklySchedule): WeeklySchedule {
+  return WEEKDAY_ORDER.reduce((schedule, day) => {
+    schedule[day] = { ...source[day] };
+    return schedule;
+  }, {} as WeeklySchedule);
+}
+
+/** Новые контактные поля ресторана; по умолчанию пустые. */
+type RestaurantExtras = Pick<
+  Restaurant,
+  | "publicPhone"
+  | "contactPersonName"
+  | "contactPersonRole"
+  | "contactPhone"
+  | "contactEmail"
+  | "contactMessenger"
+  | "emergencyPhone"
+  | "internalAdminNote"
+  | "weeklySchedule"
+>;
+
+export function createRestaurantExtras(
+  overrides: Partial<RestaurantExtras> = {},
+): RestaurantExtras {
+  // Коалесценция каждого поля: undefined в overrides не затирает безопасный
+  // дефолт (удобно для необязательных полей формы). График всегда клонируется.
+  return {
+    publicPhone: overrides.publicPhone ?? "",
+    contactPersonName: overrides.contactPersonName ?? "",
+    contactPersonRole: overrides.contactPersonRole ?? "",
+    contactPhone: overrides.contactPhone ?? "",
+    contactEmail: overrides.contactEmail ?? "",
+    contactMessenger: overrides.contactMessenger ?? "",
+    emergencyPhone: overrides.emergencyPhone ?? "",
+    internalAdminNote: overrides.internalAdminNote ?? "",
+    weeklySchedule: overrides.weeklySchedule
+      ? cloneWeeklySchedule(overrides.weeklySchedule)
+      : createDefaultWeeklySchedule(),
+  };
+}
 
 /** Стандартный набор размеров для тестовых блюд: базовая и +$2.00. */
 export function createSizeVariants(): MenuItemVariant[] {
@@ -70,6 +122,14 @@ const defaultRestaurants: Restaurant[] = [
     pickupPrepaymentThresholdCents: null,
     commissionRateBps: 1500,
     restaurantDeliverySettings: null,
+    ...createRestaurantExtras({
+      publicPhone: "+373 552 10001",
+      contactPersonName: "Алексей Иванов",
+      contactPersonRole: "владелец",
+      contactPhone: "+373 777 10001",
+      contactEmail: "rest1@example.md",
+      internalAdminNote: "Звонить управляющему после 10:00.",
+    }),
   },
   {
     id: "restaurant-2",
@@ -90,6 +150,14 @@ const defaultRestaurants: Restaurant[] = [
     pickupPrepaymentThresholdCents: null,
     commissionRateBps: 1500,
     restaurantDeliverySettings: null,
+    ...createRestaurantExtras({
+      publicPhone: "+373 552 20002",
+      contactPersonName: "Мария Сидорова",
+      contactPersonRole: "администратор",
+      contactPhone: "+373 777 20002",
+      contactEmail: "rest2@example.md",
+      contactMessenger: "Telegram @rest2",
+    }),
   },
   {
     id: "restaurant-3",
@@ -120,6 +188,21 @@ const defaultRestaurants: Restaurant[] = [
         "zone-4": 450,
       },
     },
+    ...createRestaurantExtras({
+      publicPhone: "+373 552 30003",
+      contactPersonName: "Ирина Петрова",
+      contactPersonRole: "управляющий",
+      contactPhone: "+373 777 30003",
+      contactEmail: "rest3@example.md",
+      contactMessenger: "Telegram @rest3",
+      emergencyPhone: "+373 777 90003",
+      internalAdminNote:
+        "По выплатам связываться только с бухгалтером. В воскресенье не работает.",
+      weeklySchedule: {
+        ...createDefaultWeeklySchedule(),
+        sunday: { enabled: false, openTime: "", closeTime: "" },
+      },
+    }),
   },
   {
     id: "restaurant-4",
@@ -140,6 +223,7 @@ const defaultRestaurants: Restaurant[] = [
     pickupPrepaymentThresholdCents: null,
     commissionRateBps: 1500,
     restaurantDeliverySettings: null,
+    ...createRestaurantExtras(),
   },
   {
     id: "restaurant-5",
@@ -160,6 +244,7 @@ const defaultRestaurants: Restaurant[] = [
     pickupPrepaymentThresholdCents: null,
     commissionRateBps: 1500,
     restaurantDeliverySettings: null,
+    ...createRestaurantExtras(),
   },
 ];
 
@@ -370,6 +455,7 @@ export function createDefaultState(): PrototypeState {
       deliveryModes: [...restaurant.deliveryModes],
       paymentMethods: [...restaurant.paymentMethods],
       pickupPaymentMethods: [...restaurant.pickupPaymentMethods],
+      weeklySchedule: cloneWeeklySchedule(restaurant.weeklySchedule),
       restaurantDeliverySettings: restaurant.restaurantDeliverySettings
         ? {
             ...restaurant.restaurantDeliverySettings,
@@ -410,7 +496,11 @@ export function createDefaultState(): PrototypeState {
       ],
       noShowPickupCount: 0,
     },
-    drivers: [],
+    drivers: [
+      { id: "driver-1", name: "Водитель Пётр", cashEnabled: false, status: "AVAILABLE", phone: "+373 777 40001" },
+      { id: "driver-2", name: "Водитель Олег", cashEnabled: false, status: "AVAILABLE", phone: "+373 777 40002" },
+      { id: "driver-3", name: "Водитель Сергей", cashEnabled: false, status: "OFFLINE", phone: "+373 777 40003" },
+    ],
     cart: createEmptyCart(),
     orders: [],
     settlements: [],
