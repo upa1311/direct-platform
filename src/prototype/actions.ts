@@ -596,10 +596,19 @@ function isWorkingRestaurantOrder(order: Order | undefined): boolean {
   );
 }
 
+/** Тип автора действия над заказом. */
+export type OrderActionActor = "RESTAURANT" | "ADMIN";
+
+/**
+ * Общий transition над заказом с явным автором. Кабинет ресторана вызывает те
+ * же actions с actor="RESTAURANT" (по умолчанию), а `/admin/orders` — c "ADMIN".
+ * Финансовая и статусная логика едина; расходится только автор и текст истории.
+ */
 export function acceptRestaurantOrder(
   state: PrototypeState,
   orderId: string,
   preparationMinutes: number,
+  actor: OrderActionActor = "RESTAURANT",
 ): PrototypeState {
   const allowedMinutes = [10, 15, 20, 25, 30, 40];
   if (!allowedMinutes.includes(preparationMinutes)) {
@@ -616,6 +625,10 @@ export function acceptRestaurantOrder(
   }
 
   const now = new Date().toISOString();
+  const acceptedBy =
+    actor === "ADMIN"
+      ? "Администратор Direct принял заказ от имени ресторана"
+      : "Ресторан принял заказ";
 
   // Оплата не онлайн (самовывоз в ресторане либо наличные курьеру ресторана):
   // онлайн-оплата не запускается, AWAITING_PAYMENT не используется — заказ
@@ -643,13 +656,13 @@ export function acceptRestaurantOrder(
           {
             id: `${order.id}-history-${order.history.length + 1}`,
             occurredAt: now,
-            actor: "RESTAURANT",
+            actor,
             type: "STATUS",
             fromStatus: "RESTAURANT_REVIEW",
             toStatus: "PREPARING",
             message: isCourierCash
-              ? `Ресторан принял заказ. Время приготовления — ${preparationMinutes} минут. Оплата наличными курьеру ресторана при получении.`
-              : `Ресторан принял заказ. Время приготовления — ${preparationMinutes} минут. Оплата в ресторане при получении.`,
+              ? `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Оплата наличными курьеру ресторана при получении.`
+              : `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Оплата в ресторане при получении.`,
           },
         ],
       }),
@@ -676,11 +689,11 @@ export function acceptRestaurantOrder(
         {
           id: `${order.id}-history-${order.history.length + 1}`,
           occurredAt: now,
-          actor: "RESTAURANT",
+          actor,
           type: "STATUS",
           fromStatus: "RESTAURANT_REVIEW",
           toStatus: "AWAITING_PAYMENT",
-          message: `Ресторан принял заказ. Время приготовления — ${preparationMinutes} минут. Ожидается онлайн-оплата.`,
+          message: `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Ожидается онлайн-оплата.`,
         },
       ],
     }),
@@ -692,6 +705,7 @@ export function rejectRestaurantOrder(
   state: PrototypeState,
   orderId: string,
   reason: string,
+  actor: OrderActionActor = "RESTAURANT",
 ): PrototypeState {
   const normalizedReason = reason.trim();
   if (!normalizedReason) {
@@ -699,6 +713,10 @@ export function rejectRestaurantOrder(
   }
 
   const now = new Date().toISOString();
+  const rejectedBy =
+    actor === "ADMIN"
+      ? "Администратор Direct отклонил заказ от имени ресторана"
+      : "Ресторан отклонил заказ";
 
   return replaceOrder(
     state,
@@ -717,11 +735,11 @@ export function rejectRestaurantOrder(
           {
             id: `${order.id}-history-${order.history.length + 1}`,
             occurredAt: now,
-            actor: "RESTAURANT",
+            actor,
             type: "STATUS",
             fromStatus: "RESTAURANT_REVIEW",
             toStatus: "CANCELED",
-            message: `Ресторан отклонил заказ. Причина: ${normalizedReason}`,
+            message: `${rejectedBy}. Причина: ${normalizedReason}`,
           },
         ],
       };
@@ -791,8 +809,11 @@ export function simulateSuccessfulOnlinePayment(
 export function markOrderReady(
   state: PrototypeState,
   orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
 ): PrototypeState {
   const now = new Date().toISOString();
+  const readyPrefix =
+    actor === "ADMIN" ? "Администратор Direct отметил готовность. " : "";
 
   return replaceOrder(
     state,
@@ -809,7 +830,7 @@ export function markOrderReady(
           ? "Заказ готов к выдаче клиенту."
           : order.deliveryMode === "RESTAURANT_DELIVERY"
             ? "Заказ готов, ожидает курьера ресторана."
-            : "Ресторан отметил заказ как готовый и упакованный.";
+            : "Заказ готов и упакован.";
 
       return {
         ...order,
@@ -820,11 +841,11 @@ export function markOrderReady(
           {
             id: `${order.id}-history-${order.history.length + 1}`,
             occurredAt: now,
-            actor: "RESTAURANT",
+            actor,
             type: "STATUS",
             fromStatus: "PREPARING",
             toStatus: nextStatus,
-            message,
+            message: `${readyPrefix}${message}`,
           },
         ],
       };
@@ -833,22 +854,42 @@ export function markOrderReady(
   );
 }
 
+/**
+ * Общий шаг курьерской доставки для обоих режимов (RESTAURANT_DELIVERY и
+ * PLATFORM_DRIVER). Для водителя Direct переход READY → OUT_FOR_DELIVERY
+ * разрешён только при назначенном водителе (§3). Все проверки — в домене.
+ */
 function advanceCourierStatus(
   state: PrototypeState,
   orderId: string,
   fromStatus: Order["status"],
   toStatus: Order["status"],
-  message: string,
+  restaurantMessage: string,
+  platformMessage: string,
+  actor: OrderActionActor = "RESTAURANT",
+  requireDriverForPlatform = false,
 ): PrototypeState {
   const targetOrder = state.orders.find((order) => order.id === orderId);
   if (
     !targetOrder ||
-    targetOrder.deliveryMode !== "RESTAURANT_DELIVERY" ||
+    (targetOrder.deliveryMode !== "RESTAURANT_DELIVERY" &&
+      targetOrder.deliveryMode !== "PLATFORM_DRIVER") ||
     targetOrder.status !== fromStatus
   ) {
     return state;
   }
+  if (
+    requireDriverForPlatform &&
+    targetOrder.deliveryMode === "PLATFORM_DRIVER" &&
+    !targetOrder.assignedDriverId
+  ) {
+    return state;
+  }
   const now = new Date().toISOString();
+  const message =
+    targetOrder.deliveryMode === "PLATFORM_DRIVER"
+      ? platformMessage
+      : restaurantMessage;
   return replaceOrder(
     state,
     orderId,
@@ -861,7 +902,7 @@ function advanceCourierStatus(
         {
           id: `${order.id}-history-${order.history.length + 1}`,
           occurredAt: now,
-          actor: "RESTAURANT",
+          actor,
           type: "STATUS",
           fromStatus,
           toStatus,
@@ -876,6 +917,7 @@ function advanceCourierStatus(
 export function markOrderOutForDelivery(
   state: PrototypeState,
   orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
 ): PrototypeState {
   return advanceCourierStatus(
     state,
@@ -883,12 +925,16 @@ export function markOrderOutForDelivery(
     "READY",
     "OUT_FOR_DELIVERY",
     "Курьер ресторана выехал.",
+    "Водитель Direct выехал.",
+    actor,
+    true,
   );
 }
 
 export function markOrderArriving(
   state: PrototypeState,
   orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
 ): PrototypeState {
   return advanceCourierStatus(
     state,
@@ -896,6 +942,9 @@ export function markOrderArriving(
     "OUT_FOR_DELIVERY",
     "ARRIVING",
     "Курьер ресторана скоро будет.",
+    "Водитель Direct скоро будет.",
+    actor,
+    false,
   );
 }
 
@@ -912,6 +961,7 @@ export function markOrderArriving(
 export function markOrderDelivered(
   state: PrototypeState,
   orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
 ): PrototypeState {
   const targetOrder = state.orders.find((order) => order.id === orderId);
   if (
@@ -924,6 +974,8 @@ export function markOrderDelivered(
 
   const now = new Date().toISOString();
   const nextHistoryNumber = targetOrder.history.length + 1;
+  const deliveredPrefix =
+    actor === "ADMIN" ? "Администратор Direct отметил: " : "";
   const updatedOrder: Order = {
     ...targetOrder,
     status: "DELIVERED",
@@ -935,16 +987,16 @@ export function markOrderDelivered(
       {
         id: `${targetOrder.id}-history-${nextHistoryNumber}`,
         occurredAt: now,
-        actor: "RESTAURANT",
+        actor,
         type: "PAYMENT",
         fromStatus: "ARRIVING",
         toStatus: "ARRIVING",
-        message: "Курьер ресторана получил оплату наличными.",
+        message: `${deliveredPrefix}курьер ресторана получил оплату наличными.`,
       },
       {
         id: `${targetOrder.id}-history-${nextHistoryNumber + 1}`,
         occurredAt: now,
-        actor: "RESTAURANT",
+        actor,
         type: "STATUS",
         fromStatus: "ARRIVING",
         toStatus: "DELIVERED",
@@ -996,6 +1048,7 @@ export function completePickupWithCode(
   state: PrototypeState,
   orderId: string,
   code: string,
+  actor: OrderActionActor = "RESTAURANT",
 ): ActionResult<CompletePickupResult> {
   const order = state.orders.find((o) => o.id === orderId);
   const done = (error: string | null): ActionResult<CompletePickupResult> => ({
@@ -1018,6 +1071,8 @@ export function completePickupWithCode(
 
   const now = new Date().toISOString();
   const nextHistoryNumber = order.history.length + 1;
+  const issuedBy =
+    actor === "ADMIN" ? "Администратор Direct подтвердил выдачу" : "Заказ выдан";
   const updatedOrder: Order = {
     ...order,
     status: "PICKED_UP",
@@ -1030,7 +1085,7 @@ export function completePickupWithCode(
       {
         id: `${order.id}-history-${nextHistoryNumber}`,
         occurredAt: now,
-        actor: "RESTAURANT",
+        actor,
         type: "PAYMENT",
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "READY_FOR_PICKUP",
@@ -1039,11 +1094,11 @@ export function completePickupWithCode(
       {
         id: `${order.id}-history-${nextHistoryNumber + 1}`,
         occurredAt: now,
-        actor: "RESTAURANT",
+        actor,
         type: "STATUS",
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "PICKED_UP",
-        message: "Заказ выдан клиенту по коду.",
+        message: `${issuedBy} клиенту по коду.`,
       },
     ],
   };
@@ -1085,6 +1140,7 @@ export function markPickupNoShow(
   state: PrototypeState,
   orderId: string,
   reason: string,
+  actor: OrderActionActor = "RESTAURANT",
 ): PrototypeState {
   const order = state.orders.find((o) => o.id === orderId);
   const normalizedReason = reason.trim();
@@ -1098,6 +1154,8 @@ export function markPickupNoShow(
   }
 
   const now = new Date().toISOString();
+  const noShowPrefix =
+    actor === "ADMIN" ? "Администратор Direct отметил невыкуп. " : "";
   const updatedOrder: Order = {
     ...order,
     status: "CANCELED",
@@ -1108,11 +1166,11 @@ export function markPickupNoShow(
       {
         id: `${order.id}-history-${order.history.length + 1}`,
         occurredAt: now,
-        actor: "RESTAURANT",
+        actor,
         type: "STATUS",
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "CANCELED",
-        message: `Клиент не пришёл за заказом. Причина: ${normalizedReason}`,
+        message: `${noShowPrefix}Клиент не пришёл за заказом. Причина: ${normalizedReason}`,
       },
     ],
   };
@@ -1234,6 +1292,15 @@ export function assignDriverToOrder(
   if (isTerminalOrderStatus(order.status)) {
     return fail("Заказ завершён или отменён.");
   }
+  // §3: назначение только после оплаты и только на этапах приготовления/готовности.
+  if (order.paymentStatus !== "PAID") {
+    return fail("Назначить водителя можно только после оплаты заказа.");
+  }
+  if (order.status !== "PREPARING" && order.status !== "READY") {
+    return fail(
+      "Назначить водителя можно только в статусе «Готовится» или «Готов».",
+    );
+  }
   if (order.assignedDriverId) {
     return fail("Водитель уже назначен — используйте переназначение.");
   }
@@ -1298,6 +1365,16 @@ export function reassignDriverForOrder(
   if (!order.assignedDriverId) {
     return fail("Водитель ещё не назначен.");
   }
+  // §3: переназначение — для активной оплаченной доставки.
+  const REASSIGN_STATUSES: OrderStatus[] = [
+    "PREPARING",
+    "READY",
+    "OUT_FOR_DELIVERY",
+    "ARRIVING",
+  ];
+  if (!REASSIGN_STATUSES.includes(order.status)) {
+    return fail("Переназначение доступно только для активной доставки.");
+  }
   if (!normalizedReason) return fail("Укажите причину переназначения.");
   if (!newDriver) return fail("Водитель не найден.");
   if (newDriver.id === order.assignedDriverId) {
@@ -1358,6 +1435,12 @@ export function unassignDriverFromOrder(
   });
 
   if (!order) return fail("Заказ не найден.");
+  if (order.deliveryMode !== "PLATFORM_DRIVER") {
+    return fail("Назначение есть только у доставки водителем Direct.");
+  }
+  if (isTerminalOrderStatus(order.status)) {
+    return fail("Заказ завершён или отменён.");
+  }
   if (!order.assignedDriverId) return fail("Водитель не назначен.");
   if (!normalizedReason) return fail("Укажите причину снятия назначения.");
 
@@ -1403,12 +1486,14 @@ export function markOrderDeliveredByDriver(
   orderId: string,
 ): PrototypeState {
   const order = state.orders.find((o) => o.id === orderId);
+  // §3: завершение только для оплаченного PLATFORM_DRIVER-заказа с назначенным
+  // водителем и только из OUT_FOR_DELIVERY/ARRIVING (не из PREPARING).
   if (
     !order ||
     order.deliveryMode !== "PLATFORM_DRIVER" ||
-    isTerminalOrderStatus(order.status) ||
-    order.status === "RESTAURANT_REVIEW" ||
-    order.status === "AWAITING_PAYMENT"
+    !order.assignedDriverId ||
+    order.paymentStatus !== "PAID" ||
+    (order.status !== "OUT_FOR_DELIVERY" && order.status !== "ARRIVING")
   ) {
     return state;
   }
@@ -1498,21 +1583,34 @@ export function adminCancelOrder(
   return { state: nextState, result: { ok: true, error: null } };
 }
 
-/** Безопасные статусы для административного исправления (без финансов). */
-export const SAFE_STATUS_CORRECTIONS: readonly OrderStatus[] = [
-  "RESTAURANT_REVIEW",
-  "PREPARING",
-  "READY",
-  "READY_FOR_PICKUP",
-  "OUT_FOR_DELIVERY",
-  "ARRIVING",
-];
+/**
+ * Безопасные операционные статусы для административного исправления (§2),
+ * зависящие от режима доставки заказа. Никогда не включают финансовые/терминальные
+ * статусы (AWAITING_PAYMENT, DELIVERED, PICKED_UP, CANCELED). Самовывоз не может
+ * получить курьерские статусы, доставка — самовывозный READY_FOR_PICKUP.
+ */
+export function getSafeAdminStatusCorrections(
+  order: Order,
+): OrderStatus[] {
+  if (order.deliveryMode === "PICKUP") {
+    return ["RESTAURANT_REVIEW", "PREPARING", "READY_FOR_PICKUP"];
+  }
+  // PLATFORM_DRIVER и RESTAURANT_DELIVERY — курьерские этапы, без самовывоза.
+  return [
+    "RESTAURANT_REVIEW",
+    "PREPARING",
+    "READY",
+    "OUT_FOR_DELIVERY",
+    "ARRIVING",
+  ];
+}
 
 /**
- * Безопасное административное исправление статуса (§11). Только операционные
- * статусы из белого списка; причина обязательна. НЕ меняет оплату, settlement,
- * финансовый snapshot и не назначает водителя. Не может перевести в DELIVERED,
- * PICKED_UP, CANCELED или AWAITING_PAYMENT.
+ * Безопасное административное исправление статуса (§2, §11). Допустимые целевые
+ * статусы зависят от типа заказа (getSafeAdminStatusCorrections); причина
+ * обязательна. НЕ меняет оплату, settlement, финансовый snapshot и не назначает
+ * водителя. Не может перевести в DELIVERED, PICKED_UP, CANCELED или
+ * AWAITING_PAYMENT. Проверка дублируется и в UI, и здесь (домен).
  */
 export function correctOrderStatus(
   state: PrototypeState,
@@ -1529,8 +1627,8 @@ export function correctOrderStatus(
 
   if (!order) return fail("Заказ не найден.");
   if (!normalizedReason) return fail("Укажите причину исправления.");
-  if (!SAFE_STATUS_CORRECTIONS.includes(newStatus)) {
-    return fail("Этот статус нельзя выставить обычным исправлением.");
+  if (!getSafeAdminStatusCorrections(order).includes(newStatus)) {
+    return fail("Этот статус несовместим с типом заказа.");
   }
   if (isTerminalOrderStatus(order.status)) {
     return fail("Заказ завершён или отменён.");
@@ -1744,8 +1842,11 @@ export interface RestaurantFormInput {
   isAcceptingOrders: boolean;
   restaurantDeliverySettings: RestaurantDeliverySettings | null;
   pickupPaymentMethods?: PickupPaymentMethod[];
+  /** Комиссия Direct за самовывоз, bps (по умолчанию 1500 = 15%). */
+  pickupCommissionRateBps?: number;
   // Контактные/операционные поля (необязательны; по умолчанию пустые).
   publicPhone?: string;
+  timeZone?: string;
   contactPersonName?: string;
   contactPersonRole?: string;
   contactPhone?: string;
@@ -1781,8 +1882,11 @@ export function createRestaurant(
     description: input.description,
     address: input.address,
     zoneId: input.zoneId,
-    status: input.status,
-    isAcceptingOrders: input.isAcceptingOrders,
+    // §4: новый ресторан всегда создаётся безопасно — черновик, не принимает
+    // заказы и не виден клиенту. Публикация и приём заказов — отдельные
+    // осознанные действия администратора (в конструкторе).
+    status: "DRAFT",
+    isAcceptingOrders: false,
     deliveryModes: deliveryModesForProvider(
       input.deliveryProvider,
       input.pickupEnabled,
@@ -1799,7 +1903,7 @@ export function createRestaurant(
           defaultRestaurantDeliverySettings())
         : input.restaurantDeliverySettings,
     pickupPaymentMethods,
-    pickupCommissionRateBps: 1500,
+    pickupCommissionRateBps: input.pickupCommissionRateBps ?? 1500,
     pickupPrepaymentThresholdCents: null,
     // Контакты и график: из формы либо безопасные пустые/стандартные значения.
     ...createRestaurantExtras({
@@ -1812,6 +1916,7 @@ export function createRestaurant(
       emergencyPhone: input.emergencyPhone,
       internalAdminNote: input.internalAdminNote,
       weeklySchedule: input.weeklySchedule,
+      timeZone: input.timeZone,
     }),
   };
   const nextState = finalizeMutation(state, {
@@ -1863,6 +1968,8 @@ export function updateRestaurant(
     defaultPreparationMinutes:
       patch.defaultPreparationMinutes ?? target.defaultPreparationMinutes,
     commissionRateBps: patch.commissionRateBps ?? target.commissionRateBps,
+    pickupCommissionRateBps:
+      patch.pickupCommissionRateBps ?? target.pickupCommissionRateBps,
     deliveryProvider,
     pickupEnabled,
     deliveryModes: deliveryModesForProvider(deliveryProvider, pickupEnabled),
@@ -1871,6 +1978,7 @@ export function updateRestaurant(
         ? (settings ?? defaultRestaurantDeliverySettings())
         : settings,
     pickupPaymentMethods,
+    timeZone: patch.timeZone ?? target.timeZone,
     // Контакты и график: обновляем только явно переданные поля; остальные
     // сохраняются. Заказы и финансовые snapshots не затрагиваются.
     publicPhone: patch.publicPhone ?? target.publicPhone,

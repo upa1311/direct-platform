@@ -175,6 +175,8 @@ export interface Restaurant {
   internalAdminNote: string;
   /** Структурированный недельный график работы. */
   weeklySchedule: WeeklySchedule;
+  /** Часовой пояс ресторана (IANA), например «Europe/Chisinau». */
+  timeZone: string;
 }
 
 export interface MenuItemVariant {
@@ -422,8 +424,14 @@ export interface CartPricing {
   restaurantPayoutBeforeBankFeeCents: number;
   customerTotalCents: number | null;
   appliedPromotion: AppliedPromotionSnapshot | null;
-  /** Прогресс до следующего подарка по акции (единиц), null если акции нет. */
+  /** Прогресс до следующей завершённой группы (единиц), null если акции нет. */
   promotionUnitsToNextFree: number | null;
+  /**
+   * Сколько ещё ПЛАТНЫХ участвующих пицц добавить до следующей бесплатной.
+   * 0 — следующая пицца уже бесплатная; null — акции нет / нет участвующих.
+   * Клиентский показатель (не менять формулу самой акции).
+   */
+  promotionPaidUnitsBeforeNextFree: number | null;
   promotionFreeUnitCount: number;
   promotionEligibleUnits: number;
   /** Состояние собственной доставки ресторана. */

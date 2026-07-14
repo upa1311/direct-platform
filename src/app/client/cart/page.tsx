@@ -133,13 +133,12 @@ export default function ClientCartPage() {
         : "Укажите адрес";
   const pickupPaymentSummary = getPickupPaymentSummary(restaurant);
 
-  // Прогресс акции показываем всегда, пока акция активна и до следующего
-  // подарка осталось несколько участвующих единиц (в т.ч. после уже
-  // применённых бесплатных пицц). Реальные скидки — отдельными строками итогов.
-  const promoProgressUnits =
+  // Клиентский прогресс: сколько ПЛАТНЫХ пицц осталось до следующей бесплатной.
+  // 0 — следующая уже бесплатная; null (нет участвующих) — подсказку не показываем.
+  const promoPaidBeforeFree =
     pricing.promotionEligibleUnits > 0 &&
-    pricing.promotionUnitsToNextFree !== null
-      ? pricing.promotionUnitsToNextFree
+    pricing.promotionPaidUnitsBeforeNextFree !== null
+      ? pricing.promotionPaidUnitsBeforeNextFree
       : null;
 
   return (
@@ -158,7 +157,7 @@ export default function ClientCartPage() {
       <div className={flowStyles.cartLayout}>
         <div className={flowStyles.panelStack}>
           <section className={flowStyles.card}>
-            <h2>Состав заказа</h2>
+            <h2>Детали заказа</h2>
             <div className={flowStyles.cartItems}>
               {itemViews.map(({ cartItem, menuItem, variant, lineTotalCents }) => (
                 <div
@@ -233,13 +232,19 @@ export default function ClientCartPage() {
                 </div>
               ))}
             </div>
-            {promoProgressUnits !== null ? (
+            {promoPaidBeforeFree !== null ? (
               <p className={flowStyles.promoProgressInline}>
                 <Gift aria-hidden="true" className={flowStyles.promoInlineIcon} />
                 <span>
-                  Добавьте ещё <strong>{promoProgressUnits}</strong>{" "}
-                  {pluralizePizza(promoProgressUnits)}, чтобы получить следующую
-                  бесплатно
+                  {promoPaidBeforeFree > 0 ? (
+                    <>
+                      До следующей бесплатной пиццы добавьте ещё{" "}
+                      <strong>{promoPaidBeforeFree}</strong>{" "}
+                      {pluralizePizza(promoPaidBeforeFree)}
+                    </>
+                  ) : (
+                    "Следующая пицца будет бесплатной"
+                  )}
                 </span>
               </p>
             ) : null}
@@ -544,10 +549,10 @@ export default function ClientCartPage() {
             <p className={flowStyles.summaryHint}>Доставка бесплатно</p>
           ) : null}
           {pricing.smallOrderFeeCents > 0 ? (
-            <div className={flowStyles.warningNotice}>
-              Добавьте товаров ещё на {formatMoney(smallOrderMissingCents)},
-              чтобы доплата исчезла.
-            </div>
+            <p className={flowStyles.smallOrderWarningText} role="status">
+              Дозакажите на {formatMoney(smallOrderMissingCents)}, и доплата
+              исчезнет.
+            </p>
           ) : null}
 
           <div className={flowStyles.submitArea}>

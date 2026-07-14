@@ -51,6 +51,7 @@ import {
   type CompletePickupResult,
   type CreateOrderResult,
   type CreateRestaurantResult,
+  type OrderActionActor,
   type RestaurantFormInput,
   type UpdateRestaurantResult,
 } from "./actions";
@@ -104,15 +105,31 @@ interface PrototypeContextValue {
   setPaymentMethod: (paymentMethod: PaymentMethod) => void;
   setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => void;
   createOrder: () => CreateOrderResult;
-  acceptOrder: (orderId: string, preparationMinutes: number) => void;
-  rejectOrder: (orderId: string, reason: string) => void;
+  acceptOrder: (
+    orderId: string,
+    preparationMinutes: number,
+    actor?: OrderActionActor,
+  ) => void;
+  rejectOrder: (
+    orderId: string,
+    reason: string,
+    actor?: OrderActionActor,
+  ) => void;
   simulateOnlinePayment: (orderId: string) => void;
-  markReady: (orderId: string) => void;
-  completePickup: (orderId: string, code: string) => CompletePickupResult;
-  markPickupNoShow: (orderId: string, reason: string) => void;
-  markOutForDelivery: (orderId: string) => void;
-  markArriving: (orderId: string) => void;
-  markDelivered: (orderId: string) => void;
+  markReady: (orderId: string, actor?: OrderActionActor) => void;
+  completePickup: (
+    orderId: string,
+    code: string,
+    actor?: OrderActionActor,
+  ) => CompletePickupResult;
+  markPickupNoShow: (
+    orderId: string,
+    reason: string,
+    actor?: OrderActionActor,
+  ) => void;
+  markOutForDelivery: (orderId: string, actor?: OrderActionActor) => void;
+  markArriving: (orderId: string, actor?: OrderActionActor) => void;
+  markDelivered: (orderId: string, actor?: OrderActionActor) => void;
   markDeliveredByDriver: (orderId: string) => void;
   setPreparationMinutes: (orderId: string, minutes: number) => void;
   setRestaurantAccepting: (restaurantId: string, accepting: boolean) => void;
@@ -321,17 +338,28 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   }, [replaceState]);
 
   const acceptOrder = useCallback(
-    (orderId: string, preparationMinutes: number) => {
+    (
+      orderId: string,
+      preparationMinutes: number,
+      actor: OrderActionActor = "RESTAURANT",
+    ) => {
       replaceState(
-        acceptRestaurantOrder(stateRef.current, orderId, preparationMinutes),
+        acceptRestaurantOrder(
+          stateRef.current,
+          orderId,
+          preparationMinutes,
+          actor,
+        ),
       );
     },
     [replaceState],
   );
 
   const rejectOrder = useCallback(
-    (orderId: string, reason: string) => {
-      replaceState(rejectRestaurantOrder(stateRef.current, orderId, reason));
+    (orderId: string, reason: string, actor: OrderActionActor = "RESTAURANT") => {
+      replaceState(
+        rejectRestaurantOrder(stateRef.current, orderId, reason, actor),
+      );
     },
     [replaceState],
   );
@@ -346,15 +374,20 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const markReady = useCallback(
-    (orderId: string) => {
-      replaceState(markOrderReady(stateRef.current, orderId));
+    (orderId: string, actor: OrderActionActor = "RESTAURANT") => {
+      replaceState(markOrderReady(stateRef.current, orderId, actor));
     },
     [replaceState],
   );
 
   const completePickup = useCallback(
-    (orderId: string, code: string) => {
-      const action = completePickupWithCode(stateRef.current, orderId, code);
+    (orderId: string, code: string, actor: OrderActionActor = "RESTAURANT") => {
+      const action = completePickupWithCode(
+        stateRef.current,
+        orderId,
+        code,
+        actor,
+      );
       if (action.state !== stateRef.current) {
         replaceState(action.state);
       }
@@ -364,29 +397,29 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const markPickupNoShow = useCallback(
-    (orderId: string, reason: string) => {
-      replaceState(runPickupNoShow(stateRef.current, orderId, reason));
+    (orderId: string, reason: string, actor: OrderActionActor = "RESTAURANT") => {
+      replaceState(runPickupNoShow(stateRef.current, orderId, reason, actor));
     },
     [replaceState],
   );
 
   const markOutForDelivery = useCallback(
-    (orderId: string) => {
-      replaceState(markOrderOutForDelivery(stateRef.current, orderId));
+    (orderId: string, actor: OrderActionActor = "RESTAURANT") => {
+      replaceState(markOrderOutForDelivery(stateRef.current, orderId, actor));
     },
     [replaceState],
   );
 
   const markArriving = useCallback(
-    (orderId: string) => {
-      replaceState(markOrderArriving(stateRef.current, orderId));
+    (orderId: string, actor: OrderActionActor = "RESTAURANT") => {
+      replaceState(markOrderArriving(stateRef.current, orderId, actor));
     },
     [replaceState],
   );
 
   const markDelivered = useCallback(
-    (orderId: string) => {
-      replaceState(markOrderDelivered(stateRef.current, orderId));
+    (orderId: string, actor: OrderActionActor = "RESTAURANT") => {
+      replaceState(markOrderDelivered(stateRef.current, orderId, actor));
     },
     [replaceState],
   );

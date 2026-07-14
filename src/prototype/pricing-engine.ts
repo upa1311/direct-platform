@@ -88,6 +88,29 @@ export function computeFreeUnitCount(
 }
 
 /**
+ * Сколько ещё ПЛАТНЫХ участвующих единиц нужно добавить до следующей бесплатной.
+ * Клиентский показатель прогресса; формулу самой акции (computeFreeUnitCount,
+ * распределение скидки) НЕ меняет.
+ *
+ * Для «3+1» (groupSize = 4, freeQuantity = 1): 1 → 2, 2 → 1, 3 → 0, 4 → 3,
+ * 5 → 2, 6 → 1, 7 → 0, 8 → 3. Значение 0 означает «следующая — бесплатная».
+ * Возвращает null, если участвующих единиц нет или акция некорректна.
+ */
+export function computePaidUnitsBeforeNextFree(
+  totalEligibleUnits: number,
+  config: PromotionConfig,
+): number | null {
+  const groupSize = config.buyQuantity + config.freeQuantity;
+  if (groupSize <= 0 || config.freeQuantity <= 0 || totalEligibleUnits <= 0) {
+    return null;
+  }
+  const remainder = totalEligibleUnits % groupSize;
+  const unitsToNextGroup = remainder === 0 ? groupSize : groupSize - remainder;
+  // Из оставшихся до группы единиц freeQuantity станут бесплатными.
+  return Math.max(0, unitsToNextGroup - config.freeQuantity);
+}
+
+/**
  * Сумма скидки по акции.
  *
  * Бесплатной становится только БАЗОВАЯ стоимость самых дешёвых участвующих

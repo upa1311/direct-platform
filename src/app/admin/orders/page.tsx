@@ -7,6 +7,7 @@ import { OrderHistory } from "@/components/order-flow/order-history";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
+import { getSafeAdminStatusCorrections } from "@/prototype/actions";
 import type { DeliveryMode, Order, OrderStatus } from "@/prototype/models";
 import {
   deliveryModeLabels,
@@ -22,14 +23,6 @@ import {
 } from "@/prototype/selectors";
 
 const PREP_MINUTES = [10, 15, 20, 25, 30, 40];
-const SAFE_STATUSES: OrderStatus[] = [
-  "RESTAURANT_REVIEW",
-  "PREPARING",
-  "READY",
-  "READY_FOR_PICKUP",
-  "OUT_FOR_DELIVERY",
-  "ARRIVING",
-];
 
 /** «Проблемный» заказ: ожидает оплаты, отменён, либо водитель Direct не назначен. */
 function isProblemOrder(order: Order): boolean {
@@ -49,14 +42,22 @@ function isProblemOrder(order: Order): boolean {
 function ContactButtons({ order }: { order: Order }) {
   const { state } = usePrototype();
   const restaurant = getRestaurant(state, order.restaurant.id);
+  // §9: связь с рестораном по прямому контакту управляющего (contactPhone),
+  // иначе по публичному телефону. Срочный контакт — отдельной ссылкой.
+  const restaurantPhone = restaurant?.contactPhone || restaurant?.publicPhone;
   return (
     <>
-      {restaurant?.publicPhone ? (
+      {restaurantPhone ? (
+        <a className={flowStyles.secondaryButton} href={`tel:${restaurantPhone}`}>
+          Связаться с рестораном
+        </a>
+      ) : null}
+      {restaurant?.emergencyPhone ? (
         <a
           className={flowStyles.secondaryButton}
-          href={`tel:${restaurant.publicPhone}`}
+          href={`tel:${restaurant.emergencyPhone}`}
         >
-          Связаться с рестораном
+          Срочный контакт
         </a>
       ) : null}
       {order.customer.phone ? (
@@ -165,7 +166,11 @@ function DriverAssignment({ order }: { order: Order }) {
 
 function StatusCorrection({ order }: { order: Order }) {
   const { correctStatus } = usePrototype();
-  const [target, setTarget] = useState<OrderStatus>("PREPARING");
+  // §2: допустимые статусы зависят от типа заказа (проверка и в UI, и в домене).
+  const safeStatuses = getSafeAdminStatusCorrections(order);
+  const [target, setTarget] = useState<OrderStatus>(
+    safeStatuses[0] ?? "PREPARING",
+  );
   const [reason, setReason] = useState("");
 
   const apply = () => {
@@ -187,7 +192,7 @@ function StatusCorrection({ order }: { order: Order }) {
             value={target}
             onChange={(e) => setTarget(e.target.value as OrderStatus)}
           >
-            {SAFE_STATUSES.map((status) => (
+            {safeStatuses.map((status) => (
               <option value={status} key={status}>
                 {orderStatusLabels[status]}
               </option>
@@ -240,7 +245,7 @@ function OrderActions({ order }: { order: Order }) {
       window.alert("Причина обязательна.");
       return;
     }
-    rejectOrder(order.id, reason);
+    rejectOrder(order.id, reason, "ADMIN");
   };
   const doCancel = () => {
     const reason = window.prompt("Причина отмены заказа:");
@@ -251,7 +256,7 @@ function OrderActions({ order }: { order: Order }) {
   const doPickupNoShow = () => {
     const reason = window.prompt("Причина: клиент не пришёл");
     if (reason === null) return;
-    markPickupNoShow(order.id, reason);
+    markPickupNoShow(order.id, reason, "ADMIN");
   };
   const doEmergencyPickup = () => {
     const reason = window.prompt("Причина аварийной выдачи без кода:");
@@ -271,7 +276,7 @@ function OrderActions({ order }: { order: Order }) {
     if (!res.ok) window.alert(res.error ?? "Не удалось выдать заказ.");
   };
   const doCompletePickup = () => {
-    const res = completePickup(order.id, code);
+    const res = completePickup(order.id, code, "ADMIN");
     if (!res.ok) window.alert(res.error ?? "Неверный код.");
     else setCode("");
   };
@@ -303,7 +308,7 @@ function OrderActions({ order }: { order: Order }) {
           <button
             className={flowStyles.primaryButton}
             type="button"
-            onClick={() => acceptOrder(order.id, prep)}
+            onClick={() => acceptOrder(order.id, prep, "ADMIN")}
           >
             Принять от имени ресторана
           </button>
@@ -339,7 +344,7 @@ function OrderActions({ order }: { order: Order }) {
           <button
             className={flowStyles.primaryButton}
             type="button"
-            onClick={() => markReady(order.id)}
+            onClick={() => markReady(order.id, "ADMIN")}
           >
             Отметить готовым
           </button>
@@ -376,11 +381,12 @@ function OrderActions({ order }: { order: Order }) {
         </div>
       ) : null}
 
+      {/* Курьер ресторана (RESTAURANT_DELIVERY): READY → OUT → ARRIVING → DELIVERED */}
       {isRestaurantDelivery && order.status === "READY" ? (
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => markOutForDelivery(order.id)}
+          onClick={() => markOutForDelivery(order.id, "ADMIN")}
         >
           Курьер выехал
         </button>
@@ -389,7 +395,7 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => markArriving(order.id)}
+          onClick={() => markArriving(order.id, "ADMIN")}
         >
           Курьер скоро будет
         </button>
@@ -398,18 +404,34 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => markDelivered(order.id)}
+          onClick={() => markDelivered(order.id, "ADMIN")}
         >
           Заказ доставлен, наличные получены
         </button>
       ) : null}
 
+      {/* Водитель Direct (PLATFORM_DRIVER): назначение + этапы READY → OUT → ARRIVING → DELIVERED */}
       {isPlatform && !isTerminal ? <DriverAssignment order={order} /> : null}
+      {isPlatform && order.assignedDriverId && order.status === "READY" ? (
+        <button
+          className={flowStyles.primaryButton}
+          type="button"
+          onClick={() => markOutForDelivery(order.id, "ADMIN")}
+        >
+          Водитель выехал
+        </button>
+      ) : null}
+      {isPlatform && order.status === "OUT_FOR_DELIVERY" ? (
+        <button
+          className={flowStyles.primaryButton}
+          type="button"
+          onClick={() => markArriving(order.id, "ADMIN")}
+        >
+          Водитель скоро будет
+        </button>
+      ) : null}
       {isPlatform &&
-      order.assignedDriverId &&
-      (order.status === "READY" ||
-        order.status === "OUT_FOR_DELIVERY" ||
-        order.status === "ARRIVING") ? (
+      (order.status === "OUT_FOR_DELIVERY" || order.status === "ARRIVING") ? (
         <button
           className={flowStyles.primaryButton}
           type="button"

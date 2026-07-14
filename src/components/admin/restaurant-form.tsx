@@ -266,6 +266,8 @@ export function RestaurantBuilderEditor({
     ) as Record<ZoneId, boolean>,
     contacts: contactsFromRestaurant(restaurant),
     weeklySchedule: cloneWeeklySchedule(restaurant.weeklySchedule),
+    pickupCommissionPercent: (restaurant.pickupCommissionRateBps / 100).toString(),
+    timeZone: restaurant.timeZone,
   });
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -284,6 +286,11 @@ export function RestaurantBuilderEditor({
         (Number.parseFloat(form.commissionPercent.replace(",", ".")) || 0) *
           100,
       ),
+      pickupCommissionRateBps: Math.round(
+        (Number.parseFloat(form.pickupCommissionPercent.replace(",", ".")) ||
+          0) * 100,
+      ),
+      timeZone: form.timeZone.trim() || "Europe/Chisinau",
       defaultPreparationMinutes:
         Number.parseInt(form.defaultPreparationMinutes, 10) || 25,
       pickupEnabled: form.pickupEnabled,
@@ -446,6 +453,16 @@ export function RestaurantBuilderEditor({
               }
             />
           </label>
+          <label className={flowStyles.field}>
+            <span>Часовой пояс (IANA)</span>
+            <input
+              value={form.timeZone}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, timeZone: e.target.value }))
+              }
+              placeholder="Europe/Chisinau"
+            />
+          </label>
         </div>
       ) : null}
 
@@ -486,11 +503,23 @@ export function RestaurantBuilderEditor({
               </select>
             </label>
             <label className={flowStyles.field}>
-              <span>Комиссия Direct, %</span>
+              <span>Комиссия Direct за доставку, %</span>
               <input
                 value={form.commissionPercent}
                 onChange={(e) =>
                   setForm((f) => ({ ...f, commissionPercent: e.target.value }))
+                }
+              />
+            </label>
+            <label className={flowStyles.field}>
+              <span>Комиссия Direct за самовывоз, %</span>
+              <input
+                value={form.pickupCommissionPercent}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    pickupCommissionPercent: e.target.value,
+                  }))
                 }
               />
             </label>
@@ -663,19 +692,22 @@ export function CreateRestaurantForm() {
     createDefaultWeeklySchedule(),
   );
   const [created, setCreated] = useState("");
+  const [createdId, setCreatedId] = useState<string | null>(null);
 
   const handleCreate = () => {
     const input: RestaurantFormInput = {
       name: name.trim() || "Новый ресторан",
-      description: "Новый тестовый ресторан.",
-      address: "Бендеры · тестовый адрес",
+      description: "",
+      // §4: без публикации и без подставного «тестового адреса» — заполняется в
+      // конструкторе. Ресторан создаётся черновиком и не принимает заказы.
+      address: "",
       zoneId: "zone-1",
       deliveryProvider: template,
       commissionRateBps: template === "RESTAURANT" ? 700 : 1500,
       defaultPreparationMinutes: 25,
       pickupEnabled: true,
-      status: "PUBLISHED",
-      isAcceptingOrders: true,
+      status: "DRAFT",
+      isAcceptingOrders: false,
       restaurantDeliverySettings: null,
       pickupPaymentMethods: ["CASH", "CARD"],
       ...contacts,
@@ -684,9 +716,13 @@ export function CreateRestaurantForm() {
     const result = createRestaurantEntry(input);
     if (!result.restaurantId) {
       setCreated(result.error ?? "Не удалось создать ресторан.");
+      setCreatedId(null);
       return;
     }
-    setCreated(`Ресторан «${input.name}» создан. Откройте его для настройки.`);
+    setCreated(
+      `Ресторан «${input.name}» создан как черновик (не принимает заказы и не виден клиенту). Опубликуйте и включите приём заказов в конструкторе.`,
+    );
+    setCreatedId(result.restaurantId);
     setName("");
     setContacts(EMPTY_CONTACTS);
     setWeeklySchedule(createDefaultWeeklySchedule());
@@ -741,6 +777,14 @@ export function CreateRestaurantForm() {
         <p className={flowStyles.feedback} aria-live="polite">
           {created}
         </p>
+        {createdId ? (
+          <Link
+            className={flowStyles.backLink}
+            href={`/admin/restaurant-builder/${createdId}`}
+          >
+            Открыть в конструкторе →
+          </Link>
+        ) : null}
       </div>
     </section>
   );

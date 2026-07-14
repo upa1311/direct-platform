@@ -301,14 +301,14 @@ export function PromotionsSection({ restaurantId }: { restaurantId: string }) {
     savePromotion({
       id,
       restaurantId,
-      title: "Закажи 3 пиццы и получи четвёртую бесплатно",
+      title: "Каждая 4-я пицца — бесплатно",
       enabled: false,
       type: "BUY_N_GET_M_CHEAPEST_FREE",
       buyQuantity: 3,
       freeQuantity: 1,
       repeat: true,
       eligibleMenuItemIds: eligible,
-      displayText: "Закажи 3 пиццы и получи четвёртую бесплатно",
+      displayText: "Каждая 4-я пицца — бесплатно",
       createdAt: "",
       updatedAt: "",
     });

@@ -15,9 +15,9 @@ import {
   ACTIVE_ORDER_STATUSES,
   formatMoney,
   getRestaurant,
+  getRestaurantLocalNow,
   getRestaurantTotalDebtCents,
   getScheduleLabel,
-  getWeekdayId,
   getZoneName,
   orderStatusLabels,
   publicationStatusLabels,
@@ -25,14 +25,21 @@ import {
 
 function DetailContent({ restaurant }: { restaurant: Restaurant }) {
   const { state, isHydrated, setRestaurantAccepting } = usePrototype();
-  const settings = restaurant.restaurantDeliverySettings;
+  // §8: собственные настройки доставки действуют только у своего курьера.
+  const settings =
+    restaurant.deliveryProvider === "RESTAURANT"
+      ? restaurant.restaurantDeliverySettings
+      : null;
   const activeOrders = state.orders.filter(
     (order) =>
       order.restaurant.id === restaurant.id &&
       ACTIVE_ORDER_STATUSES.includes(order.status),
   );
   const debt = getRestaurantTotalDebtCents(state, restaurant.id);
-  const today = isHydrated ? getWeekdayId(new Date()) : null;
+  // §5: сегодняшний день — в часовом поясе ресторана.
+  const today = isHydrated
+    ? getRestaurantLocalNow(restaurant, new Date()).weekdayId
+    : null;
 
   const handlePause = () => {
     if (

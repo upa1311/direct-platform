@@ -407,6 +407,7 @@ function normalizeRestaurantV5(
     emergencyPhone: str(raw.emergencyPhone, ""),
     internalAdminNote: str(raw.internalAdminNote, ""),
     weeklySchedule: normalizeWeeklySchedule(raw.weeklySchedule),
+    timeZone: str(raw.timeZone, "Europe/Chisinau"),
   };
 }
 
@@ -442,14 +443,16 @@ function normalizeDriver(value: unknown): PrototypeState["drivers"][number] {
 }
 
 /**
- * Нормализация списка водителей. Существующие водители сохраняются (с безопасным
- * статусом OFFLINE, если статус не задан); пустой/отсутствующий список — дефолт.
+ * Нормализация списка водителей (§6). Если `drivers` — массив, он сохраняется
+ * как есть (в т.ч. пустой), водители не удаляются и тестовые не подставляются.
+ * Fallback (seed-водители) используется только если поле отсутствует/повреждено
+ * (не массив). Seed-водители остаются лишь в свежем default-state прототипа.
  */
 function normalizeDrivers(
   value: unknown,
   fallback: PrototypeState["drivers"],
 ): PrototypeState["drivers"] {
-  if (!Array.isArray(value) || value.length === 0) {
+  if (!Array.isArray(value)) {
     return fallback;
   }
   return value
@@ -478,6 +481,38 @@ function normalizeSettlements(value: unknown): PrototypeState["settlements"] {
  * пользовательские и админские данные (рестораны, меню, акции, тарифы, зоны,
  * настройки, корзину, заказы, ledger) и лишь мягко дозаполняет недостающие поля.
  */
+const SEED_PIZZA_PROMO_ID = "promo-restaurant-2-pizza";
+const NEW_SEED_PROMO_NAME = "Каждая 4-я пицца — бесплатно";
+/** Прежние стандартные названия seed-акции Direct (только их и заменяем). */
+const OLD_SEED_PROMO_NAMES = new Set([
+  "Закажи 3 пиццы и получи четвёртую бесплатно",
+]);
+
+/**
+ * Точечная нормализация названия seed-акции «3+1» (§3). Обновляет title/
+ * displayText на новое стандартное имя ТОЛЬКО у акции `promo-restaurant-2-pizza`
+ * и ТОЛЬКО если сейчас там одно из прежних стандартных значений Direct. Имя,
+ * заданное администратором вручную, не перезаписывается. Снимки заказов не
+ * затрагиваются (нормализуются только акции, не история заказов).
+ */
+function normalizeSeedPromotion(
+  promotion: PrototypeState["promotions"][number],
+): PrototypeState["promotions"][number] {
+  if (promotion.id !== SEED_PIZZA_PROMO_ID) {
+    return promotion;
+  }
+  const title = OLD_SEED_PROMO_NAMES.has(promotion.title)
+    ? NEW_SEED_PROMO_NAME
+    : promotion.title;
+  const displayText = OLD_SEED_PROMO_NAMES.has(promotion.displayText)
+    ? NEW_SEED_PROMO_NAME
+    : promotion.displayText;
+  if (title === promotion.title && displayText === promotion.displayText) {
+    return promotion;
+  }
+  return { ...promotion, title, displayText };
+}
+
 export function normalizePrototypeState(
   state: PrototypeState,
 ): PrototypeState {
@@ -500,7 +535,7 @@ export function normalizePrototypeState(
       ? state.menuItems
       : defaults.menuItems,
     promotions: Array.isArray(state.promotions)
-      ? state.promotions
+      ? state.promotions.map(normalizeSeedPromotion)
       : defaults.promotions,
     customer: normalizeCustomer(state.customer, defaults.customer),
     drivers: normalizeDrivers(state.drivers, defaults.drivers),

@@ -10,19 +10,13 @@ import {
   formatMoney,
   getPickupPaymentSummary,
   getRestaurantActiveOrderCount,
+  getRestaurantLocalNow,
   getRestaurantTotalDebtCents,
   getScheduleLabel,
-  getWeekdayId,
   getZoneName,
   isRestaurantOpenNow,
   publicationStatusLabels,
 } from "@/prototype/selectors";
-
-function nowHHMM(date: Date): string {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(
-    date.getMinutes(),
-  ).padStart(2, "0")}`;
-}
 
 function RestaurantOperationalCard({
   restaurant,
@@ -31,17 +25,24 @@ function RestaurantOperationalCard({
 }) {
   const { state, isHydrated, setRestaurantAccepting } = usePrototype();
   const isRestaurantCourier = restaurant.deliveryProvider === "RESTAURANT";
-  const settings = restaurant.restaurantDeliverySettings;
+  // §8: deliveryProvider — источник истины. Собственные настройки доставки
+  // действуют только у ресторана со своим курьером.
+  const settings = isRestaurantCourier
+    ? restaurant.restaurantDeliverySettings
+    : null;
   const activeOrders = getRestaurantActiveOrderCount(state, restaurant.id);
   const debt = getRestaurantTotalDebtCents(state, restaurant.id);
   const pickupSummary = getPickupPaymentSummary(restaurant);
 
+  // §5: «открыт сейчас» и «сегодня» — в часовом поясе ресторана (после гидратации).
   const now = isHydrated ? new Date() : null;
-  const weekday = now ? getWeekdayId(now) : null;
-  const todayHours = weekday ? getScheduleLabel(restaurant, weekday) : "—";
-  const openNow = weekday
-    ? isRestaurantOpenNow(restaurant, weekday, nowHHMM(now as Date))
+  const localWeekday = now
+    ? getRestaurantLocalNow(restaurant, now).weekdayId
     : null;
+  const todayHours = localWeekday
+    ? getScheduleLabel(restaurant, localWeekday)
+    : "—";
+  const openNow = now ? isRestaurantOpenNow(restaurant, now) : null;
 
   const servedZones = settings
     ? settings.servedZoneIds
@@ -92,6 +93,10 @@ function RestaurantOperationalCard({
             <div className={flowStyles.definitionRow}>
               <dt>Часы работы сегодня</dt>
               <dd>{isHydrated ? todayHours : "—"}</dd>
+            </div>
+            <div className={flowStyles.definitionRow}>
+              <dt>Часовой пояс</dt>
+              <dd>{restaurant.timeZone}</dd>
             </div>
             <div className={flowStyles.definitionRow}>
               <dt>Публичный телефон</dt>

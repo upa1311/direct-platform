@@ -28,6 +28,7 @@ import {
 import {
   computeDirectFinancials,
   computeFreeUnitCount,
+  computePaidUnitsBeforeNextFree,
   computeRestaurantDeliveryFinancials,
   computeRestaurantDeliveryQuote,
   computeVariantUnitPriceCents,
@@ -485,6 +486,7 @@ function emptyPricing(
     customerTotalCents: null,
     appliedPromotion: null,
     promotionUnitsToNextFree: null,
+    promotionPaidUnitsBeforeNextFree: null,
     promotionFreeUnitCount: 0,
     promotionEligibleUnits: 0,
     restaurantDeliveryStatus: null,
@@ -525,6 +527,7 @@ export function calculateCartPricing(state: PrototypeState): CartPricing {
   let appliedPromotion: AppliedPromotionSnapshot | null = null;
   let promotionFreeUnitCount = 0;
   let promotionUnitsToNextFree: number | null = null;
+  let promotionPaidUnitsBeforeNextFree: number | null = null;
   let promotionEligibleUnits = 0;
   if (promotion) {
     const eligibleUnits = views.reduce(
@@ -540,6 +543,10 @@ export function calculateCartPricing(state: PrototypeState): CartPricing {
     const remainder = eligibleUnits % groupSize;
     promotionUnitsToNextFree =
       remainder === 0 && eligibleUnits > 0 ? groupSize : groupSize - remainder;
+    promotionPaidUnitsBeforeNextFree = computePaidUnitsBeforeNextFree(
+      eligibleUnits,
+      promotion,
+    );
     if (promotionFreeUnitCount > 0) {
       appliedPromotion = {
         promotionId: promotion.id,
@@ -562,6 +569,7 @@ export function calculateCartPricing(state: PrototypeState): CartPricing {
   base.appliedPromotion = appliedPromotion;
   base.promotionFreeUnitCount = promotionFreeUnitCount;
   base.promotionUnitsToNextFree = promotionUnitsToNextFree;
+  base.promotionPaidUnitsBeforeNextFree = promotionPaidUnitsBeforeNextFree;
   base.promotionEligibleUnits = promotionEligibleUnits;
 
   if (provider === "RESTAURANT") {
@@ -891,6 +899,19 @@ export function getRestaurantActiveOrderCount(
   ).length;
 }
 
+/**
+ * Действующие настройки собственной доставки (§8). deliveryProvider — источник
+ * истины: у ресторана с водителями Direct собственные зоны/тарифы/минимум НЕ
+ * действуют (возвращается null), даже если они сохранены для возможного возврата.
+ */
+export function getEffectiveDeliverySettings(
+  restaurant: Restaurant,
+): Restaurant["restaurantDeliverySettings"] {
+  return restaurant.deliveryProvider === "RESTAURANT"
+    ? restaurant.restaurantDeliverySettings
+    : null;
+}
+
 /** Совокупная задолженность ресторана перед Direct (самовывоз + доставка). */
 export function getRestaurantTotalDebtCents(
   state: PrototypeState,
@@ -912,9 +933,67 @@ const WEEKDAY_BY_JS_DAY: WeekdayId[] = [
   "saturday",
 ];
 
-/** Идентификатор дня недели по объекту Date (0=вс..6=сб). */
+const WEEKDAY_BY_SHORT: Record<string, WeekdayId> = {
+  Sun: "sunday",
+  Mon: "monday",
+  Tue: "tuesday",
+  Wed: "wednesday",
+  Thu: "thursday",
+  Fri: "friday",
+  Sat: "saturday",
+};
+
+/** Идентификатор дня недели по объекту Date (0=вс..6=сб), локальное время. */
 export function getWeekdayId(date: Date): WeekdayId {
   return WEEKDAY_BY_JS_DAY[date.getDay()];
+}
+
+function previousWeekday(weekdayId: WeekdayId): WeekdayId {
+  const index = WEEKDAY_BY_JS_DAY.indexOf(weekdayId);
+  return WEEKDAY_BY_JS_DAY[(index + 6) % 7];
+}
+
+function timeToMinutes(hhmm: string): number | null {
+  if (!hhmm) return null;
+  const [h, m] = hhmm.split(":").map((x) => Number(x));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h * 60 + m;
+}
+
+/**
+ * Локальные для ресторана день недели и минуты суток, вычисленные через
+ * Intl.DateTimeFormat в часовом поясе ресторана (§5) — не по времени компьютера.
+ */
+export function getRestaurantLocalNow(
+  restaurant: Restaurant,
+  date: Date,
+): { weekdayId: WeekdayId; minutes: number } {
+  const timeZone = restaurant.timeZone || "Europe/Chisinau";
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+  } catch {
+    parts = new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+  }
+  const weekdayShort = parts.find((p) => p.type === "weekday")?.value ?? "Mon";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return {
+    weekdayId: WEEKDAY_BY_SHORT[weekdayShort] ?? "monday",
+    minutes: (Number.isFinite(hour) ? hour : 0) * 60 +
+      (Number.isFinite(minute) ? minute : 0),
+  };
 }
 
 /** Строка часов работы на указанный день, либо «Закрыто». */
@@ -927,17 +1006,39 @@ export function getScheduleLabel(
   return `${day.openTime || "—"}–${day.closeTime || "—"}`;
 }
 
-/** Открыт ли ресторан по графику в указанный день/время («HH:MM»). */
+/**
+ * Открыт ли ресторан по графику прямо сейчас (§5). Расчёт в часовом поясе
+ * ресторана через Intl. Поддерживает ночные интервалы (например 18:00–02:00):
+ * после полуночи ресторан считается открытым по графику предыдущего дня.
+ */
 export function isRestaurantOpenNow(
   restaurant: Restaurant,
-  weekdayId: WeekdayId,
-  currentHHMM: string,
+  date: Date,
 ): boolean {
-  const day = restaurant.weeklySchedule[weekdayId];
-  if (!day || !day.enabled || !day.openTime || !day.closeTime) {
-    return false;
+  const { weekdayId, minutes } = getRestaurantLocalNow(restaurant, date);
+
+  const today = restaurant.weeklySchedule[weekdayId];
+  if (today?.enabled) {
+    const open = timeToMinutes(today.openTime);
+    const close = timeToMinutes(today.closeTime);
+    if (open !== null && close !== null) {
+      if (close > open && minutes >= open && minutes <= close) return true;
+      // Ночной интервал (пересекает полночь): открыт с open до конца суток.
+      if (close < open && minutes >= open) return true;
+    }
   }
-  return currentHHMM >= day.openTime && currentHHMM <= day.closeTime;
+
+  // Ночной интервал предыдущего дня, продолжающийся после полуночи.
+  const prev = restaurant.weeklySchedule[previousWeekday(weekdayId)];
+  if (prev?.enabled) {
+    const open = timeToMinutes(prev.openTime);
+    const close = timeToMinutes(prev.closeTime);
+    if (open !== null && close !== null && close < open && minutes <= close) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export { TEST_RESTAURANT_ID };

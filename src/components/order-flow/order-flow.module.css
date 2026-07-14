@@ -1270,6 +1270,19 @@
   font-size: 13px;
 }
 
+/* Нейтральная подсказка про доплату (§5): без фона, рамки и капсулы. */
+.smallOrderWarningText {
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+  color: #202522;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .submitArea {
   display: grid;
   gap: 12px;

@@ -44,7 +44,11 @@ type RestaurantExtras = Pick<
   | "emergencyPhone"
   | "internalAdminNote"
   | "weeklySchedule"
+  | "timeZone"
 >;
+
+/** Часовой пояс по умолчанию (Бендеры / Приднестровье). */
+export const DEFAULT_RESTAURANT_TIME_ZONE = "Europe/Chisinau";
 
 export function createRestaurantExtras(
   overrides: Partial<RestaurantExtras> = {},
@@ -63,6 +67,7 @@ export function createRestaurantExtras(
     weeklySchedule: overrides.weeklySchedule
       ? cloneWeeklySchedule(overrides.weeklySchedule)
       : createDefaultWeeklySchedule(),
+    timeZone: overrides.timeZone || DEFAULT_RESTAURANT_TIME_ZONE,
   };
 }
 
@@ -389,7 +394,7 @@ const defaultPromotions: Promotion[] = [
   {
     id: "promo-restaurant-2-pizza",
     restaurantId: "restaurant-2",
-    title: "Закажи 3 пиццы и получи четвёртую бесплатно",
+    title: "Каждая 4-я пицца — бесплатно",
     enabled: true,
     type: "BUY_N_GET_M_CHEAPEST_FREE",
     buyQuantity: 3,
@@ -400,7 +405,7 @@ const defaultPromotions: Promotion[] = [
       "restaurant-2-item-2",
       "restaurant-2-item-3",
     ],
-    displayText: "Закажи 3 пиццы и получи четвёртую бесплатно",
+    displayText: "Каждая 4-я пицца — бесплатно",
     createdAt: INITIAL_TIMESTAMP,
     updatedAt: INITIAL_TIMESTAMP,
   },
