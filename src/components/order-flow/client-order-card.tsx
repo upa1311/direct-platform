@@ -14,6 +14,7 @@ import {
   orderStatusLabels,
 } from "@/prototype/selectors";
 import { ClientOrderActions } from "./client-order-actions";
+import { getBriefOrderComposition } from "./order-composition";
 import styles from "./order-flow.module.css";
 
 interface ClientOrderCardProps {
@@ -21,21 +22,24 @@ interface ClientOrderCardProps {
   linkLabel?: string;
 }
 
-/** Краткий состав заказа: «Пицца × 2, Лимонад × 1». Без технических ID. */
-function briefComposition(order: Order): string {
-  return order.items
-    .map((item) => `${item.name} × ${item.quantity}`)
-    .join(", ");
+/** Русское склонение слова «позиция» для «Ещё N …». */
+function pluralPositions(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return "позиция";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "позиции";
+  return "позиций";
 }
 
 export function ClientOrderCard({
   order,
-  linkLabel = "Подробнее",
+  linkLabel = "Открыть заказ",
 }: ClientOrderCardProps) {
   const { state } = usePrototype();
   const autoCancelMessage = getClientAutoCancelMessage(order);
+  const composition = getBriefOrderComposition(order.items);
   return (
-    <article className={styles.orderCard}>
+    <article className={`${styles.orderCard} ${styles.clientOrderCard}`}>
       <div className={styles.orderHeader}>
         <div>
           <h2 className={styles.orderNumber}>{order.publicNumber}</h2>
@@ -56,7 +60,15 @@ export function ClientOrderCard({
         </div>
         <div className={styles.summaryRow}>
           <dt>Состав</dt>
-          <dd>{briefComposition(order)}</dd>
+          <dd>
+            {composition.primaryText}
+            {composition.remainingCount > 0 ? (
+              <span className={styles.compositionMore}>
+                Ещё {composition.remainingCount}{" "}
+                {pluralPositions(composition.remainingCount)}
+              </span>
+            ) : null}
+          </dd>
         </div>
         <div className={styles.summaryRow}>
           <dt>Итог</dt>
@@ -79,7 +91,7 @@ export function ClientOrderCard({
           {linkLabel}
         </Link>
       </div>
-      <ClientOrderActions order={order} />
+      <ClientOrderActions order={order} compact />
     </article>
   );
 }

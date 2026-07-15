@@ -24,7 +24,7 @@ export default function ClientOrdersPage() {
       {!isHydrated ? (
         <div className={flowStyles.emptyState}>Загружаем заказы…</div>
       ) : (
-        <div className={flowStyles.panelStack}>
+        <div className={`${flowStyles.panelStack} ${flowStyles.clientOrdersStack}`}>
           <section>
             <h2 className={flowStyles.sectionTitle}>Текущие заказы</h2>
             {activeOrders.length === 0 ? (

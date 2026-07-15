@@ -1659,6 +1659,88 @@ export function isRestaurantOpenNow(
   return false;
 }
 
+export interface ClientScheduleSummary {
+  /** Текущий день недели в часовом поясе ресторана. */
+  currentWeekdayId: WeekdayId;
+  /** Часы работы сегодняшнего дня («09:00–22:00» либо «Закрыто»). */
+  todayScheduleLabel: string;
+  /** Открыт ли ресторан прямо сейчас (совпадает с isRestaurantOpenNow). */
+  isOpen: boolean;
+  /** День, чей интервал сейчас активен (может быть вчера при ночном графике). */
+  activeScheduleWeekdayId: WeekdayId;
+  /** Часы активного интервала. */
+  activeScheduleLabel: string;
+  /** Готовая непротиворечивая строка статуса для клиента. */
+  statusText: string;
+}
+
+/**
+ * §1: непротиворечивая клиентская сводка графика. Открытость и активный интервал
+ * считаются из ОДНОГО прохода по structured weeklySchedule (не из текста
+ * getScheduleLabel), поэтому «Сегодня: Закрыто · Сейчас открыто» невозможно.
+ * После полуночи, когда продолжается ночной интервал предыдущего дня, статус —
+ * «Сейчас открыто до HH:MM · Сегодня: Закрыто». Всё в часовом поясе ресторана.
+ */
+export function getClientRestaurantScheduleSummary(
+  restaurant: Restaurant,
+  now: Date,
+): ClientScheduleSummary {
+  const { weekdayId, minutes } = getRestaurantLocalNow(restaurant, now);
+  const todayScheduleLabel = getScheduleLabel(restaurant, weekdayId);
+
+  let isOpen = false;
+  let carriedOver = false;
+  let activeWeekday: WeekdayId = weekdayId;
+
+  const today = restaurant.weeklySchedule[weekdayId];
+  if (today?.enabled) {
+    const open = timeToMinutes(today.openTime);
+    const close = timeToMinutes(today.closeTime);
+    if (open !== null && close !== null) {
+      // Обычный дневной интервал либо ночной до полуночи (close < open).
+      if (close > open && minutes >= open && minutes <= close) {
+        isOpen = true;
+      } else if (close < open && minutes >= open) {
+        isOpen = true;
+      }
+    }
+  }
+  if (!isOpen) {
+    const prevId = previousWeekday(weekdayId);
+    const prev = restaurant.weeklySchedule[prevId];
+    if (prev?.enabled) {
+      const open = timeToMinutes(prev.openTime);
+      const close = timeToMinutes(prev.closeTime);
+      if (open !== null && close !== null && close < open && minutes <= close) {
+        isOpen = true;
+        carriedOver = true;
+        activeWeekday = prevId;
+      }
+    }
+  }
+
+  const activeScheduleLabel = getScheduleLabel(restaurant, activeWeekday);
+
+  let statusText: string;
+  if (!isOpen) {
+    statusText = `Сегодня: ${todayScheduleLabel} · Сейчас закрыто`;
+  } else if (carriedOver) {
+    const closeStr = restaurant.weeklySchedule[activeWeekday].closeTime || "—";
+    statusText = `Сейчас открыто до ${closeStr} · Сегодня: ${todayScheduleLabel}`;
+  } else {
+    statusText = `Сегодня: ${todayScheduleLabel} · Сейчас открыто`;
+  }
+
+  return {
+    currentWeekdayId: weekdayId,
+    todayScheduleLabel,
+    isOpen,
+    activeScheduleWeekdayId: activeWeekday,
+    activeScheduleLabel,
+    statusText,
+  };
+}
+
 /** Смещение часового пояса (мс) для момента utcMs. */
 function tzOffsetMs(utcMs: number, timeZone: string): number {
   try {

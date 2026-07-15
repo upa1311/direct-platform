@@ -358,15 +358,29 @@ function CompletedActions({ order }: { order: Order }) {
  * его статус; у завершённых — сообщение об одобрении (если было) + «Заказать
  * снова». Статус запроса показывается ТОЛЬКО здесь (§4), без дублей на карточке.
  */
-export function ClientOrderActions({ order }: { order: Order }) {
+export function ClientOrderActions({
+  order,
+  compact = false,
+}: {
+  order: Order;
+  /**
+   * §3: компактный режим для списка «Мои заказы». До приготовления — компактная
+   * «Отменить»; после начала приготовления — ничего (полный запрос на отмену и
+   * длинное предупреждение остаются на детальной странице, без дублирования);
+   * у завершённого — только «Заказать снова».
+   */
+  compact?: boolean;
+}) {
   if (canClientCancelDirectly(order)) {
     return <DirectCancel order={order} />;
   }
   if (canClientRequestCancellation(order)) {
-    return <RequestCancellation order={order} />;
+    return compact ? null : <RequestCancellation order={order} />;
   }
   if (isCompleted(order)) {
-    return <CompletedActions order={order} />;
+    return compact ? <RepeatOrderButton order={order} /> : (
+      <CompletedActions order={order} />
+    );
   }
   return null;
 }

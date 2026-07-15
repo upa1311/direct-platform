@@ -186,6 +186,22 @@
   max-width: 940px;
 }
 
+/* §4: ширина списка «Мои заказы» — только клиентский класс, без правки
+   глобального .panelStack. */
+.clientOrdersStack {
+  width: 100%;
+  max-width: 940px;
+}
+
+/* §2: вторичная строка «Ещё N позиций» под краткой сводкой состава. */
+.compositionMore {
+  display: block;
+  margin-top: 2px;
+  color: #6a736c;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
 .restaurantCard {
   min-height: 180px;
   overflow: hidden;
@@ -1830,28 +1846,34 @@
     text-align: left;
   }
 
-  /* Компактная двухколоночная сводка (подпись | значение) вместо длинного
-     одноколоночного столбца — страница не растягивается по вертикали. */
-  .summaryRow {
+  /* §5: компактная двухколоночная сводка применяется ТОЛЬКО к клиентским
+     заказам (детальная страница и карточки списка). Корзина, админка и
+     settlements используют общий .summaryRow и не затрагиваются. */
+  .orderDetailStack .summaryRow,
+  .clientOrderCard .summaryRow {
     display: grid;
     grid-template-columns: minmax(105px, 40%) minmax(0, 1fr);
     align-items: start;
     gap: 6px 12px;
   }
 
-  .summaryRow dd {
+  .orderDetailStack .summaryRow dd,
+  .clientOrderCard .summaryRow dd {
     text-align: left;
   }
 
-  /* Мягче внутренний отступ карточки заказа на мобильном (§ padding). */
-  .orderCard {
+  /* Мягче внутренний отступ только клиентских карточек заказа (§ padding). */
+  .orderDetailStack .orderCard,
+  .clientOrderCard {
     padding: 17px;
   }
 }
 
-/* Только на очень узких экранах сводка складывается в одну колонку. */
+/* §5: только на очень узких экранах клиентская сводка складывается в одну
+   колонку (по-прежнему не трогает корзину/админку). */
 @media (max-width: 340px) {
-  .summaryRow {
+  .orderDetailStack .summaryRow,
+  .clientOrderCard .summaryRow {
     grid-template-columns: 1fr;
     gap: 2px;
   }

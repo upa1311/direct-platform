@@ -5,9 +5,8 @@ import { Clock } from "lucide-react";
 import type { Restaurant } from "@/prototype/models";
 import { WEEKDAY_LABELS, WEEKDAY_ORDER } from "@/prototype/models";
 import {
-  getRestaurantLocalNow,
+  getClientRestaurantScheduleSummary,
   getScheduleLabel,
-  isRestaurantOpenNow,
 } from "@/prototype/selectors";
 import styles from "./order-flow.module.css";
 
@@ -30,29 +29,29 @@ export function ClientRestaurantSchedule({
   showFullSchedule?: boolean;
 }) {
   const ready = nowMs > 0;
-  const now = ready ? new Date(nowMs) : null;
-  const todayId = now
-    ? getRestaurantLocalNow(restaurant, now).weekdayId
+  const summary = ready
+    ? getClientRestaurantScheduleSummary(restaurant, new Date(nowMs))
     : null;
-  const todayLabel = todayId ? getScheduleLabel(restaurant, todayId) : "—";
-  const open = now ? isRestaurantOpenNow(restaurant, now) : false;
+  // Активный день подсвечивается в полном графике: при ночном интервале это
+  // может быть вчерашний день (тот, чей интервал сейчас продолжается).
+  const activeDayId = summary?.activeScheduleWeekdayId ?? null;
 
   return (
     <div className={styles.scheduleInfo}>
       <p className={styles.scheduleToday}>
         <Clock aria-hidden="true" className={styles.scheduleIcon} size={15} />
         <span>
-          Сегодня: {todayLabel}
-          {ready ? (
-            <>
-              {" · "}
-              <span
-                className={open ? styles.scheduleOpen : styles.scheduleClosed}
-              >
-                {open ? "Сейчас открыто" : "Сейчас закрыто"}
-              </span>
-            </>
-          ) : null}
+          {summary ? (
+            <span
+              className={
+                summary.isOpen ? styles.scheduleOpen : styles.scheduleClosed
+              }
+            >
+              {summary.statusText}
+            </span>
+          ) : (
+            "Сегодня: —"
+          )}
         </span>
       </p>
       {showFullSchedule ? (
@@ -63,7 +62,7 @@ export function ClientRestaurantSchedule({
               <div
                 key={day}
                 className={`${styles.scheduleRow} ${
-                  day === todayId ? styles.scheduleRowToday : ""
+                  day === activeDayId ? styles.scheduleRowToday : ""
                 }`}
               >
                 <dt>{WEEKDAY_LABELS[day]}</dt>
