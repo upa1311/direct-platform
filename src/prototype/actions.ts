@@ -539,6 +539,7 @@ export function createOrderFromCart(
       ? [...restaurant.pickupPaymentMethods]
       : [],
     pickupPaidWith: null,
+    pickupNoShowAt: null,
     assignedDriverId: null,
     driverAssignedAt: null,
     etaAdjustments: [],
@@ -1917,7 +1918,9 @@ export interface PickupNoShowResult {
  * увеличивается счётчик невыкупов клиента. Разрешён не раньше 30 минут после
  * РЕАЛЬНОГО перехода в READY_FOR_PICKUP (по STATUS-событию, не по updatedAt).
  * Оплата остаётся DUE_AT_PICKUP, paidAt/pickupPaidWith — null, код не гасится,
- * начислений нет. Идемпотентен: повторный вызов не мутирует состояние повторно.
+ * начислений нет. Ставит структурированный pickupNoShowAt = nowIso.
+ * Fail-closed (§5): любое расхождение оплаченного/выданного состояния — отказ
+ * без мутации (тот же ref). Идемпотентен: повторный вызов ничего не меняет.
  */
 export function markPickupNoShow(
   state: PrototypeState,
@@ -1944,6 +1947,17 @@ export function markPickupNoShow(
   if (order.status !== "READY_FOR_PICKUP") {
     return fail("Невыкуп можно отметить только для готового к выдаче заказа.");
   }
+  // §5: fail-closed — заказ не должен быть уже оплачен/выдан ни в каком виде.
+  if (
+    order.paymentMethod !== "PAY_AT_RESTAURANT" ||
+    order.paymentStatus !== "DUE_AT_PICKUP" ||
+    order.pickupCodeUsed !== false ||
+    order.paidAt !== null ||
+    order.pickupPaidWith !== null ||
+    state.settlements.some((entry) => entry.orderId === orderId)
+  ) {
+    return fail("Заказ уже оплачен или выдан — невыкуп невозможен.");
+  }
   const normalizedReason = reason.trim();
   if (!normalizedReason) {
     return fail("Укажите причину невыкупа.");
@@ -1959,9 +1973,16 @@ export function markPickupNoShow(
   const now = nowIso;
   const noShowPrefix =
     actor === "ADMIN" ? "Администратор Direct отметил невыкуп. " : "";
+  // §5: явно сохраняем безопасное состояние — оплата не фиксируется, код не
+  // гасится, начислений нет, финансы не трогаем; только статус + признак.
   const updatedOrder: Order = {
     ...order,
     status: "CANCELED",
+    paymentStatus: order.paymentStatus,
+    paidAt: null,
+    pickupPaidWith: null,
+    pickupCodeUsed: false,
+    pickupNoShowAt: now,
     cancellationReason: normalizedReason,
     updatedAt: now,
     history: [
@@ -3059,9 +3080,11 @@ export function issuePickupWithoutCode(
   orderId: string,
   reason: string,
   paidWith: PickupPaymentMethod,
-  actor: OrderActionActor = "ADMIN",
   nowIso: string = new Date().toISOString(),
 ): ActionResult<AdminActionResult> {
+  // §6: аварийная выдача — исключительно администраторское действие. Actor не
+  // принимается извне: домен фиксирует его как ADMIN, а не доверяет вызывающему.
+  const actor: OrderActionActor = "ADMIN";
   const fail = (error: string): ActionResult<AdminActionResult> => ({
     state,
     result: { ok: false, error },

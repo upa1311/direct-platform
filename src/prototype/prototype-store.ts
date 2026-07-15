@@ -256,6 +256,13 @@ function normalizeOrder(
     raw.pickupPaidWith === "CASH" || raw.pickupPaidWith === "CARD"
       ? raw.pickupPaidWith
       : null;
+  // §3: структурированный признак невыкупа сохраняется только при корректном ISO;
+  // иначе (legacy/битые данные) — null. Не выводим из истории или статуса.
+  const pickupNoShowAt =
+    typeof raw.pickupNoShowAt === "string" &&
+    !Number.isNaN(Date.parse(raw.pickupNoShowAt))
+      ? raw.pickupNoShowAt
+      : null;
 
   return {
     id: str(raw.id, ""),
@@ -316,6 +323,7 @@ function normalizeOrder(
     pickupCodeUsed: raw.pickupCodeUsed === true,
     pickupPaymentMethodsSnapshot,
     pickupPaidWith,
+    pickupNoShowAt,
     // Назначение водителя: у старых заказов отсутствует → null (без пересчётов).
     assignedDriverId:
       typeof raw.assignedDriverId === "string" ? raw.assignedDriverId : null,

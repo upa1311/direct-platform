@@ -835,7 +835,6 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
           orderId,
           reason,
           paidWith,
-          "ADMIN",
           new Date().toISOString(),
         ),
       ),

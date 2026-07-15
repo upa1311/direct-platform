@@ -23,18 +23,13 @@ import {
   pickupPaymentMethodLabels,
 } from "@/prototype/selectors";
 
-/** Невыкуп: PICKUP-заказ закрыт из статуса «Готов к выдаче» (по истории). */
+/**
+ * Невыкуп определяется ТОЛЬКО по структурированному признаку pickupNoShowAt,
+ * который ставит исключительно markPickupNoShow. Обычная adminCancelOrder из
+ * READY_FOR_PICKUP не является невыкупом и его не устанавливает.
+ */
 function isPickupNoShow(order: Order): boolean {
-  return (
-    order.deliveryMode === "PICKUP" &&
-    order.status === "CANCELED" &&
-    order.history.some(
-      (e) =>
-        e.type === "STATUS" &&
-        e.fromStatus === "READY_FOR_PICKUP" &&
-        e.toStatus === "CANCELED",
-    )
-  );
+  return order.pickupNoShowAt !== null;
 }
 
 /**
@@ -248,7 +243,9 @@ export default function ClientOrderPage() {
               {getClientAutoCancelMessage(order)}
             </div>
           ) : null}
-          {order.cancellationReason && !isPickupNoShow(order) ? (
+          {/* Для самовывоза внутренняя причина отмены/невыкупа клиенту не
+              раскрывается (§4): статусная сводка идёт нейтрально в истории. */}
+          {order.cancellationReason && order.deliveryMode !== "PICKUP" ? (
             <div className={flowStyles.warningNotice}>
               Причина отмены: {order.cancellationReason}
             </div>
@@ -258,7 +255,12 @@ export default function ClientOrderPage() {
 
         <section className={flowStyles.card}>
           <h2>История статусов</h2>
-          <OrderHistory events={order.history} neutralizeEtaReason />
+          <OrderHistory
+            events={order.history}
+            order={order}
+            clientSafe
+            neutralizeEtaReason
+          />
         </section>
       </div>
     </>

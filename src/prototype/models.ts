@@ -440,6 +440,13 @@ export interface Order {
   pickupPaymentMethodsSnapshot: PickupPaymentMethod[];
   /** Чем клиент фактически заплатил при выдаче (§4). null до выдачи/невыкупа. */
   pickupPaidWith: PickupPaymentMethod | null;
+  /**
+   * Структурированный признак невыкупа самовывоза: ISO-момент, когда заказ был
+   * закрыт как невыкупленный через markPickupNoShow. null для всех прочих отмен
+   * (в т.ч. обычной adminCancelOrder из READY_FOR_PICKUP). Единственный источник
+   * истины для «это невыкуп», не история и не статусный переход.
+   */
+  pickupNoShowAt: string | null;
   /** Назначенный водитель Direct (только PLATFORM_DRIVER). */
   assignedDriverId: string | null;
   /** Время назначения водителя. */

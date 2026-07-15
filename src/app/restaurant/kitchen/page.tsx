@@ -37,8 +37,10 @@ import {
   getOrderStatusSince,
   getKitchenAcceptanceState,
   getPendingCancellationRequestsForRestaurant,
+  getPickupNoShowEligibleAtIso,
   getRestaurant,
   isKitchenBeepDue,
+  isPickupNoShowEligibleAt,
   paymentStatusLabels,
   pickupPaymentMethodLabels,
 } from "@/prototype/selectors";
@@ -397,14 +399,158 @@ function PreparingCard({
   );
 }
 
+/** §1: типовые причины невыкупа для кухни (последняя — свободный ввод). */
+const PICKUP_NO_SHOW_REASONS = [
+  "Не удалось связаться с клиентом",
+  "Клиент отказался от заказа",
+  "Клиент сообщил, что не придёт",
+  "Клиент не пришёл в течение времени ожидания",
+  "Другая причина",
+] as const;
+const PICKUP_NO_SHOW_OTHER = "Другая причина";
+
+/** Минут до `targetIso` (0 — если наступило); null — нет данных/часов. */
+function minutesUntil(targetIso: string | null, nowMs: number): number | null {
+  if (!targetIso || nowMs === 0) return null;
+  const diff = Date.parse(targetIso) - nowMs;
+  return diff <= 0 ? 0 : Math.ceil(diff / 60_000);
+}
+
+/**
+ * §1: инлайновая KDS-панель невыкупа. Открывается только с eligibleAt (30 минут
+ * после реальной готовности). Причина из списка либо свободный текст (≤300).
+ * Никаких prompt/alert/confirm/модалок. Ошибка домена не закрывает панель и не
+ * стирает причину; ложный success не показывается.
+ */
+function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) {
+  const { markPickupNoShow } = usePrototype();
+  const eligibleAtIso = getPickupNoShowEligibleAtIso(order);
+  const nowIso = nowMs > 0 ? new Date(nowMs).toISOString() : null;
+  const eligible = nowIso ? isPickupNoShowEligibleAt(order, nowIso) : false;
+  const minutesLeft = minutesUntil(eligibleAtIso, nowMs);
+
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [customReason, setCustomReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const isOther = reason === PICKUP_NO_SHOW_OTHER;
+  const effectiveReason = isOther ? customReason : reason;
+  const canConfirm = effectiveReason.trim().length > 0;
+
+  const doConfirm = () => {
+    if (!canConfirm) {
+      setError("Укажите причину невыкупа.");
+      return;
+    }
+    const res = markPickupNoShow(order.id, effectiveReason, "RESTAURANT");
+    if (!res.ok) {
+      // Панель остаётся открытой, причина сохраняется, ошибка рядом.
+      setError(res.error ?? "Не удалось закрыть как невыкуп.");
+      return;
+    }
+    setError(null);
+  };
+
+  if (!open) {
+    return (
+      <button
+        className={`${kds.btn} ${kds.btnRedOutline}`}
+        type="button"
+        disabled={!eligible}
+        onClick={() => {
+          setOpen(true);
+          setError(null);
+        }}
+      >
+        {eligible
+          ? "Клиент не пришёл"
+          : minutesLeft !== null
+            ? `Невыкуп можно отметить через ${minutesLeft} мин`
+            : "Невыкуп пока недоступен"}
+      </button>
+    );
+  }
+
+  return (
+    <div className={kds.dialog} role="group" aria-label="Невыкуп заказа">
+      <h4 className={kds.dialogTitle}>Причина невыкупа</h4>
+      <fieldset className={kds.reasonList}>
+        {PICKUP_NO_SHOW_REASONS.map((r) => (
+          <label className={kds.reasonOption} key={r}>
+            <input
+              type="radio"
+              name={`no-show-${order.id}`}
+              checked={reason === r}
+              onChange={() => {
+                setReason(r);
+                setError(null);
+              }}
+            />
+            <span>{r}</span>
+          </label>
+        ))}
+      </fieldset>
+      {isOther ? (
+        <label className={kds.field}>
+          <span>Ваша причина</span>
+          <textarea
+            maxLength={300}
+            value={customReason}
+            onChange={(event) => {
+              setCustomReason(event.target.value);
+              setError(null);
+            }}
+            placeholder="Опишите причину"
+          />
+        </label>
+      ) : null}
+      <p className={kds.pickupInstruction}>
+        Заказ будет отменён без фиксации оплаты и без начисления комиссии Direct.
+      </p>
+      {error ? (
+        <p className={kds.pickupError} role="alert">
+          {error}
+        </p>
+      ) : null}
+      <div className={kds.btnRowEnd}>
+        <button
+          className={`${kds.btn} ${kds.btnOutline}`}
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            setError(null);
+          }}
+        >
+          Отмена
+        </button>
+        <button
+          className={`${kds.btn} ${kds.btnRedOutline}`}
+          type="button"
+          disabled={!canConfirm}
+          onClick={doConfirm}
+        >
+          Закрыть как невыкуп
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * §8: инлайновая выдача самовывоза на кухне. Способ оплаты (радио, авто-выбор
  * при одном), ввод названного клиентом четырёхзначного кода (только цифры),
  * подтверждение одним доменным действием. Код клиента здесь НЕ отображается.
  * Ошибка не закрывает панель и не стирает код; успех убирает карточку (статус
- * заказа меняется на PICKED_UP).
+ * заказа меняется на PICKED_UP). Рядом — инлайновый невыкуп (§1).
  */
-function KitchenPickupHandoff({ order }: { order: Order }) {
+function KitchenPickupHandoff({
+  order,
+  nowMs,
+}: {
+  order: Order;
+  nowMs: number;
+}) {
   const { completePickup } = usePrototype();
   const methods = order.pickupPaymentMethodsSnapshot;
   const single = methods.length === 1 ? methods[0] : null;
@@ -489,6 +635,7 @@ function KitchenPickupHandoff({ order }: { order: Order }) {
       <p className={kds.pickupAdminHint}>
         Нет кода клиента? Обратитесь к администратору Direct.
       </p>
+      <KitchenPickupNoShow order={order} nowMs={nowMs} />
     </div>
   );
 }
@@ -531,7 +678,7 @@ function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
       <p className={kds.subtle}>
         Готов {formatElapsed(getOrderReadySince(order), nowMs)} назад
       </p>
-      {isPickup ? <KitchenPickupHandoff order={order} /> : null}
+      {isPickup ? <KitchenPickupHandoff order={order} nowMs={nowMs} /> : null}
     </article>
   );
 }

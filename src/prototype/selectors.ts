@@ -120,6 +120,56 @@ export const orderActorLabels: Record<OrderHistoryEvent["actor"], string> = {
   ADMIN: "Администратор Direct",
 };
 
+/**
+ * §4: клиентски-безопасное представление события истории. Опирается ТОЛЬКО на
+ * структурные факты (тип события, переход статуса, order.pickupNoShowAt), а не на
+ * парсинг текста message. Возвращает нейтральный текст и hideActor. ETA-события
+ * нейтрализуются всегда в клиентском режиме; PICKUP-специфичные — только при
+ * clientSafe. Прочие безопасные события отдаются как есть.
+ */
+export function clientHistoryEvent(
+  event: OrderHistoryEvent,
+  order: Order | undefined,
+  clientSafe: boolean,
+): { message: string; hideActor: boolean } {
+  if (event.type === "ETA") {
+    return {
+      message: "Ресторан обновил ожидаемое время готовности заказа.",
+      hideActor: true,
+    };
+  }
+  if (clientSafe && order?.deliveryMode === "PICKUP") {
+    if (
+      event.type === "PAYMENT" &&
+      event.fromStatus === "READY_FOR_PICKUP" &&
+      event.toStatus === "READY_FOR_PICKUP"
+    ) {
+      return { message: "Оплата получена в ресторане.", hideActor: true };
+    }
+    if (
+      event.type === "STATUS" &&
+      event.fromStatus === "READY_FOR_PICKUP" &&
+      event.toStatus === "PICKED_UP"
+    ) {
+      return { message: "Заказ получен.", hideActor: true };
+    }
+    if (
+      event.type === "STATUS" &&
+      event.fromStatus === "READY_FOR_PICKUP" &&
+      event.toStatus === "CANCELED"
+    ) {
+      return {
+        message:
+          order?.pickupNoShowAt != null
+            ? "Заказ был закрыт как невыкупленный."
+            : "Заказ отменён.",
+        hideActor: true,
+      };
+    }
+  }
+  return { message: event.message, hideActor: false };
+}
+
 export const driverStatusLabels: Record<DriverStatus, string> = {
   AVAILABLE: "Свободен",
   BUSY: "Занят",

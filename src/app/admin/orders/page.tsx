@@ -25,9 +25,7 @@ import {
   getDriverById,
   getOrder,
   getPendingCancellationRequests,
-  getPickupNoShowEligibleAtIso,
   getRestaurant,
-  isPickupNoShowEligibleAt,
   orderStatusLabels,
   paymentMethodLabels,
   paymentStatusLabels,
@@ -35,7 +33,6 @@ import {
   shouldShowDriverAssignment,
 } from "@/prototype/selectors";
 import type { CancellationRequest } from "@/prototype/models";
-import { useNowMs } from "@/components/util/use-now";
 
 const PREP_MINUTES = [10, 15, 20, 25, 30, 40];
 
@@ -286,13 +283,6 @@ function StatusCorrection({ order }: { order: Order }) {
   );
 }
 
-/** Минут осталось до targetIso (0 если наступило); null, если нет данных/часов. */
-function minutesUntil(targetIso: string | null, nowMs: number): number | null {
-  if (!targetIso || nowMs === 0) return null;
-  const diff = Date.parse(targetIso) - nowMs;
-  return diff <= 0 ? 0 : Math.ceil(diff / 60_000);
-}
-
 /** §14: read-only сводка самовывоза для администратора (по любому статусу). */
 function PickupAdminDetails({
   order,
@@ -340,6 +330,12 @@ function PickupAdminDetails({
         </dd>
       </div>
       <div className={flowStyles.summaryRow}>
+        <dt>Отмечен невыкупом</dt>
+        <dd>
+          {order.pickupNoShowAt ? formatDateTime(order.pickupNoShowAt) : "—"}
+        </dd>
+      </div>
+      <div className={flowStyles.summaryRow}>
         <dt>Невыкупов у клиента</dt>
         <dd>{state.customer.noShowPickupCount}</dd>
       </div>
@@ -348,59 +344,22 @@ function PickupAdminDetails({
 }
 
 /**
- * §14: панель выдачи самовывоза для администратора Direct. Позволяет подтвердить
- * оплату и выдачу по коду, отметить невыкуп (после 30-минутного окна) и, как
- * аварийный сценарий, выдать без кода. Код клиента здесь не отображается —
- * администратор вводит названный клиентом код.
+ * §2: административная панель самовывоза. Штатную выдачу по коду и обычный
+ * невыкуп выполняет кухня, поэтому здесь остаётся ТОЛЬКО аварийная выдача без
+ * кода — встроенной формой (CASH/CARD, причина, текстовое предупреждение, явная
+ * кнопка подтверждения). Никаких prompt/alert/confirm и поля кода.
  */
 function AdminPickupHandoff({ order }: { order: Order }) {
-  const { completePickup, markPickupNoShow, issuePickupNoCode } =
-    usePrototype();
-  const nowMs = useNowMs();
+  const { issuePickupNoCode } = usePrototype();
   const methods = order.pickupPaymentMethodsSnapshot;
   const single = methods.length === 1 ? methods[0] : null;
 
-  const [paidWith, setPaidWith] = useState<PickupPaymentMethod | null>(single);
-  const [code, setCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [emergencyOpen, setEmergencyOpen] = useState(false);
   const [emReason, setEmReason] = useState("");
   const [emPaidWith, setEmPaidWith] = useState<PickupPaymentMethod | null>(
     single,
   );
   const [emError, setEmError] = useState<string | null>(null);
-
-  const eligibleAtIso = getPickupNoShowEligibleAtIso(order);
-  const nowIso = nowMs > 0 ? new Date(nowMs).toISOString() : null;
-  const noShowEligible = nowIso
-    ? isPickupNoShowEligibleAt(order, nowIso)
-    : false;
-  const minutesLeft = minutesUntil(eligibleAtIso, nowMs);
-
-  const codeValid = /^\d{4}$/.test(code.trim());
-  const canConfirm = codeValid && paidWith !== null;
-
-  const doConfirm = () => {
-    if (!paidWith) {
-      setError("Выберите способ оплаты.");
-      return;
-    }
-    const res = completePickup(order.id, code, paidWith, "ADMIN");
-    if (!res.ok) {
-      // Ошибка не сбрасывает введённый код — панель остаётся открытой.
-      setError(res.error ?? "Не удалось подтвердить выдачу.");
-      return;
-    }
-    setError(null);
-    setCode("");
-  };
-
-  const doNoShow = () => {
-    const reason = window.prompt("Причина: клиент не пришёл за заказом");
-    if (reason === null) return;
-    const res = markPickupNoShow(order.id, reason, "ADMIN");
-    if (!res.ok) window.alert(res.error ?? "Не удалось отметить невыкуп.");
-  };
 
   const doEmergency = () => {
     if (!emPaidWith) {
@@ -411,15 +370,9 @@ function AdminPickupHandoff({ order }: { order: Order }) {
       setEmError("Укажите причину аварийной выдачи.");
       return;
     }
-    if (
-      !window.confirm(
-        "Подтвердите аварийную выдачу без кода клиента. Действие будет записано в историю заказа.",
-      )
-    ) {
-      return;
-    }
     const res = issuePickupNoCode(order.id, emReason, emPaidWith);
     if (!res.ok) {
+      // Ошибка не закрывает форму: причина и способ оплаты сохраняются.
       setEmError(res.error ?? "Не удалось выдать заказ.");
       return;
     }
@@ -427,83 +380,18 @@ function AdminPickupHandoff({ order }: { order: Order }) {
   };
 
   return (
-    <div className={flowStyles.pickupHandoff}>
-      <p className={flowStyles.pickupAmount}>
-        К оплате: {formatMoney(order.financials.customerTotalCents)}
-      </p>
-
+    <details
+      open={emergencyOpen}
+      onToggle={(e) => setEmergencyOpen(e.currentTarget.open)}
+      className={flowStyles.pickupEmergency}
+    >
+      <summary>Нет кода у клиента? Аварийная выдача</summary>
       <fieldset className={flowStyles.pickupMethods}>
         <legend>Способ оплаты на точке</legend>
         {methods.length === 0 ? (
           <span>Способы оплаты не заданы.</span>
         ) : (
           methods.map((method) => (
-            <label key={method} className={flowStyles.pickupMethodOption}>
-              <input
-                type="radio"
-                name={`pickup-pay-${order.id}`}
-                value={method}
-                checked={paidWith === method}
-                onChange={() => {
-                  setPaidWith(method);
-                  setError(null);
-                }}
-              />
-              <span>{pickupPaymentMethodLabels[method]}</span>
-            </label>
-          ))
-        )}
-      </fieldset>
-
-      <label className={flowStyles.field}>
-        <span>Код клиента (четыре цифры)</span>
-        <input
-          type="text"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={4}
-          value={code}
-          onChange={(e) => {
-            setCode(e.target.value.replace(/\D/g, "").slice(0, 4));
-            setError(null);
-          }}
-        />
-      </label>
-
-      {error ? <p className={flowStyles.errorText}>{error}</p> : null}
-
-      <div className={flowStyles.buttonRow}>
-        <button
-          className={flowStyles.primaryButton}
-          type="button"
-          disabled={!canConfirm}
-          onClick={doConfirm}
-        >
-          Подтвердить оплату и выдать
-        </button>
-        <button
-          className={flowStyles.secondaryButton}
-          type="button"
-          disabled={!noShowEligible}
-          onClick={doNoShow}
-        >
-          {noShowEligible
-            ? "Клиент не пришёл"
-            : minutesLeft !== null
-              ? `Невыкуп можно отметить через ${minutesLeft} мин`
-              : "Невыкуп недоступен"}
-        </button>
-      </div>
-
-      <details
-        open={emergencyOpen}
-        onToggle={(e) => setEmergencyOpen(e.currentTarget.open)}
-        className={flowStyles.pickupEmergency}
-      >
-        <summary>Нет кода у клиента? Аварийная выдача</summary>
-        <fieldset className={flowStyles.pickupMethods}>
-          <legend>Способ оплаты на точке</legend>
-          {methods.map((method) => (
             <label key={method} className={flowStyles.pickupMethodOption}>
               <input
                 type="radio"
@@ -517,29 +405,33 @@ function AdminPickupHandoff({ order }: { order: Order }) {
               />
               <span>{pickupPaymentMethodLabels[method]}</span>
             </label>
-          ))}
-        </fieldset>
-        <label className={flowStyles.field}>
-          <span>Причина аварийной выдачи</span>
-          <textarea
-            maxLength={300}
-            value={emReason}
-            onChange={(e) => {
-              setEmReason(e.target.value);
-              setEmError(null);
-            }}
-          />
-        </label>
-        {emError ? <p className={flowStyles.errorText}>{emError}</p> : null}
-        <button
-          className={flowStyles.dangerButton}
-          type="button"
-          onClick={doEmergency}
-        >
-          Выдать без кода
-        </button>
-      </details>
-    </div>
+          ))
+        )}
+      </fieldset>
+      <label className={flowStyles.field}>
+        <span>Причина аварийной выдачи</span>
+        <textarea
+          maxLength={300}
+          value={emReason}
+          onChange={(e) => {
+            setEmReason(e.target.value);
+            setEmError(null);
+          }}
+        />
+      </label>
+      <p className={flowStyles.smallOrderWarningText}>
+        Аварийная выдача фиксирует оплату на точке и начисляет комиссию Direct.
+        Действие будет записано в историю заказа.
+      </p>
+      {emError ? <p className={flowStyles.errorText}>{emError}</p> : null}
+      <button
+        className={flowStyles.dangerButton}
+        type="button"
+        onClick={doEmergency}
+      >
+        Выдать без кода
+      </button>
+    </details>
   );
 }
 
