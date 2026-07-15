@@ -137,10 +137,10 @@ function formatElapsed(fromIso: string, nowMs: number): string {
 }
 
 /**
- * Заметный янтарный блок инструкции к позиции. Показывается только если после
- * trim у cookingComment есть текст; сам текст выводится после trim, но внутреннее
- * содержимое пользователя не меняется. Треугольник — «обратите внимание», не
- * запрет и не ошибка (иконка декоративна, aria-hidden).
+ * Компактная янтарная строка инструкции к позиции — прямо под блюдом. Показывается
+ * только если после trim у cookingComment есть текст; сам текст выводится после
+ * trim, но внутреннее содержимое пользователя не меняется. Треугольник —
+ * «обратите внимание», не запрет и не ошибка (иконка декоративна, aria-hidden).
  */
 function CookingCommentBlock({ comment }: { comment: string }) {
   const trimmed = getVisibleCookingComment(comment);
@@ -149,13 +149,10 @@ function CookingCommentBlock({ comment }: { comment: string }) {
     <div className={kds.itemComment}>
       <TriangleAlert
         className={kds.itemCommentIcon}
-        size={18}
+        size={16}
         aria-hidden="true"
       />
-      <div className={kds.itemCommentBody}>
-        <span className={kds.itemCommentTitle}>Комментарий к приготовлению</span>
-        <span className={kds.itemCommentText}>{trimmed}</span>
-      </div>
+      <strong className={kds.itemCommentText}>{trimmed}</strong>
     </div>
   );
 }

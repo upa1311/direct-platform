@@ -669,42 +669,30 @@
   font-weight: 700;
 }
 
-/* Инструкция клиента к позиции — заметное янтарное предупреждение (не ошибка).
-   Grid-компоновка «иконка | текст» надёжно держится на узких экранах. */
+/* Инструкция клиента к позиции — компактная янтарная рабочая строка (не ошибка,
+   не карточка-в-карточке). Иконка выравнивается по первой строке текста. */
 .itemComment {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid #e0a93b;
-  border-left-width: 4px;
-  border-radius: 8px;
-  background: #fdf4e3;
+  gap: 6px;
+  padding: 4px 6px;
+  border-left: 3px solid var(--kds-warning);
+  border-radius: 0 3px 3px 0;
+  background: #fff8e8;
   color: #3a2c10;
+  line-height: 1.25;
 }
 
 .itemCommentIcon {
   margin-top: 1px;
-  color: #a15c07;
+  color: var(--kds-warning);
   flex-shrink: 0;
 }
 
-.itemCommentBody {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.itemCommentTitle {
-  font-size: 12px;
-  font-weight: 600;
-  color: #7a5510;
-}
-
 .itemCommentText {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 750;
   color: #3a2c10;
   overflow-wrap: anywhere;
   word-break: break-word;
