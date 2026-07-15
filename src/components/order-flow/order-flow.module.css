@@ -180,6 +180,12 @@
   box-shadow: 0 10px 30px rgb(34 43 37 / 4%);
 }
 
+/* Ограничение ширины детальной страницы заказа на больших мониторах: строки
+   характеристик и история не растягиваются через весь экран. Без доп. обёртки. */
+.orderDetailStack {
+  max-width: 940px;
+}
+
 .restaurantCard {
   min-height: 180px;
   overflow: hidden;
@@ -1254,6 +1260,8 @@
 .summaryRow dd,
 .definitionRow dd {
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
   text-align: right;
   font-weight: 650;
 }
@@ -1343,16 +1351,22 @@
   margin-top: 20px;
 }
 
+/* §3: спокойная компактная заметка (не карточка/кнопка/баннер): узкая, лёгкий
+   левый янтарный акцент, без рамки/фона/тени, приглушённый серо-зелёный текст. */
 .requestWarningText {
+  width: min(100%, 680px);
+  justify-self: start;
   margin: 0;
-  padding: 14px 16px;
-  border: 1px solid #e2e4e0;
-  border-radius: 12px;
-  background: #f8f9f7;
-  color: #202522;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.5;
+  padding: 1px 0 1px 12px;
+  border: 0;
+  border-left: 3px solid #d4b06a;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #626b65;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .requestStatusBlock {
@@ -1375,6 +1389,80 @@
   text-align: center;
 }
 
+/* §5–§7: график работы — обычная информация, не карточка. Без рамки/фона/тени. */
+.scheduleInfo {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  max-width: max-content;
+}
+
+.scheduleToday {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #5c6862;
+  font-size: 13.5px;
+}
+
+.scheduleIcon {
+  flex-shrink: 0;
+  color: #7c877f;
+}
+
+.scheduleOpen {
+  color: #1f6f43;
+  font-weight: 650;
+}
+
+.scheduleClosed {
+  color: #6a736c;
+  font-weight: 550;
+}
+
+.scheduleDetails {
+  font-size: 13px;
+  color: #5c6862;
+}
+
+.scheduleDetails summary {
+  cursor: pointer;
+  width: max-content;
+  color: #40706f;
+  font-weight: 550;
+}
+
+.scheduleWeek {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  max-width: 320px;
+}
+
+.scheduleRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 3px 0;
+  border-top: 1px solid #eef1ee;
+}
+
+.scheduleRow:first-child {
+  border-top: 0;
+}
+
+.scheduleRow dt,
+.scheduleRow dd {
+  margin: 0;
+}
+
+.scheduleRowToday dt,
+.scheduleRowToday dd {
+  font-weight: 700;
+  color: #26302a;
+}
+
 .orderHeader {
   display: flex;
   align-items: start;
@@ -1386,20 +1474,50 @@
   font-family: var(--font-geist-mono), monospace;
 }
 
+/* §2: заголовок крупного раздела клиентской карточки заказа — не плашка, не
+   кнопка: тонкая линия сверху + крупный жирный тёмный текст. */
+.orderSectionTitle {
+  margin: 28px 0 4px;
+  padding-top: 19px;
+  border-top: 1px solid #e2e6e2;
+  font-size: 21px;
+  font-weight: 800;
+  color: #1a1f1c;
+}
+
 .orderItemList {
   display: grid;
   gap: 10px;
-  margin: 18px 0 0;
+  margin: 14px 0 0;
   padding: 0;
   list-style: none;
 }
 
+/* Надёжная сетка «название | цена»: длинное название переносится и не
+   выталкивает цену за экран, комментарий остаётся под своим блюдом. */
 .orderItemList > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px 14px;
   padding-top: 10px;
   border-top: 1px solid #ecefec;
+}
+
+.orderItemList > div > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.orderItemList > div > span:last-child {
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* §2: избегаем двойной линии сразу под разделителем «Состав заказа». */
+.orderItemList > div:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .orderItemList small {
@@ -1703,15 +1821,39 @@
 
   .orderHeader,
   .cartLineTop,
-  .summaryRow,
   .definitionRow {
     align-items: start;
     flex-direction: column;
   }
 
-  .summaryRow dd,
   .definitionRow dd {
     text-align: left;
+  }
+
+  /* Компактная двухколоночная сводка (подпись | значение) вместо длинного
+     одноколоночного столбца — страница не растягивается по вертикали. */
+  .summaryRow {
+    display: grid;
+    grid-template-columns: minmax(105px, 40%) minmax(0, 1fr);
+    align-items: start;
+    gap: 6px 12px;
+  }
+
+  .summaryRow dd {
+    text-align: left;
+  }
+
+  /* Мягче внутренний отступ карточки заказа на мобильном (§ padding). */
+  .orderCard {
+    padding: 17px;
+  }
+}
+
+/* Только на очень узких экранах сводка складывается в одну колонку. */
+@media (max-width: 340px) {
+  .summaryRow {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 }
 

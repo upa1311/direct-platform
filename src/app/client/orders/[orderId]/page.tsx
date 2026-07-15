@@ -115,17 +115,13 @@ export default function ClientOrderPage() {
         title={`Заказ ${order.publicNumber}`}
         description={`${order.restaurant.name} · ${orderStatusLabels[order.status]}`}
       />
-      <div className={flowStyles.panelStack} id="order-status">
+      <div
+        className={`${flowStyles.panelStack} ${flowStyles.orderDetailStack}`}
+        id="order-status"
+      >
         <section className={flowStyles.orderCard}>
-          <div className={flowStyles.orderHeader}>
-            <div>
-              <h2 className={flowStyles.orderNumber}>{order.publicNumber}</h2>
-              <p>{order.restaurant.name}</p>
-            </div>
-            <span className={flowStyles.statusBadge}>
-              {orderStatusLabels[order.status]}
-            </span>
-          </div>
+          {/* §1: номер/ресторан/статус уже показаны в PageHeading выше —
+              внутренний повторяющийся заголовок убран, карточка сразу со сводки. */}
           <dl className={flowStyles.summaryList}>
             <div className={flowStyles.summaryRow}>
               <dt>Способ получения</dt>
@@ -181,7 +177,7 @@ export default function ClientOrderPage() {
           {order.deliveryMode === "PICKUP" ? (
             <ClientPickupBlock order={order} />
           ) : null}
-          <h3>Состав заказа</h3>
+          <h2 className={flowStyles.orderSectionTitle}>Состав заказа</h2>
           <div className={flowStyles.orderItemList}>
             {order.items.map((item) => (
               <div key={`${item.menuItemId}-${item.selectedVariantId ?? "base"}`}>

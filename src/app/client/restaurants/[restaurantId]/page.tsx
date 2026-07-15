@@ -6,6 +6,7 @@ import { useEffect, useState, type MouseEvent } from "react";
 import { Gift } from "lucide-react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import { ClientRestaurantSchedule } from "@/components/order-flow/client-restaurant-schedule";
 import { useClientAddressConfirmation } from "@/components/order-flow/client-address-confirmation";
 import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
 import { useNowMs } from "@/components/util/use-now";
@@ -130,6 +131,11 @@ export default function ClientRestaurantPage() {
           <span>{restaurant.address}</span>
           <span>Обычно {restaurant.defaultPreparationMinutes} минут</span>
         </div>
+        <ClientRestaurantSchedule
+          restaurant={restaurant}
+          nowMs={nowMs}
+          showFullSchedule
+        />
         {promotion ? (
           <p className={flowStyles.promoInline}>
             <Gift aria-hidden="true" className={flowStyles.promoInlineIcon} />

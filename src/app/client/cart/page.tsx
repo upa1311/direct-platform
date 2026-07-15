@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Gift } from "lucide-react";
 
 import { REPEAT_NOTICE_KEY } from "@/components/order-flow/client-order-actions";
+import { ClientRestaurantSchedule } from "@/components/order-flow/client-restaurant-schedule";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
@@ -172,6 +173,11 @@ export default function ClientCartPage() {
       <header className={flowStyles.checkoutHeading}>
         <h1>Ваш выбор</h1>
         <p>{restaurant.name}</p>
+        <ClientRestaurantSchedule
+          restaurant={restaurant}
+          nowMs={nowMs}
+          showFullSchedule
+        />
         <Link
           className={flowStyles.backToMenuLink}
           href={`/client/restaurants/${restaurant.id}`}
