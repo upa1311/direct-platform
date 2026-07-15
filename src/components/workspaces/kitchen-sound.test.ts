@@ -3,6 +3,8 @@ import { test } from "node:test";
 
 import {
   DIRECT_KDS_CHIME,
+  KITCHEN_FILE_GAIN,
+  KITCHEN_SOUND_FILE_URL,
   directKdsChimeDurationSeconds,
   KDS_MASTER_GAIN,
   KDS_MAX_FREQUENCY_HZ,
@@ -138,4 +140,16 @@ test("несколько новых заказов дают один общий 
     }),
     true,
   );
+});
+
+// --- Пользовательский mp3-сигнал ---------------------------------------------
+
+test("основной сигнал — пользовательский mp3 из public/sounds", () => {
+  assert.equal(KITCHEN_SOUND_FILE_URL, "/sounds/kitchen-new-order.mp3");
+});
+
+test("громкость mp3 в безопасных пределах, синтезированный fallback сохранён", () => {
+  assert.ok(KITCHEN_FILE_GAIN > 0 && KITCHEN_FILE_GAIN <= 1);
+  // Fallback-мелодия по-прежнему валидна (кухня не останется без звука).
+  assert.equal(DIRECT_KDS_CHIME.length, 9);
 });

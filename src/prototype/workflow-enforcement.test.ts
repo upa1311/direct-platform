@@ -15,6 +15,7 @@ import {
   markPickupNoShow,
   pauseRestaurantOrders,
   rejectRestaurantOrder,
+  rejectRestaurantOrderWithResult,
   reportRestaurantPreparationProblem,
   restoreMenuItemAvailability,
   setCartFulfillmentChoice,
@@ -25,6 +26,7 @@ import {
 } from "./actions.ts";
 import {
   clientHistoryEvent,
+  deliveryModeLabels,
   getPickupNoShowEligibleAtIso,
   getRestaurantAvailabilityStateAt,
   getRestaurantTimeZoneLabel,
@@ -499,5 +501,131 @@ test("Исправление 9: подписи режимов работы на 
     assert.ok(/[А-Яа-яЁё]/.test(label), label);
     assert.ok(!label.includes("COMBINED"));
     assert.ok(!label.includes("SPLIT"));
+  }
+});
+
+
+// --- Исправление 3/4: result-based отклонение + гонка кухни и оператора -------
+
+test("Исправление 3: успешное отклонение оператором возвращает ok, одно событие, роль OPERATOR", () => {
+  const { state, orderId } = splitPickupState();
+  const before = getOrder(state, orderId).history.length;
+  const res = rejectRestaurantOrderWithResult(
+    state, orderId, "Нет нужных позиций", "RESTAURANT", "OPERATOR",
+  );
+  assert.equal(res.result.ok, true);
+  assert.equal(res.result.error, null);
+  const order = getOrder(res.state, orderId);
+  assert.equal(order.status, "CANCELED");
+  assert.equal(order.history.length, before + 1);
+  assert.equal(order.history.at(-1)?.restaurantWorkspaceRole, "OPERATOR");
+});
+
+test("Исправление 3: кухня в SPLIT получает ok:false без мутации", () => {
+  const { state, orderId } = splitPickupState();
+  const res = rejectRestaurantOrderWithResult(
+    state, orderId, "Нет блюда", "RESTAURANT", "KITCHEN",
+  );
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Недостаточно прав для отклонения заказа.");
+  assert.equal(res.state, state);
+});
+
+test("Исправление 3: пустая причина — ошибка без мутации", () => {
+  const { state, orderId } = splitPickupState();
+  const res = rejectRestaurantOrderWithResult(state, orderId, "   ", "RESTAURANT", "OPERATOR");
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Укажите причину отклонения.");
+  assert.equal(res.state, state);
+});
+
+test("Исправление 3: неизвестный заказ — ошибка без мутации", () => {
+  const { state } = splitPickupState();
+  const res = rejectRestaurantOrderWithResult(state, "order-nope", "Причина", "RESTAURANT", "OPERATOR");
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Заказ не найден.");
+  assert.equal(res.state, state);
+});
+
+test("Исправление 4: гонка — кухня приняла, оператор получает race-ошибку", () => {
+  const { state, orderId } = splitPickupState();
+  // Кухня принимает на исходном состоянии.
+  const accepted = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "KITCHEN");
+  const statusAfterAccept = getOrder(accepted, orderId).status;
+  const historyAfterAccept = getOrder(accepted, orderId).history.length;
+  // «Устаревший» оператор пытается отклонить уже принятый заказ.
+  const res = rejectRestaurantOrderWithResult(
+    accepted, orderId, "Нет нужных позиций", "RESTAURANT", "OPERATOR",
+  );
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Заказ уже обработан. Обновите данные.");
+  // State — тот же объект, что после принятия; ничего не мутировано.
+  assert.equal(res.state, accepted);
+  const order = getOrder(res.state, orderId);
+  assert.equal(order.status, statusAfterAccept);
+  // PICKUP (оплата на точке) после принятия готовится, не отменён.
+  assert.equal(order.status, "PREPARING");
+  assert.equal(order.history.length, historyAfterAccept);
+});
+
+test("Исправление 4: обратная гонка — после отклонения кухня не может принять", () => {
+  const { state, orderId } = splitPickupState();
+  const rejected = rejectRestaurantOrderWithResult(
+    state, orderId, "Ресторан не может выполнить заказ", "RESTAURANT", "OPERATOR",
+  );
+  assert.equal(rejected.result.ok, true);
+  const historyAfterReject = getOrder(rejected.state, orderId).history.length;
+  const tryAccept = acceptRestaurantOrder(rejected.state, orderId, 20, "RESTAURANT", "KITCHEN");
+  // Отменённый заказ не принимается: state не изменился, событий не добавилось.
+  assert.equal(tryAccept, rejected.state);
+  const order = getOrder(tryAccept, orderId);
+  assert.equal(order.status, "CANCELED");
+  assert.equal(order.history.length, historyAfterReject);
+});
+
+test("Исправление 3: повторное отклонение — ошибка, второе событие не создаётся", () => {
+  const { state, orderId } = splitPickupState();
+  const first = rejectRestaurantOrderWithResult(state, orderId, "Причина", "RESTAURANT", "OPERATOR");
+  const len = getOrder(first.state, orderId).history.length;
+  const second = rejectRestaurantOrderWithResult(first.state, orderId, "Ещё раз", "RESTAURANT", "OPERATOR");
+  assert.equal(second.result.ok, false);
+  assert.equal(second.result.error, "Заказ уже обработан. Обновите данные.");
+  assert.equal(second.state, first.state);
+  assert.equal(getOrder(second.state, orderId).history.length, len);
+});
+
+test("Исправление 3: compatibility-wrapper возвращает PrototypeState", () => {
+  const { state, orderId } = splitPickupState();
+  const next = rejectRestaurantOrder(state, orderId, "Причина", "RESTAURANT", "OPERATOR");
+  // Это state, а не ActionResult.
+  assert.ok(Array.isArray((next as PrototypeState).orders));
+  assert.equal(getOrder(next as PrototypeState, orderId).status, "CANCELED");
+  // Ошибочный путь: тот же state.
+  const noop = rejectRestaurantOrder(next as PrototypeState, orderId, "Ещё", "RESTAURANT", "OPERATOR");
+  assert.equal(noop, next);
+});
+
+test("Исправление 3: отклонение не меняет финансовый снимок и оплату", () => {
+  const { state, orderId } = splitPickupState();
+  const before = getOrder(state, orderId);
+  const res = rejectRestaurantOrderWithResult(state, orderId, "Причина", "RESTAURANT", "OPERATOR");
+  const after = getOrder(res.state, orderId);
+  assert.deepEqual(after.financials, before.financials);
+  assert.equal(after.paymentStatus, before.paymentStatus);
+  assert.equal(after.paidAt, before.paidAt);
+  assert.equal(res.state.settlements.length, state.settlements.length);
+  // Один заказ, без дублирования.
+  assert.equal(
+    res.state.orders.filter((o) => o.id === orderId).length,
+    1,
+  );
+});
+
+test("Исправление 5: русские подписи режимов доставки без enum", () => {
+  for (const label of Object.values(deliveryModeLabels)) {
+    assert.ok(/[А-Яа-яЁё]/.test(label), label);
+    assert.ok(!label.includes("PLATFORM_DRIVER"));
+    assert.ok(!label.includes("RESTAURANT_DELIVERY"));
+    assert.ok(!label.includes("PICKUP"));
   }
 });

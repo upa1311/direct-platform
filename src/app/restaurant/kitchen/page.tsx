@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bell, BellRing, TriangleAlert } from "lucide-react";
+import { BellOff, BellRing, TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
@@ -1012,10 +1012,12 @@ export default function RestaurantKitchenPage() {
                 : "Включить звук"
             }
           >
+            {/* Выключенный звук — перечёркнутый колокольчик (BellOff), чтобы
+                состояние читалось с одного взгляда; включённый — BellRing. */}
             {soundEnabled ? (
               <BellRing size={18} aria-hidden="true" />
             ) : (
-              <Bell size={18} aria-hidden="true" />
+              <BellOff size={18} aria-hidden="true" />
             )}
             {soundEnabled ? (
               <span className={kds.soundDot} aria-hidden="true" />

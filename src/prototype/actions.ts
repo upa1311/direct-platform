@@ -825,24 +825,43 @@ export function acceptRestaurantOrder(
   );
 }
 
-export function rejectRestaurantOrder(
+export interface RejectRestaurantOrderResult {
+  ok: boolean;
+  error: string | null;
+}
+
+/**
+ * Result-based отклонение нового заказа рестораном (Исправление 3). Все проверки
+ * — до любой мутации; при ошибке возвращает исходный state тем же объектом (без
+ * события, без изменения статуса/оплаты/ETA/финансов/ревизии) и понятную русскую
+ * ошибку. Это авторитетная реализация; rejectRestaurantOrder — тонкий wrapper.
+ */
+export function rejectRestaurantOrderWithResult(
   state: PrototypeState,
   orderId: string,
   reason: string,
   actor: OrderActionActor = "RESTAURANT",
   workspaceRole?: RestaurantWorkspaceRole,
-): PrototypeState {
-  const normalizedReason = reason.trim();
-  if (!normalizedReason) {
-    return state;
-  }
+): ActionResult<RejectRestaurantOrderResult> {
+  const fail = (error: string): ActionResult<RejectRestaurantOrderResult> => ({
+    state,
+    result: { ok: false, error },
+  });
 
-  // Этап 4: отклонение — часть работы с отменой (оператор/общий экран). Кухня в
-  // SPLIT использует «Не можем приготовить» (REPORT_PREPARATION_PROBLEM).
   const targetOrder = state.orders.find((order) => order.id === orderId);
   if (!targetOrder) {
-    return state;
+    return fail("Заказ не найден.");
   }
+  // Ресторан может отклонять только заказы рабочих ресторанов прототипа.
+  if (actor === "RESTAURANT" && !isWorkingRestaurantOrder(targetOrder)) {
+    return fail("Заказ относится к другому ресторану.");
+  }
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) {
+    return fail("Укажите причину отклонения.");
+  }
+  // Этап 4: отклонение — часть работы с отменой (оператор/общий экран). Кухня в
+  // SPLIT использует «Не можем приготовить» (REPORT_PREPARATION_PROBLEM).
   const guard = checkRestaurantWorkspace(
     state,
     targetOrder,
@@ -851,7 +870,11 @@ export function rejectRestaurantOrder(
     workspaceRole,
   );
   if (!guard.allowed) {
-    return state;
+    return fail("Недостаточно прав для отклонения заказа.");
+  }
+  // Гонка вкладок: кухня уже приняла / заказ автозакрылся / уже отклонён.
+  if (targetOrder.status !== "RESTAURANT_REVIEW") {
+    return fail("Заказ уже обработан. Обновите данные.");
   }
 
   const now = new Date().toISOString();
@@ -860,35 +883,51 @@ export function rejectRestaurantOrder(
       ? "Администратор Direct отклонил заказ от имени ресторана"
       : "Ресторан отклонил заказ";
 
-  return replaceOrder(
+  const nextState = replaceOrder(
     state,
     orderId,
-    (order) => {
-      if (order.status !== "RESTAURANT_REVIEW") {
-        return order;
-      }
-      return {
-        ...order,
-        status: "CANCELED",
-        cancellationReason: normalizedReason,
-        updatedAt: now,
-        history: [
-          ...order.history,
-          {
-            id: `${order.id}-history-${order.history.length + 1}`,
-            occurredAt: now,
-            actor,
-            type: "STATUS",
-            fromStatus: "RESTAURANT_REVIEW",
-            toStatus: "CANCELED",
-            message: `${rejectedBy}. Причина: ${normalizedReason}`,
-            restaurantWorkspaceRole: guard.role,
-          },
-        ],
-      };
-    },
+    (order) => ({
+      ...order,
+      status: "CANCELED",
+      cancellationReason: normalizedReason,
+      updatedAt: now,
+      history: [
+        ...order.history,
+        {
+          id: `${order.id}-history-${order.history.length + 1}`,
+          occurredAt: now,
+          actor,
+          type: "STATUS",
+          fromStatus: "RESTAURANT_REVIEW",
+          toStatus: "CANCELED",
+          message: `${rejectedBy}. Причина: ${normalizedReason}`,
+          restaurantWorkspaceRole: guard.role,
+        },
+      ],
+    }),
     now,
   );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Compatibility-wrapper: прежняя сигнатура для существующих вызовов и тестов,
+ * ожидающих только PrototypeState. Вся логика — в result-based версии.
+ */
+export function rejectRestaurantOrder(
+  state: PrototypeState,
+  orderId: string,
+  reason: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+): PrototypeState {
+  return rejectRestaurantOrderWithResult(
+    state,
+    orderId,
+    reason,
+    actor,
+    workspaceRole,
+  ).state;
 }
 
 export interface ClientCancelResult {

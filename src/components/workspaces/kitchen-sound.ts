@@ -1,19 +1,22 @@
 "use client";
 
 /**
- * Мягкий ресторанный KDS-сигнал новых заказов Direct. Полностью синтезируется
- * через Web Audio API — без аудиофайлов, сторонних библиотек и чужих сэмплов.
- * Характер: «пик-пик-пик → короткая мелодия → пик-пик-пик» — узнаваемый, но не
- * пронзительный и не тревожный. Диапазон низкий (500–660 Гц), тембр sine +
- * тихий triangle, мягкая огибающая без щелчков. Ни одна фирменная мелодия не
- * копируется. Логика запуска/повтора/защиты от наложения — прежняя.
+ * Сигнал новых заказов кухни Direct. Основной звук — пользовательский mp3-файл
+ * (`public/sounds/kitchen-new-order.mp3`), проигрываемый через Web Audio API.
+ * Если файл не загрузился/не декодировался — автоматический fallback на прежний
+ * синтезированный Direct KDS chime (пик-пик-пик → мелодия → пик-пик-пик), чтобы
+ * кухня никогда не осталась без сигнала.
  *
- * Из-за политики браузеров AudioContext создаётся только по жесту пользователя
- * (кнопка-колокольчик на экране кухни).
+ * Логика запуска/повтора неизменна: включение только по жесту пользователя
+ * (кнопка-колокольчик), повтор каждые 20 секунд решает isKitchenBeepDue, защита
+ * от наложения — окно alertPlayingUntil, тишина после 7 минут — селектор.
  */
 
 /** localStorage-ключ включённости звука (не в PrototypeState). */
 export const KITCHEN_SOUND_KEY = "direct-kitchen-sound-enabled";
+
+/** URL пользовательского сигнала (лежит в public/, попадает в репозиторий). */
+export const KITCHEN_SOUND_FILE_URL = "/sounds/kitchen-new-order.mp3";
 
 /** Декларативное описание одной ноты сигнала — чистые данные для синтеза/тестов. */
 export interface KdsTone {
@@ -93,10 +96,40 @@ function getAudioContextCtor(): AudioContextCtor | null {
 let audioContext: AudioContext | null = null;
 /** Защита от наложения (§9): до этого времени новый сигнал не запускаем. */
 let alertPlayingUntil = 0;
+/** Декодированный пользовательский mp3 (основной сигнал); null — не загружен. */
+let alertFileBuffer: AudioBuffer | null = null;
+/** Однократная загрузка файла; повторные вызовы ждут ту же промис-цепочку. */
+let alertFileLoading: Promise<void> | null = null;
 
 /**
- * Создаёт/возобновляет AudioContext по жесту пользователя. Возвращает true,
- * если звук готов к воспроизведению. При блокировке браузером — false.
+ * Загружает и декодирует пользовательский mp3. Ошибки глотаются: при неудаче
+ * остаётся синтезированный fallback, кухня без сигнала не остаётся.
+ */
+function loadKitchenSoundFile(ctx: AudioContext): Promise<void> {
+  if (alertFileBuffer) return Promise.resolve();
+  if (alertFileLoading) return alertFileLoading;
+  alertFileLoading = fetch(KITCHEN_SOUND_FILE_URL)
+    .then((response) => {
+      if (!response.ok) throw new Error(String(response.status));
+      return response.arrayBuffer();
+    })
+    .then((data) => ctx.decodeAudioData(data))
+    .then((buffer) => {
+      alertFileBuffer = buffer;
+    })
+    .catch(() => {
+      alertFileBuffer = null;
+    })
+    .finally(() => {
+      alertFileLoading = null;
+    });
+  return alertFileLoading;
+}
+
+/**
+ * Создаёт/возобновляет AudioContext по жесту пользователя и подгружает
+ * пользовательский mp3. Возвращает true, если звук готов к воспроизведению.
+ * При блокировке браузером — false.
  */
 export async function enableKitchenSound(): Promise<boolean> {
   const Ctor = getAudioContextCtor();
@@ -108,7 +141,12 @@ export async function enableKitchenSound(): Promise<boolean> {
     if (audioContext.state === "suspended") {
       await audioContext.resume();
     }
-    return audioContext.state === "running";
+    if (audioContext.state === "running") {
+      // Файл маленький и локальный; ждём, чтобы первый сигнал был уже из mp3.
+      await loadKitchenSoundFile(audioContext);
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -133,13 +171,15 @@ const MIN_GAIN = 0.0001;
 /** Общий master gain (§4): мягче прежнего (было 0.38). */
 export const KDS_MASTER_GAIN = 0.21;
 
+/** Громкость проигрывания пользовательского mp3 (файл уже смастерен). */
+export const KITCHEN_FILE_GAIN = 0.9;
+
 /**
- * Проигрывает одну полную мелодию Direct KDS (§6). Планировщик считает старты
- * нот от AudioContext.currentTime по декларативному DIRECT_KDS_CHIME — без
- * разбросанных setTimeout. Каждая нота: sine (основной) + тихий triangle для
- * читаемости, своя мягкая огибающая. Цепь: osc → tone gain → master gain →
- * мягкий compressor → destination (§4). Повторный вызов, пока сигнал ещё звучит,
- * игнорируется (§9) — без наложения.
+ * Проигрывает сигнал нового заказа. Основной путь — пользовательский mp3 через
+ * AudioBufferSourceNode; окно защиты от наложения равно фактической длительности
+ * файла. Если буфер недоступен (ошибка загрузки/декодирования) — синтезированный
+ * Direct KDS chime как fallback, а загрузка файла тихо повторяется в фоне.
+ * Повторный вызов, пока сигнал ещё звучит, игнорируется (§9) — без наложения.
  */
 export function playKitchenBeep(): void {
   const ctx = audioContext;
@@ -148,6 +188,29 @@ export function playKitchenBeep(): void {
   const now = ctx.currentTime;
   // §9: не запускаем второй экземпляр поверх ещё звучащего сигнала.
   if (now < alertPlayingUntil) return;
+
+  // Основной сигнал — пользовательский mp3.
+  if (alertFileBuffer) {
+    alertPlayingUntil = now + alertFileBuffer.duration;
+    const compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.value = -18;
+    compressor.knee.value = 22;
+    compressor.ratio.value = 3;
+    compressor.attack.value = 0.01;
+    compressor.release.value = 0.22;
+    compressor.connect(ctx.destination);
+    const gain = ctx.createGain();
+    gain.gain.value = KITCHEN_FILE_GAIN;
+    gain.connect(compressor);
+    const source = ctx.createBufferSource();
+    source.buffer = alertFileBuffer;
+    source.connect(gain);
+    source.start(now);
+    return;
+  }
+
+  // Файл ещё не готов — пробуем догрузить в фоне и играем синтезированный chime.
+  void loadKitchenSoundFile(ctx);
   alertPlayingUntil = now + KITCHEN_ALERT_DURATION_SECONDS;
 
   // Мягкий компрессор (§4): убирает пики, не допускает clipping.

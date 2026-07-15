@@ -28,6 +28,14 @@ import {
 } from "lucide-react";
 import { FoodArtwork } from "@/components/brand/food-artwork";
 import { deliveryModeLabels } from "@/data/demo-data";
+
+// Исправление 1: русские пояснения режимов доставки — технический enum
+// пользователю не показывается (остаётся только в данных и TypeScript).
+const deliveryModeHints: Record<string, string> = {
+  PLATFORM_DRIVER: "Доставляет водитель Direct",
+  RESTAURANT_DELIVERY: "Доставляет курьер ресторана",
+  PICKUP: "Клиент забирает заказ самостоятельно",
+};
 import { formatMoney } from "@/lib/demo-calculations";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { AuditEntry, DemoMenuItem, DemoRestaurant } from "@/types/prototype";
@@ -172,7 +180,7 @@ export function RestaurantEditor({
         <div className="editor-content-grid">
           <section className="admin-form-card wide-form-card">
             <div className="admin-card-heading"><div><p className="eyebrow">Получение заказа</p><h2>Режимы доставки и оплаты</h2></div><CarFront size={20} /></div>
-            <div className="admin-mode-list">{Object.entries(deliveryModeLabels).map(([mode, label]) => <label key={mode} className={draft.modes.includes(mode as DemoRestaurant["modes"][number]) ? "is-enabled" : ""}><input type="checkbox" checked={draft.modes.includes(mode as DemoRestaurant["modes"][number])} onChange={() => onDecisionRequired(label, "Приоритет глобальных и ресторанных настроек, а также допустимые способы оплаты для режима ещё не утверждены.")} /><span><Check size={14} /></span><div><strong>{label}</strong><small>{mode}</small></div></label>)}</div>
+            <div className="admin-mode-list">{Object.entries(deliveryModeLabels).map(([mode, label]) => <label key={mode} className={draft.modes.includes(mode as DemoRestaurant["modes"][number]) ? "is-enabled" : ""}><input type="checkbox" checked={draft.modes.includes(mode as DemoRestaurant["modes"][number])} onChange={() => onDecisionRequired(label, "Приоритет глобальных и ресторанных настроек, а также допустимые способы оплаты для режима ещё не утверждены.")} /><span><Check size={14} /></span><div><strong>{label}</strong><small>{deliveryModeHints[mode] ?? ""}</small></div></label>)}</div>
             <div className="settings-row"><div><strong>QR-оплата</strong><small>Настройки провайдера не определены</small></div><button type="button" onClick={() => onDecisionRequired("Настройки QR", "Договорные и технические QR-параметры ещё не разделены.")}><Settings2 size={16} /> Настроить</button></div>
             <div className="settings-row"><div><strong>Наличные при доставке водителем Direct</strong><small>Глобальный минимум еды: $7</small></div><button type="button" onClick={() => onDecisionRequired("Настройки наличных", "Не определено, какие параметры можно менять по ресторану.")}><Settings2 size={16} /> Настроить</button></div>
           </section>
@@ -200,7 +208,7 @@ export function RestaurantEditor({
           <div className="admin-card-heading"><div><p className="eyebrow">Контент ресторана</p><h2>Категории и позиции</h2></div><button className="admin-primary-button" type="button" onClick={() => onDecisionRequired("Новая позиция", "Новая позиция может требовать модерации. Политика и роли ещё не утверждены.")}>+ Добавить позицию</button></div>
           <div className="admin-menu-layout">
             <aside className="admin-category-list"><button className="is-active" type="button">Популярное <span>2</span></button><button type="button">Горячее <span>1</span></button><button type="button">Напитки <span>1</span></button><button type="button">Десерты <span>1</span></button><button className="add-category-button" type="button" onClick={() => onDecisionRequired("Новая категория", "Публикационный процесс категории ещё не определён.")}>+ Категория</button></aside>
-            <div className="admin-item-list">{items.map((item) => <article key={item.id}><span className={`admin-item-image tone-${item.tone}`}><FoodArtwork kind={item.artwork} /></span><div className="admin-item-copy"><strong>{item.name}</strong><small>{item.category} · {item.weight}</small><span className={item.available ? "availability-on" : "availability-off"}>{item.available ? "В наличии" : "Нет в наличии"}</span></div><label className="price-field"><small>Цена, USD</small><input type="text" inputMode="decimal" defaultValue={(item.priceCents / 100).toFixed(2)} onBlur={(event) => updateItemPrice(item, event)} /></label><button className={`availability-toggle ${item.available ? "is-on" : ""}`} type="button" onClick={() => onItemUpdate({ ...item, available: !item.available }, item.available ? "В наличии" : "Нет в наличии", item.available ? "Нет в наличии" : "В наличии")} aria-label={`Изменить доступность ${item.name}`}><span /></button><button className="admin-icon-button" type="button" onClick={() => onDecisionRequired("Редактор позиции", "Термины модификаторов, опций, размеров и дополнений ещё требуют формального разграничения.")} aria-label={`Редактировать ${item.name}`}><MoreHorizontal size={18} /></button></article>)}</div>
+            <div className="admin-item-list">{items.map((item) => <article key={item.id}><span className={`admin-item-image tone-${item.tone}`}><FoodArtwork kind={item.artwork} /></span><div className="admin-item-copy"><strong>{item.name}</strong><small>{item.category} · {item.weight}</small><span className={item.available ? "availability-on" : "availability-off"}>{item.available ? "В наличии" : "Нет в наличии"}</span></div><label className="price-field"><small>Цена</small><input type="text" inputMode="decimal" defaultValue={(item.priceCents / 100).toFixed(2)} onBlur={(event) => updateItemPrice(item, event)} /></label><button className={`availability-toggle ${item.available ? "is-on" : ""}`} type="button" onClick={() => onItemUpdate({ ...item, available: !item.available }, item.available ? "В наличии" : "Нет в наличии", item.available ? "Нет в наличии" : "В наличии")} aria-label={`Изменить доступность ${item.name}`}><span /></button><button className="admin-icon-button" type="button" onClick={() => onDecisionRequired("Редактор позиции", "Термины модификаторов, опций, размеров и дополнений ещё требуют формального разграничения.")} aria-label={`Редактировать ${item.name}`}><MoreHorizontal size={18} /></button></article>)}</div>
           </div>
         </section>
       ) : null}

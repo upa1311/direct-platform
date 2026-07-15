@@ -43,7 +43,7 @@ import {
   setRestaurantWorkflowMode,
   reassignDriverForOrder,
   rejectCancellationRequest,
-  rejectRestaurantOrder,
+  rejectRestaurantOrderWithResult,
   repeatOrderToCart,
   requestOrderCancellationByClient,
   resetPrototypeState,
@@ -74,6 +74,7 @@ import {
   type OrderActionActor,
   type PickupNoShowResult,
   type PreparationProblemResult,
+  type RejectRestaurantOrderResult,
   type RepeatOrderResult,
   type RequestCancellationResult,
   type RestaurantFormInput,
@@ -192,7 +193,7 @@ interface PrototypeContextValue {
     reason: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => void;
+  ) => RejectRestaurantOrderResult;
   simulateOnlinePayment: (orderId: string) => void;
   markReady: (
     orderId: string,
@@ -696,15 +697,17 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) => {
-      replaceState(
-        rejectRestaurantOrder(
-          stateRef.current,
-          orderId,
-          reason,
-          actor,
-          workspaceRole,
-        ),
+      const action = rejectRestaurantOrderWithResult(
+        stateRef.current,
+        orderId,
+        reason,
+        actor,
+        workspaceRole,
       );
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
     },
     [replaceState],
   );

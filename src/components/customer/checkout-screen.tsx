@@ -69,7 +69,7 @@ export function CheckoutScreen({
           </section>
 
           <section className="form-card">
-            <div className="form-card-heading"><span><QrCode size={20} /></span><div><h2>Способ оплаты</h2><p>Полный демо-сценарий доступен для QR</p></div></div>
+            <div className="form-card-heading"><span><QrCode size={20} /></span><div><h2>Способ оплаты</h2><p>Полный демо-сценарий доступен для QR-оплаты</p></div></div>
             <div className="payment-options">
               <button type="button" className={paymentMethod === "QR" ? "is-selected" : ""} onClick={() => onPaymentMethodChange("QR")}>
                 <span><QrCode size={22} /></span><div><strong>QR-оплата</strong><small>После проверки состава рестораном</small></div>{paymentMethod === "QR" ? <Check size={18} /> : null}

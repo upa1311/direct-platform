@@ -104,7 +104,13 @@ function OperatorRejectPanel({ order }: { order: Order }) {
       setError("Укажите причину отклонения.");
       return;
     }
-    rejectOrder(order.id, effectiveReason, "RESTAURANT", "OPERATOR");
+    const result = rejectOrder(order.id, effectiveReason, "RESTAURANT", "OPERATOR");
+    if (!result.ok) {
+      // Гонка вкладок (кухня уже приняла и т.п.): форма остаётся открытой,
+      // причина сохраняется, показываем ошибку — без ложного успеха.
+      setError(result.error ?? "Не удалось отклонить заказ.");
+      return;
+    }
     setError(null);
     setOpen(false);
   };
