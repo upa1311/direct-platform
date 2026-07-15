@@ -95,24 +95,38 @@ function OperatorRejectPanel({ order }: { order: Order }) {
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
 
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
 
-  const doReject = () => {
+  const doReject = async () => {
     if (!effectiveReason.trim()) {
       setError("Укажите причину отклонения.");
       return;
     }
-    const result = rejectOrder(order.id, effectiveReason, "RESTAURANT", "OPERATOR");
-    if (!result.ok) {
-      // Гонка вкладок (кухня уже приняла и т.п.): форма остаётся открытой,
-      // причина сохраняется, показываем ошибку — без ложного успеха.
-      setError(result.error ?? "Не удалось отклонить заказ.");
-      return;
+    if (pending) return;
+    setPending(true);
+    try {
+      // Исправление 4.4: сериализованная мутация (Web Lock + rebase на свежий
+      // state). Кнопка на время запроса заблокирована — повторный клик невозможен.
+      const result = await rejectOrder(
+        order.id,
+        effectiveReason,
+        "RESTAURANT",
+        "OPERATOR",
+      );
+      if (!result.ok) {
+        // Гонка вкладок (кухня уже приняла и т.п.): форма остаётся открытой,
+        // причина сохраняется, показываем ошибку — без ложного успеха.
+        setError(result.error ?? "Не удалось отклонить заказ.");
+        return;
+      }
+      setError(null);
+      setOpen(false);
+    } finally {
+      setPending(false);
     }
-    setError(null);
-    setOpen(false);
   };
 
   if (!open) {
@@ -178,10 +192,10 @@ function OperatorRejectPanel({ order }: { order: Order }) {
         <button
           className={`${kds.btn} ${kds.btnRedOutline}`}
           type="button"
-          disabled={!effectiveReason.trim()}
+          disabled={!effectiveReason.trim() || pending}
           onClick={doReject}
         >
-          Подтвердить отклонение
+          {pending ? "Отклоняем…" : "Подтвердить отклонение"}
         </button>
       </div>
     </div>

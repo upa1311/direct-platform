@@ -164,7 +164,7 @@ export function AdminConsole() {
       <div className="admin-workspace">
         <header className="admin-topbar">
           <label className="admin-global-search"><Search size={18} /><input placeholder="Поиск по админке" /></label>
-          <div className="admin-topbar-actions"><span className="test-environment"><span /> Тестовая среда</span><button className="notification-button" type="button" aria-label="Уведомления"><Bell size={19} /><span>2</span></button><button className="admin-profile" type="button"><span>SA</span><div><strong>SUPER_ADMIN</strong><small>Полный демо-доступ</small></div><ChevronDown size={16} /></button></div>
+          <div className="admin-topbar-actions"><span className="test-environment"><span /> Тестовая среда</span><button className="notification-button" type="button" aria-label="Уведомления"><Bell size={19} /><span>2</span></button><button className="admin-profile" type="button"><span>SA</span><div><strong>Главный администратор</strong><small>Полный демо-доступ</small></div><ChevronDown size={16} /></button></div>
         </header>
 
         <div className="admin-content">

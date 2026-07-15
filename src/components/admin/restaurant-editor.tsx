@@ -31,6 +31,23 @@ import { deliveryModeLabels } from "@/data/demo-data";
 
 // Исправление 1: русские пояснения режимов доставки — технический enum
 // пользователю не показывается (остаётся только в данных и TypeScript).
+// Исправление 1: русские подписи участников аудита; технический actor остаётся
+// в данных, но пользователю не показывается. Неизвестная роль — «Сотрудник».
+const auditActorLabels: Record<string, string> = {
+  SUPER_ADMIN: "Главный администратор",
+  CONTENT_MANAGER: "Менеджер контента",
+  RESTAURANT_OWNER: "Владелец ресторана",
+  RESTAURANT_MANAGER: "Управляющий ресторана",
+  OPERATOR: "Оператор",
+  KITCHEN: "Кухня",
+  ADMIN: "Администратор Direct",
+  SYSTEM: "Система",
+};
+
+export function formatAuditActor(actor: string): string {
+  return auditActorLabels[actor] ?? "Сотрудник";
+}
+
 const deliveryModeHints: Record<string, string> = {
   PLATFORM_DRIVER: "Доставляет водитель Direct",
   RESTAURANT_DELIVERY: "Доставляет курьер ресторана",
@@ -216,7 +233,7 @@ export function RestaurantEditor({
       {tab === "moderation" ? (
         <section className="admin-form-card moderation-card">
           <div className="admin-card-heading"><div><p className="eyebrow">Публикационный процесс</p><h2>Очередь модерации</h2></div><span className="pending-count">1 изменение</span></div>
-          <div className="moderation-item"><span className="moderation-icon"><FileCheck2 size={21} /></span><div className="moderation-copy"><span>Новое описание · Позиция 2</span><h3>Сравнение «было / стало»</h3><div className="diff-grid"><div><small>Предыдущее значение</small><p>Короткое описание</p></div><div className="diff-new"><small>Новое значение</small><p>Обновлённое тестовое описание позиции</p></div></div><p className="moderation-author">RESTAURANT_OWNER · 11 июля, 13:10</p></div><div className="moderation-actions"><button className="admin-secondary-button" type="button" onClick={() => onDecisionRequired("Отклонить изменение", "Обязательность причины отклонения и повторная отправка ещё не утверждены.")}>Отклонить</button><button className="admin-primary-button" type="button" onClick={() => onDecisionRequired("Одобрить изменение", "Не определено, может ли автор одобрить свою редакцию и какая роль утверждает публикацию.")}>Одобрить</button></div></div>
+          <div className="moderation-item"><span className="moderation-icon"><FileCheck2 size={21} /></span><div className="moderation-copy"><span>Новое описание · Позиция 2</span><h3>Сравнение «было / стало»</h3><div className="diff-grid"><div><small>Предыдущее значение</small><p>Короткое описание</p></div><div className="diff-new"><small>Новое значение</small><p>Обновлённое тестовое описание позиции</p></div></div><p className="moderation-author">{formatAuditActor("RESTAURANT_OWNER")} · 11 июля, 13:10</p></div><div className="moderation-actions"><button className="admin-secondary-button" type="button" onClick={() => onDecisionRequired("Отклонить изменение", "Обязательность причины отклонения и повторная отправка ещё не утверждены.")}>Отклонить</button><button className="admin-primary-button" type="button" onClick={() => onDecisionRequired("Одобрить изменение", "Не определено, может ли автор одобрить свою редакцию и какая роль утверждает публикацию.")}>Одобрить</button></div></div>
           <div className="demo-note"><Info size={17} /> Политика модерации настраивается, но её уровень и начальное значение ещё не утверждены.</div>
         </section>
       ) : null}
@@ -224,7 +241,7 @@ export function RestaurantEditor({
       {tab === "audit" ? (
         <section className="admin-form-card audit-card">
           <div className="admin-card-heading"><div><p className="eyebrow">Полная история</p><h2>Журнал изменений</h2></div><button className="admin-secondary-button" type="button" onClick={() => onDecisionRequired("Экспорт аудита", "Формат, права и правила выгрузки журнала ещё не определены.")}>Экспорт <ChevronDown size={15} /></button></div>
-          <div className="audit-table"><div className="audit-head"><span>Время и участник</span><span>Сущность</span><span>Было</span><span>Стало</span><span>Причина</span></div>{auditEntries.map((entry) => <article key={entry.id}><div><strong>{entry.actor}</strong><small>{entry.timestamp}</small></div><span>{entry.entity}</span><code>{entry.previousValue}</code><code className="new-value">{entry.newValue}</code><span>{entry.reason}</span></article>)}</div>
+          <div className="audit-table"><div className="audit-head"><span>Время и участник</span><span>Сущность</span><span>Было</span><span>Стало</span><span>Причина</span></div>{auditEntries.map((entry) => <article key={entry.id}><div><strong>{formatAuditActor(entry.actor)}</strong><small>{entry.timestamp}</small></div><span>{entry.entity}</span><code>{entry.previousValue}</code><code className="new-value">{entry.newValue}</code><span>{entry.reason}</span></article>)}</div>
         </section>
       ) : null}
     </div>

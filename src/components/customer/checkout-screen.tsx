@@ -75,7 +75,7 @@ export function CheckoutScreen({
                 <span><QrCode size={22} /></span><div><strong>QR-оплата</strong><small>После проверки состава рестораном</small></div>{paymentMethod === "QR" ? <Check size={18} /> : null}
               </button>
               <button type="button" className={paymentMethod === "CASH" ? "is-selected" : ""} onClick={() => cashAvailable && onPaymentMethodChange("CASH")} disabled={!cashAvailable}>
-                <span><Banknote size={22} /></span><div><strong>Наличными</strong><small>{cashAvailable ? "Требуется cashEnabled-водитель" : `Доступно от ${formatMoney(cashMinimumFoodSubtotalCents)} еды`}</small></div>{paymentMethod === "CASH" ? <Check size={18} /> : null}
+                <span><Banknote size={22} /></span><div><strong>Наличными</strong><small>{cashAvailable ? "Требуется водитель Direct, принимающий наличные" : `Доступно от ${formatMoney(cashMinimumFoodSubtotalCents)} еды`}</small></div>{paymentMethod === "CASH" ? <Check size={18} /> : null}
               </button>
             </div>
             {!cashAvailable ? (

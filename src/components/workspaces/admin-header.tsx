@@ -10,7 +10,7 @@ export function AdminHeader() {
       </div>
       <div className={styles.headerActions}>
         <PrototypeResetButton />
-        <span className={styles.adminRole}>SUPER_ADMIN</span>
+        <span className={styles.adminRole}>Главный администратор</span>
       </div>
     </header>
   );

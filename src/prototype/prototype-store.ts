@@ -768,6 +768,22 @@ export function parseLegacyStoredState(
   }
 }
 
+/**
+ * Исправление 3/5: выбор авторитетного базового состояния для сериализованной
+ * мутации. Перед мутацией вкладка перечитывает persisted state и работает от
+ * самого свежего (localStorage может быть новее локального stateRef, если другая
+ * вкладка уже успела сохранить свою мутацию). Чистая функция — тестируется без
+ * React. Production-backend позднее заменит это серверной транзакцией и
+ * optimistic concurrency по ревизии.
+ */
+export function selectLatestPrototypeState(
+  localState: PrototypeState,
+  storedState: PrototypeState | null,
+): PrototypeState {
+  if (!storedState) return localState;
+  return isNewerState(storedState, localState) ? storedState : localState;
+}
+
 export function isNewerState(
   candidate: PrototypeState,
   current: PrototypeState,

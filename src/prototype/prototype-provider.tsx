@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import {
-  acceptRestaurantOrder,
+  acceptRestaurantOrderWithResult,
   addCartItem,
   adjustOrderEtaFromIntent,
   adminCancelOrder,
@@ -62,6 +62,7 @@ import {
   updateMenuItemVariants,
   updateRestaurant,
   upsertPromotion,
+  type AcceptRestaurantOrderResult,
   type AddCartItemResult,
   type AdjustOrderEtaResult,
   type AdminActionResult,
@@ -110,7 +111,11 @@ import {
   parseStoredState,
   PROTOTYPE_CHANNEL_NAME,
   PROTOTYPE_STORAGE_KEY,
+  selectLatestPrototypeState,
 } from "./prototype-store";
+
+/** Общее имя Web Lock для сериализации мутаций заказа между вкладками. */
+const PROTOTYPE_MUTATION_LOCK_NAME = "direct-prototype-state-v7-mutation";
 
 interface PrototypeContextValue {
   state: PrototypeState;
@@ -187,13 +192,13 @@ interface PrototypeContextValue {
     preparationMinutes: number,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => void;
+  ) => Promise<AcceptRestaurantOrderResult>;
   rejectOrder: (
     orderId: string,
     reason: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => RejectRestaurantOrderResult;
+  ) => Promise<RejectRestaurantOrderResult>;
   simulateOnlinePayment: (orderId: string) => void;
   markReady: (
     orderId: string,
@@ -300,6 +305,59 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     stateRef.current = nextState;
     setState(nextState);
   }, []);
+
+  /**
+   * Исправление 3: сериализация конфликтующих мутаций заказа между вкладками.
+   * BroadcastChannel — не блокировка: две вкладки могут одновременно мутировать
+   * одну ревизию N, и поздний updatedAt молча перезапишет чужую операцию.
+   * Поэтому конфликтующие операции (приём/отклонение) выполняются под общим
+   * Web Lock: внутри lock перечитывается авторитетный persisted state, mutation
+   * применяется к самому свежему base, а результат сохраняется в localStorage и
+   * рассылается СИНХРОННО до освобождения lock. Production-backend позднее
+   * заменит это серверной транзакцией и optimistic concurrency по ревизии.
+   */
+  const runSerializedPrototypeMutation = useCallback(
+    async <T,>(
+      mutation: (baseState: PrototypeState) => { state: PrototypeState; result: T },
+    ): Promise<T> => {
+      const execute = (): T => {
+        // Rebase: localStorage может быть новее локального stateRef (другая
+        // вкладка уже сохранила свою мутацию). Мутировать устаревший state нельзя.
+        const stored = parseStoredState(
+          window.localStorage.getItem(PROTOTYPE_STORAGE_KEY),
+        );
+        const baseState = selectLatestPrototypeState(stateRef.current, stored);
+        if (baseState !== stateRef.current) {
+          replaceState(baseState);
+        }
+        const action = mutation(baseState);
+        if (action.state !== baseState) {
+          // Критическая транзакция: сохранить и разослать до выхода из lock,
+          // не полагаясь на более поздний persistence-effect.
+          stateRef.current = action.state;
+          window.localStorage.setItem(
+            PROTOTYPE_STORAGE_KEY,
+            JSON.stringify(action.state),
+          );
+          channelRef.current?.postMessage({
+            sourceId: sourceIdRef.current,
+            state: action.state,
+          } satisfies PrototypeChannelMessage);
+          setState(action.state);
+        }
+        return action.result;
+      };
+
+      const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+      if (locks?.request) {
+        return locks.request(PROTOTYPE_MUTATION_LOCK_NAME, async () => execute());
+      }
+      // Best-effort fallback без Web Locks: перечитать latest перед мутацией и
+      // сохранить немедленно. Без spin-lock/busy-wait — это осознанный компромисс.
+      return execute();
+    },
+    [replaceState],
+  );
 
   useEffect(() => {
     sourceIdRef.current = crypto.randomUUID();
@@ -676,18 +734,17 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       preparationMinutes: number,
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
-    ) => {
-      replaceState(
-        acceptRestaurantOrder(
-          stateRef.current,
+    ) =>
+      runSerializedPrototypeMutation((baseState) =>
+        acceptRestaurantOrderWithResult(
+          baseState,
           orderId,
           preparationMinutes,
           actor,
           workspaceRole,
         ),
-      );
-    },
-    [replaceState],
+      ),
+    [runSerializedPrototypeMutation],
   );
 
   const rejectOrder = useCallback(
@@ -696,20 +753,17 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       reason: string,
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
-    ) => {
-      const action = rejectRestaurantOrderWithResult(
-        stateRef.current,
-        orderId,
-        reason,
-        actor,
-        workspaceRole,
-      );
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
+    ) =>
+      runSerializedPrototypeMutation((baseState) =>
+        rejectRestaurantOrderWithResult(
+          baseState,
+          orderId,
+          reason,
+          actor,
+          workspaceRole,
+        ),
+      ),
+    [runSerializedPrototypeMutation],
   );
 
   const simulateOnlinePayment = useCallback(

@@ -344,10 +344,30 @@ function NewOrderCard({
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
+  const [acceptPending, setAcceptPending] = useState(false);
+  const [acceptError, setAcceptError] = useState<string | null>(null);
 
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
   const autoClose = formatAutoClose(order.createdAt, nowMs);
+
+  // Исправление 4.3: сериализованный приём (Web Lock + rebase). На время запроса
+  // кнопка заблокирована; при гонке показывается русская ошибка, карточка и
+  // выбранное время сохраняются, ложный успех не показывается.
+  const doAccept = async () => {
+    if (acceptPending) return;
+    setAcceptPending(true);
+    try {
+      const result = await acceptOrder(order.id, prep, "RESTAURANT", "KITCHEN");
+      if (!result.ok) {
+        setAcceptError(result.error ?? "Не удалось принять заказ.");
+        return;
+      }
+      setAcceptError(null);
+    } finally {
+      setAcceptPending(false);
+    }
+  };
 
   return (
     <article
@@ -389,9 +409,10 @@ function NewOrderCard({
             <button
               className={`${kds.btn} ${kds.btnDark}`}
               type="button"
-              onClick={() => acceptOrder(order.id, prep, "RESTAURANT", "KITCHEN")}
+              disabled={acceptPending}
+              onClick={doAccept}
             >
-              Принять
+              {acceptPending ? "Принимаем…" : "Принять"}
             </button>
             {/* Этап 8: в SPLIT кухня не отклоняет заказ (это отмена — зона
                 оператора), а сообщает о проблеме приготовления. */}
@@ -407,6 +428,11 @@ function NewOrderCard({
               </button>
             )}
           </div>
+          {acceptError ? (
+            <p className={kds.pickupError} role="alert">
+              {acceptError}
+            </p>
+          ) : null}
         </div>
       ) : (
         <div className={kds.dialog} role="group" aria-label="Отклонение заказа">

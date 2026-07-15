@@ -706,30 +706,41 @@ function checkRestaurantWorkspaceForRestaurant(
   });
 }
 
+export interface AcceptRestaurantOrderResult {
+  ok: boolean;
+  error: string | null;
+}
+
 /**
- * Общий transition над заказом с явным автором. Кабинет ресторана вызывает те
- * же actions с actor="RESTAURANT" (по умолчанию), а `/admin/orders` — c "ADMIN".
- * Финансовая и статусная логика едина; расходится только автор и текст истории.
+ * Result-based приём заказа (Исправление 4.1). Общий transition с явным автором:
+ * кабинет ресторана — actor="RESTAURANT", админка — "ADMIN". Все проверки — до
+ * мутации; при ошибке возвращает исходный state тем же объектом (без события,
+ * без финансовых изменений, без ревизии) и понятную русскую ошибку. Lifecycle
+ * успешного пути не изменён. acceptRestaurantOrder — тонкий wrapper.
  */
-export function acceptRestaurantOrder(
+export function acceptRestaurantOrderWithResult(
   state: PrototypeState,
   orderId: string,
   preparationMinutes: number,
   actor: OrderActionActor = "RESTAURANT",
   workspaceRole?: RestaurantWorkspaceRole,
-): PrototypeState {
+): ActionResult<AcceptRestaurantOrderResult> {
+  const fail = (error: string): ActionResult<AcceptRestaurantOrderResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
   const allowedMinutes = [10, 15, 20, 25, 30, 40];
   if (!allowedMinutes.includes(preparationMinutes)) {
-    return state;
+    return fail("Недопустимое время приготовления.");
   }
 
   const targetOrder = state.orders.find((order) => order.id === orderId);
-  if (
-    !targetOrder ||
-    targetOrder.status !== "RESTAURANT_REVIEW" ||
-    !isWorkingRestaurantOrder(targetOrder)
-  ) {
-    return state;
+  if (!targetOrder) {
+    return fail("Заказ не найден.");
+  }
+  if (!isWorkingRestaurantOrder(targetOrder)) {
+    return fail("Заказ относится к другому ресторану.");
   }
 
   // Этап 4: приём заказа (и установка начального времени) — действие кухни/общего
@@ -742,9 +753,14 @@ export function acceptRestaurantOrder(
     workspaceRole,
   );
   if (!guard.allowed) {
-    return state;
+    return fail("Недостаточно прав для принятия заказа.");
   }
   const workspace = guard.role;
+
+  // Гонка вкладок: заказ уже принят/отклонён/автозакрыт.
+  if (targetOrder.status !== "RESTAURANT_REVIEW") {
+    return fail("Заказ уже обработан. Обновите данные.");
+  }
 
   const now = new Date().toISOString();
   const acceptedBy =
@@ -764,7 +780,7 @@ export function acceptRestaurantOrder(
     const expectedReadyAt = new Date(
       new Date(now).getTime() + preparationMinutes * 60_000,
     ).toISOString();
-    return replaceOrder(
+    const nextState = replaceOrder(
       state,
       orderId,
       (order) => ({
@@ -791,13 +807,14 @@ export function acceptRestaurantOrder(
       }),
       now,
     );
+    return { state: nextState, result: { ok: true, error: null } };
   }
 
   if (targetOrder.paymentMethod !== "ONLINE") {
-    return state;
+    return fail("Неподдерживаемый способ оплаты заказа.");
   }
 
-  return replaceOrder(
+  const nextState = replaceOrder(
     state,
     orderId,
     (order) => ({
@@ -823,6 +840,27 @@ export function acceptRestaurantOrder(
     }),
     now,
   );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Compatibility-wrapper: прежняя сигнатура для существующих вызовов и тестов,
+ * ожидающих только PrototypeState. Вся логика — в result-based версии.
+ */
+export function acceptRestaurantOrder(
+  state: PrototypeState,
+  orderId: string,
+  preparationMinutes: number,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+): PrototypeState {
+  return acceptRestaurantOrderWithResult(
+    state,
+    orderId,
+    preparationMinutes,
+    actor,
+    workspaceRole,
+  ).state;
 }
 
 export interface RejectRestaurantOrderResult {
