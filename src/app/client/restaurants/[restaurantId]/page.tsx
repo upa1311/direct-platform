@@ -12,15 +12,13 @@ import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
-  canPlacePrototypeOrder,
   formatMoney,
+  getClientRestaurantAvailabilityAt,
   getRestaurant,
   getRestaurantMenu,
   getRestaurantPromotion,
-  getRestaurantResumeHint,
   isAddressReady,
   isMenuItemAvailableAt,
-  isOperationalPauseActiveAt,
   resolveVariant,
 } from "@/prototype/selectors";
 import { shouldAutoConfirmAddress } from "@/prototype/pricing-engine";
@@ -69,7 +67,10 @@ export default function ClientRestaurantPage() {
 
   const menuItems = getRestaurantMenu(state, restaurant.id);
   const promotion = getRestaurantPromotion(state, restaurant.id);
-  const canOrder = canPlacePrototypeOrder(restaurant);
+  // §3/§10: единый источник — до гидратации (nowMs=0) заказ заблокирован
+  // (SSR-безопасно) и совпадает с каталогом/корзиной/доменом.
+  const availability = getClientRestaurantAvailabilityAt(restaurant, nowMs);
+  const canOrder = availability.canAcceptOrders;
   const cartQuantity =
     state.cart.restaurantId === restaurant.id
       ? state.cart.items.reduce((total, item) => total + item.quantity, 0)
@@ -159,19 +160,14 @@ export default function ClientRestaurantPage() {
         ) : null}
       </div>
 
-      {isOperationalPauseActiveAt(restaurant.orderPause, nowMs) ? (
+      {nowMs > 0 && !availability.canAcceptOrders ? (
         <div className={flowStyles.warningNotice} role="status">
-          Ресторан временно не принимает новые заказы.
-          {getRestaurantResumeHint(restaurant, nowMs) ? (
-            <>
-              {" "}
-              {getRestaurantResumeHint(restaurant, nowMs)}
-            </>
-          ) : null}
-        </div>
-      ) : !canOrder ? (
-        <div className={flowStyles.warningNotice}>
-          Демонстрационный ресторан — заказы пока недоступны
+          {availability.state === "OPERATIONAL_PAUSE"
+            ? "Ресторан временно не принимает новые заказы."
+            : availability.state === "CLOSED_SCHEDULE"
+              ? "Ресторан сейчас закрыт. Меню можно просмотреть."
+              : "Ресторан сейчас не принимает заказы."}
+          {availability.detailLabel ? <> {availability.detailLabel}</> : null}
         </div>
       ) : null}
 

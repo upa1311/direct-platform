@@ -82,9 +82,9 @@ function RepeatOrderButton({ order }: { order: Order }) {
   };
 
   return (
-    <div className={styles.submitArea}>
+    <div className={styles.repeatOrderArea}>
       <button
-        className={styles.secondaryButton}
+        className={styles.repeatOrderButton}
         type="button"
         onClick={handleRepeat}
       >

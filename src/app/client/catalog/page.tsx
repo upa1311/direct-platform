@@ -9,15 +9,14 @@ import {
   useClientAddressConfirmation,
 } from "@/components/order-flow/client-address-confirmation";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import { RestaurantAvailabilityBadge } from "@/components/order-flow/restaurant-availability-badge";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   formatMoney,
   getAvailablePlatformDeliveryFeeCents,
   getRestaurantPromotion,
-  getRestaurantResumeHint,
   getValidatedAddressZoneId,
-  isOperationalPauseActiveAt,
   sortPublishedRestaurants,
   type CatalogSort,
 } from "@/prototype/selectors";
@@ -42,13 +41,13 @@ export default function ClientCatalogPage() {
   const effectiveSort =
     sort === "DELIVERY" && !deliveryPricingReady ? "RECOMMENDED" : sort;
   const restaurants = useMemo(
-    () => sortPublishedRestaurants(state, effectiveSort),
-    [effectiveSort, state],
+    () => sortPublishedRestaurants(state, effectiveSort, nowMs),
+    [effectiveSort, state, nowMs],
   );
   const orderableFees = deliveryPricingReady
     ? restaurants
         .map((restaurant) =>
-          getAvailablePlatformDeliveryFeeCents(state, restaurant),
+          getAvailablePlatformDeliveryFeeCents(state, restaurant, nowMs),
         )
         .filter((fee): fee is number => fee !== null)
     : [];
@@ -199,7 +198,7 @@ export default function ClientCatalogPage() {
         {restaurants.map((restaurant) => {
           const deliveryFee =
             deliveryPricingReady
-              ? getAvailablePlatformDeliveryFeeCents(state, restaurant)
+              ? getAvailablePlatformDeliveryFeeCents(state, restaurant, nowMs)
               : null;
           const promotion = getRestaurantPromotion(state, restaurant.id);
           const restaurantDelivery = restaurant.restaurantDeliverySettings;
@@ -230,19 +229,10 @@ export default function ClientCatalogPage() {
                     ) : null}
                   </div>
                   <p>{restaurant.description}</p>
-                  <span className={flowStyles.statusBadge}>
-                    {isOperationalPauseActiveAt(restaurant.orderPause, nowMs)
-                      ? "Временно не принимает заказы"
-                      : restaurant.isAcceptingOrders
-                        ? "Принимает заказы"
-                        : "Меню для просмотра"}
-                  </span>
-                  {isOperationalPauseActiveAt(restaurant.orderPause, nowMs) &&
-                  getRestaurantResumeHint(restaurant, nowMs) ? (
-                    <span className={flowStyles.deliveryConditions}>
-                      {getRestaurantResumeHint(restaurant, nowMs)}
-                    </span>
-                  ) : null}
+                  <RestaurantAvailabilityBadge
+                    restaurant={restaurant}
+                    nowMs={nowMs}
+                  />
                   {promotion ? (
                     <span className={flowStyles.promoInline}>
                       <Gift

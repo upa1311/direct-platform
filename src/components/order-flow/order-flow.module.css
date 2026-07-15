@@ -1479,6 +1479,150 @@
   color: #26302a;
 }
 
+/* §1: причина отмены — спокойная inline-строка (завершённый факт, не alert). */
+.cancellationReasonInline {
+  width: fit-content;
+  max-width: 100%;
+  margin: 17px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #7a5a58;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.cancellationReasonInline > span {
+  font-weight: 600;
+  color: #5f4b49;
+}
+
+/* §2–3: «Заказать снова» — компактная вторичная кнопка, ширина по содержимому. */
+.repeatOrderArea {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.repeatOrderButton {
+  width: fit-content;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid #b85f2c;
+  border-radius: 4px;
+  background: #fff;
+  color: #8f431c;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+}
+
+.repeatOrderButton:hover {
+  background: #fdf1e8;
+}
+
+.repeatOrderButton:focus-visible {
+  outline: 2px solid #b85f2c;
+  outline-offset: 2px;
+}
+
+/* §9: статус доступности ресторана — точка + подпись, без капсулы/плашки. */
+.restaurantAvailability {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 680;
+  line-height: 1.35;
+}
+
+.restaurantAvailabilityDot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.restaurantAvailabilityAccepting {
+  color: #1f6f43;
+}
+
+.restaurantAvailabilityPaused {
+  color: #8a5a12;
+}
+
+.restaurantAvailabilityPaused .restaurantAvailabilityDot {
+  background: #d99a20;
+}
+
+.restaurantAvailabilityClosed {
+  color: #4a524c;
+}
+
+.restaurantAvailabilityClosed .restaurantAvailabilityDot {
+  background: #9aa29b;
+}
+
+.restaurantAvailabilityUnavailable {
+  color: #626b65;
+}
+
+.restaurantAvailabilityUnavailable .restaurantAvailabilityDot {
+  background: #b3bab4;
+}
+
+/* §11: название позиции — обычный вес, цена — вправо и без переноса. */
+.orderItemName {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 14.5px;
+  font-weight: 480;
+  color: #202522;
+}
+
+.orderItemPrice {
+  white-space: nowrap;
+  text-align: right;
+  font-weight: 600;
+}
+
+/* §12: финальный итог заказа заметно крупнее и темнее обычных строк. */
+.orderGrandTotal {
+  align-items: baseline;
+  margin-top: 8px;
+  padding-top: 15px;
+  border-top: 2px solid #d3d8d3;
+}
+
+.orderGrandTotal dt {
+  color: #161a17;
+  font-size: 21px;
+  font-weight: 800;
+}
+
+.orderGrandTotal dd {
+  color: #161a17;
+  font-size: 23px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .orderHeader {
   display: flex;
   align-items: start;

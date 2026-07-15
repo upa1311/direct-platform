@@ -16,10 +16,15 @@ const INITIAL_TIMESTAMP = "2026-07-12T00:00:00.000Z";
 
 export const TEST_RESTAURANT_ID = "restaurant-1";
 
-/** Безопасный стандартный график: все дни 09:00–22:00. */
+/**
+ * Безопасный стандартный график: все дни круглосуточно (00:00–23:59). Новый или
+ * не настроенный ресторан по умолчанию открыт всегда; администратор задаёт
+ * реальные часы вручную. Это делает демо-рестораны стабильно доступными и не
+ * создаёт противоречия «принимает заказы / закрыто по графику» на seed-данных.
+ */
 export function createDefaultWeeklySchedule(): WeeklySchedule {
   return WEEKDAY_ORDER.reduce((schedule, day) => {
-    schedule[day] = { enabled: true, openTime: "09:00", closeTime: "22:00" };
+    schedule[day] = { enabled: true, openTime: "00:00", closeTime: "23:59" };
     return schedule;
   }, {} as WeeklySchedule);
 }
@@ -204,11 +209,8 @@ const defaultRestaurants: Restaurant[] = [
       contactMessenger: "Telegram @rest3",
       emergencyPhone: "+373 777 90003",
       internalAdminNote:
-        "По выплатам связываться только с бухгалтером. В воскресенье не работает.",
-      weeklySchedule: {
-        ...createDefaultWeeklySchedule(),
-        sunday: { enabled: false, openTime: "", closeTime: "" },
-      },
+        "По выплатам связываться только с бухгалтером.",
+      weeklySchedule: createDefaultWeeklySchedule(),
     }),
   },
   {

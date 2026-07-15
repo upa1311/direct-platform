@@ -26,7 +26,7 @@ import type {
   WeekdayId,
   ZoneId,
 } from "./models";
-import { WEEKDAY_ORDER } from "./models";
+import { WEEKDAY_LABELS, WEEKDAY_ORDER } from "./models";
 import {
   getDefaultRecommendationRank,
   TEST_RESTAURANT_ID,
@@ -299,6 +299,7 @@ function getRestaurantRank(restaurant: Restaurant): number {
 export function sortPublishedRestaurants(
   state: PrototypeState,
   sort: CatalogSort,
+  nowMs = 0,
 ): Restaurant[] {
   const restaurants = getPublishedRestaurants(state);
   const stableOrder = new Map(
@@ -308,10 +309,15 @@ export function sortPublishedRestaurants(
     getRestaurantRank(left) - getRestaurantRank(right) ||
     (stableOrder.get(left.id) ?? 0) - (stableOrder.get(right.id) ?? 0);
 
+  // §7: «Открыты сейчас» — по фактическому состоянию ACCEPTING на nowMs. При
+  // nowMs<=0 (до гидратации) порядок стабилен и ложный «открыт» не влияет.
+  const accepting = (restaurant: Restaurant) =>
+    nowMs > 0 && isRestaurantAcceptingOrdersAt(restaurant, nowMs);
+
   return [...restaurants].sort((left, right) => {
     if (sort === "DELIVERY") {
-      const leftFee = getAvailablePlatformDeliveryFeeCents(state, left);
-      const rightFee = getAvailablePlatformDeliveryFeeCents(state, right);
+      const leftFee = getAvailablePlatformDeliveryFeeCents(state, left, nowMs);
+      const rightFee = getAvailablePlatformDeliveryFeeCents(state, right, nowMs);
       if (leftFee === null && rightFee !== null) return 1;
       if (leftFee !== null && rightFee === null) return -1;
       if (leftFee !== null && rightFee !== null && leftFee !== rightFee) {
@@ -326,8 +332,10 @@ export function sortPublishedRestaurants(
       return left.defaultPreparationMinutes - right.defaultPreparationMinutes;
     }
 
-    if (sort === "OPEN" && left.isAcceptingOrders !== right.isAcceptingOrders) {
-      return left.isAcceptingOrders ? -1 : 1;
+    if (sort === "OPEN") {
+      const leftOpen = accepting(left);
+      const rightOpen = accepting(right);
+      if (leftOpen !== rightOpen) return leftOpen ? -1 : 1;
     }
 
     return compareFallback(left, right);
@@ -376,43 +384,90 @@ export function getRestaurantResumeHint(
   return `Приём заказов возобновится примерно в ${time}.`;
 }
 
+/** Базовая конфигурация ресторана достаточна для приёма заказов вообще. */
+function isRestaurantBaseConfigured(restaurant: Restaurant): boolean {
+  return (
+    restaurant.status === "PUBLISHED" &&
+    restaurant.paymentMethods.includes("ONLINE") &&
+    (restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
+      restaurant.deliveryModes.includes("RESTAURANT_DELIVERY") ||
+      restaurant.deliveryModes.includes("PICKUP"))
+  );
+}
+
 /**
- * Принимает ли ресторан НОВЫЕ заказы в момент nowMs (§7). Учитывает publication
- * status, оплату, режимы доставки, ручной приём и операционную паузу. Истёкшая
- * пауза (resumeAt <= now) уже не блокирует, даже если sweep ещё не нормализовал
- * isAcceptingOrders. Чистая функция.
+ * Разрешает ли приём АДМИНИСТРАТИВНЫЙ слой (без учёта графика работы): базовая
+ * конфигурация + операционная пауза + ручной приём. Истёкшая пауза не блокирует.
+ * Основа для kitchen-состояния (кухня не смотрит на клиентский график) и для
+ * единого availability-state.
+ */
+function isRestaurantAdminAcceptingAt(
+  restaurant: Restaurant,
+  nowMs: number,
+): boolean {
+  if (!isRestaurantBaseConfigured(restaurant)) return false;
+  if (restaurant.orderPause) {
+    return !isOperationalPauseActiveAt(restaurant.orderPause, nowMs);
+  }
+  return restaurant.isAcceptingOrders;
+}
+
+/**
+ * Единое состояние доступности ресторана (§2) — ЕДИНСТВЕННЫЙ источник истины для
+ * клиента и домена. Приоритет: UNAVAILABLE (не настроен) → OPERATIONAL_PAUSE
+ * (активная пауза кухни/ресторана) → ADMIN_DISABLED (ручной приём выключен) →
+ * CLOSED_SCHEDULE (закрыт по weeklySchedule в часовом поясе ресторана) →
+ * ACCEPTING. Истёкшая пауза не блокирует до maintenance-sweep.
+ */
+export type RestaurantAvailabilityState =
+  | "ACCEPTING"
+  | "OPERATIONAL_PAUSE"
+  | "CLOSED_SCHEDULE"
+  | "ADMIN_DISABLED"
+  | "UNAVAILABLE";
+
+export function getRestaurantAvailabilityStateAt(
+  restaurant: Restaurant,
+  nowMs: number,
+): RestaurantAvailabilityState {
+  if (!isRestaurantBaseConfigured(restaurant)) return "UNAVAILABLE";
+  if (isOperationalPauseActiveAt(restaurant.orderPause, nowMs)) {
+    return "OPERATIONAL_PAUSE";
+  }
+  if (!isRestaurantAdminAcceptingAt(restaurant, nowMs)) return "ADMIN_DISABLED";
+  if (!isRestaurantOpenNow(restaurant, new Date(nowMs))) {
+    return "CLOSED_SCHEDULE";
+  }
+  return "ACCEPTING";
+}
+
+/**
+ * Принимает ли ресторан НОВЫЕ заказы в момент nowMs (§3). Ровно тогда, когда
+ * единое состояние доступности === ACCEPTING (включая проверку графика). Все
+ * доменные преграды (addCartItem, createOrderFromCart) идут через этот helper.
  */
 export function isRestaurantAcceptingOrdersAt(
   restaurant: Restaurant,
   nowMs: number,
 ): boolean {
-  const baseOk =
-    restaurant.status === "PUBLISHED" &&
-    restaurant.paymentMethods.includes("ONLINE") &&
-    (restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
-      restaurant.deliveryModes.includes("RESTAURANT_DELIVERY") ||
-      restaurant.deliveryModes.includes("PICKUP"));
-  if (!baseOk) return false;
-  if (restaurant.orderPause) {
-    // Пауза есть — решает её активность (истёкшая разрешает приём).
-    return !isOperationalPauseActiveAt(restaurant.orderPause, nowMs);
-  }
-  // Паузы нет — административный ручной приём.
-  return restaurant.isAcceptingOrders;
+  return getRestaurantAvailabilityStateAt(restaurant, nowMs) === "ACCEPTING";
 }
 
-export function canPlacePrototypeOrder(restaurant: Restaurant): boolean {
-  return isRestaurantAcceptingOrdersAt(restaurant, Date.now());
+export function canPlacePrototypeOrder(
+  restaurant: Restaurant,
+  nowMs: number = Date.now(),
+): boolean {
+  return isRestaurantAcceptingOrdersAt(restaurant, nowMs);
 }
 
 /**
  * Единое состояние приёма заказов для UI кухни. Toolbar и RestaurantPauseControl
- * обязаны использовать только этот helper (без дублирования условий).
+ * обязаны использовать только этот helper (без дублирования условий). Кухня НЕ
+ * учитывает клиентский график: закрытие по расписанию не превращает приём в
+ * ADMIN_DISABLED на экране кухни (поведение сохранено).
  * - OPERATIONAL_PAUSE — активна операционная пауза ресторана;
- * - ACCEPTING — приём разрешён (в т.ч. истёкшая пауза до maintenance-sweep);
- * - ADMIN_DISABLED — паузы нет, но domain-layer заказ запрещает (ручное
- *   административное отключение или ресторан иначе не готов). Зелёный статус в
- *   этом состоянии не показывается — кухня не обходит отключение админом.
+ * - ACCEPTING — приём разрешён администратором (в т.ч. истёкшая пауза до sweep);
+ * - ADMIN_DISABLED — приём выключен администратором/конфигурацией.
  */
 export type KitchenAcceptanceState =
   | "ACCEPTING"
@@ -426,7 +481,7 @@ export function getKitchenAcceptanceState(
   if (isOperationalPauseActiveAt(restaurant.orderPause, nowMs)) {
     return "OPERATIONAL_PAUSE";
   }
-  if (isRestaurantAcceptingOrdersAt(restaurant, nowMs)) {
+  if (isRestaurantAdminAcceptingAt(restaurant, nowMs)) {
     return "ACCEPTING";
   }
   return "ADMIN_DISABLED";
@@ -621,17 +676,23 @@ export function getDeliveryFeeCents(
   return Number.isInteger(cents) && Number(cents) >= 0 ? Number(cents) : null;
 }
 
-/** Тариф Direct для каталога/сортировки. Только рестораны типа DIRECT. */
+/**
+ * Тариф Direct для каталога/сортировки (§8). Только рестораны типа DIRECT,
+ * которые ФАКТИЧЕСКИ принимают заказ на nowMs (открыты по графику, без паузы и
+ * админ-отключения). До гидратации (nowMs<=0) — null, чтобы закрытый или ещё не
+ * определённый ресторан не получал бейдж «Выгодная доставка». Тарифную матрицу и
+ * финансовую формулу не меняет.
+ */
 export function getAvailablePlatformDeliveryFeeCents(
   state: PrototypeState,
   restaurant: Restaurant,
+  nowMs: number,
 ): number | null {
   if (
-    restaurant.status !== "PUBLISHED" ||
-    !restaurant.isAcceptingOrders ||
+    nowMs <= 0 ||
+    getRestaurantAvailabilityStateAt(restaurant, nowMs) !== "ACCEPTING" ||
     restaurant.deliveryProvider !== "DIRECT" ||
-    !restaurant.deliveryModes.includes("PLATFORM_DRIVER") ||
-    !restaurant.paymentMethods.includes("ONLINE")
+    !restaurant.deliveryModes.includes("PLATFORM_DRIVER")
   ) {
     return null;
   }
@@ -1739,6 +1800,120 @@ export function getClientRestaurantScheduleSummary(
     activeScheduleLabel,
     statusText,
   };
+}
+
+/** «Откроется сегодня/завтра/в пятницу в 09:00» в часовом поясе ресторана. */
+export function formatNextOpeningHint(
+  restaurant: Restaurant,
+  nowMs: number,
+): string | null {
+  const iso = computeNextOpeningIso(restaurant, nowMs);
+  if (!iso) return null;
+  const openMs = Date.parse(iso);
+  const timeZone = restaurant.timeZone || "Europe/Chisinau";
+  const today = localDateParts(nowMs, timeZone);
+  const openDay = localDateParts(openMs, timeZone);
+  const dayDiff = Math.round(
+    (Date.UTC(openDay.year, openDay.month - 1, openDay.day) -
+      Date.UTC(today.year, today.month - 1, today.day)) /
+      86_400_000,
+  );
+  const time = new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone,
+  }).format(new Date(openMs));
+  let dayPhrase: string;
+  if (dayDiff <= 0) dayPhrase = "сегодня";
+  else if (dayDiff === 1) dayPhrase = "завтра";
+  else {
+    const weekdayId = getRestaurantLocalNow(restaurant, new Date(openMs))
+      .weekdayId;
+    dayPhrase = `в ${WEEKDAY_LABELS[weekdayId].toLowerCase()}`;
+  }
+  return `Откроется ${dayPhrase} в ${time}`;
+}
+
+export type RestaurantAvailabilityTone =
+  | "accepting"
+  | "paused"
+  | "closed"
+  | "unavailable";
+
+export interface ClientRestaurantAvailability {
+  state: RestaurantAvailabilityState;
+  /** Можно ли фактически добавить блюдо / отправить заказ прямо сейчас. */
+  canAcceptOrders: boolean;
+  /** Короткая подпись со статусом (для точки-бейджа). */
+  shortLabel: string;
+  /** Вторичная подсказка (возобновление паузы / ближайшее открытие) либо null. */
+  detailLabel: string | null;
+  /** Визуальный тон бейджа. */
+  tone: RestaurantAvailabilityTone;
+}
+
+/**
+ * §4: единая клиентская модель статуса ресторана. Опирается на то же
+ * getRestaurantAvailabilityStateAt, поэтому подпись НИКОГДА не противоречит
+ * фактической возможности заказа и schedule summary. До гидратации (nowMs<=0)
+ * возвращает нейтральный не-зелёный статус без «принимает заказы».
+ */
+export function getClientRestaurantAvailabilityAt(
+  restaurant: Restaurant,
+  nowMs: number,
+): ClientRestaurantAvailability {
+  if (nowMs <= 0) {
+    return {
+      state: "CLOSED_SCHEDULE",
+      canAcceptOrders: false,
+      shortLabel: "—",
+      detailLabel: null,
+      tone: "closed",
+    };
+  }
+  const state = getRestaurantAvailabilityStateAt(restaurant, nowMs);
+  switch (state) {
+    case "ACCEPTING":
+      return {
+        state,
+        canAcceptOrders: true,
+        shortLabel: "Открыто · принимает заказы",
+        detailLabel: null,
+        tone: "accepting",
+      };
+    case "OPERATIONAL_PAUSE":
+      return {
+        state,
+        canAcceptOrders: false,
+        shortLabel: "Временно не принимает заказы",
+        detailLabel: getRestaurantResumeHint(restaurant, nowMs),
+        tone: "paused",
+      };
+    case "CLOSED_SCHEDULE":
+      return {
+        state,
+        canAcceptOrders: false,
+        shortLabel: "Закрыто сейчас",
+        detailLabel: formatNextOpeningHint(restaurant, nowMs),
+        tone: "closed",
+      };
+    case "ADMIN_DISABLED":
+      return {
+        state,
+        canAcceptOrders: false,
+        shortLabel: "Сейчас не принимает заказы",
+        detailLabel: null,
+        tone: "unavailable",
+      };
+    default:
+      return {
+        state: "UNAVAILABLE",
+        canAcceptOrders: false,
+        shortLabel: "Заказы недоступны",
+        detailLabel: null,
+        tone: "unavailable",
+      };
+  }
 }
 
 /** Смещение часового пояса (мс) для момента utcMs. */

@@ -181,23 +181,23 @@ export default function ClientOrderPage() {
           <div className={flowStyles.orderItemList}>
             {order.items.map((item) => (
               <div key={`${item.menuItemId}-${item.selectedVariantId ?? "base"}`}>
-                <span>
-                  <strong>
-                    {item.name}
-                    {item.selectedVariantName && item.variantPriceDeltaCents !== 0
-                      ? ` · ${item.selectedVariantName}`
-                      : ""}
-                  </strong>{" "}
+                <span className={flowStyles.orderItemName}>
+                  {item.name}
+                  {item.selectedVariantName && item.variantPriceDeltaCents !== 0
+                    ? ` · ${item.selectedVariantName}`
+                    : ""}{" "}
                   × {item.quantity}
                   {item.cookingComment ? (
                     <small>Комментарий: {item.cookingComment}</small>
                   ) : null}
                 </span>
-                <span>{formatMoney(item.finalLineTotalCents, item.currencyCode)}</span>
+                <span className={flowStyles.orderItemPrice}>
+                  {formatMoney(item.finalLineTotalCents, item.currencyCode)}
+                </span>
               </div>
             ))}
           </div>
-          <dl className={flowStyles.summaryList}>
+          <dl className={`${flowStyles.summaryList} ${flowStyles.orderTotals}`}>
             <div className={flowStyles.summaryRow}><dt>Еда</dt><dd>{formatMoney(order.financials.foodSubtotalBeforeDiscountsCents)}</dd></div>
             {order.financials.appliedPromotion ? (
               <div className={flowStyles.summaryRow}>
@@ -207,7 +207,7 @@ export default function ClientOrderPage() {
             ) : null}
             <div className={flowStyles.summaryRow}><dt>{order.deliveryMode === "PICKUP" ? "Самовывоз" : "Доставка"}</dt><dd>{formatMoney(order.financials.deliveryFeeCents)}</dd></div>
             {order.financials.smallOrderFeeCents > 0 ? <div className={flowStyles.summaryRow}><dt>Доплата за небольшой заказ</dt><dd>{formatMoney(order.financials.smallOrderFeeCents)}</dd></div> : null}
-            <div className={`${flowStyles.summaryRow} ${flowStyles.summaryTotal}`}><dt>Итого</dt><dd>{formatMoney(order.financials.customerTotalCents)}</dd></div>
+            <div className={`${flowStyles.summaryRow} ${flowStyles.orderGrandTotal}`}><dt>Итого</dt><dd>{formatMoney(order.financials.customerTotalCents)}</dd></div>
           </dl>
           {order.financials.restaurantDelivery ? (
             <div className={flowStyles.zoneNotice}>
@@ -241,10 +241,13 @@ export default function ClientOrderPage() {
           ) : null}
           {/* Для самовывоза внутренняя причина отмены/невыкупа клиенту не
               раскрывается (§4): статусная сводка идёт нейтрально в истории. */}
+          {/* §1: завершённый факт, а не активное предупреждение — спокойная
+              inline-строка без плашки/рамки. Для PICKUP внутреннюю причину
+              по-прежнему не показываем. */}
           {order.cancellationReason && order.deliveryMode !== "PICKUP" ? (
-            <div className={flowStyles.warningNotice}>
-              Причина отмены: {order.cancellationReason}
-            </div>
+            <p className={flowStyles.cancellationReasonInline}>
+              <span>Причина отмены:</span> {order.cancellationReason}
+            </p>
           ) : null}
           <ClientOrderActions order={order} />
         </section>

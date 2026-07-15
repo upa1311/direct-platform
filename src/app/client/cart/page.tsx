@@ -14,17 +14,15 @@ import {
   calculateCartPricing,
   formatMoney,
   getCartItemViews,
+  getClientRestaurantAvailabilityAt,
   getDeliveryModeProviderLabel,
   getPickupPaymentSummary,
   getRestaurant,
-  getRestaurantResumeHint,
   getSmallOrderMissingAmountCents,
   isAddressReady,
   isCustomerNameValid,
   isCustomerPhoneValid,
   isMenuItemAvailableAt,
-  isOperationalPauseActiveAt,
-  isRestaurantAcceptingOrdersAt,
   pluralizePizza,
 } from "@/prototype/selectors";
 
@@ -80,11 +78,11 @@ export default function ClientCartPage() {
     restaurant?.deliveryModes.includes(deliveryMode) === true;
   // Кнопка отправки не блокируется молча из-за адреса: для доставки адрес
   // проверяется при клике (handleSubmit покажет ошибку и сфокусирует поле).
-  // Так клиент всегда может нажать «Отправить заказ» и получить подсказку.
-  // Операционная пауза приёма и доступность каждой позиции (Этап кухни 2).
-  const restaurantPaused = restaurant
-    ? isOperationalPauseActiveAt(restaurant.orderPause, nowMs)
-    : false;
+  // §3/§5: единый источник доступности — совпадает с каталогом/меню/доменом.
+  const availability = restaurant
+    ? getClientRestaurantAvailabilityAt(restaurant, nowMs)
+    : null;
+  const canAcceptOrders = availability?.canAcceptOrders ?? false;
   const hasUnavailableItem = itemViews.some(
     ({ menuItem }) => !isMenuItemAvailableAt(menuItem, nowMs),
   );
@@ -95,9 +93,7 @@ export default function ClientCartPage() {
     customerPhoneIsValid &&
     itemViews.length > 0 &&
     state.cart.paymentMethod === "ONLINE" &&
-    (restaurant
-      ? isRestaurantAcceptingOrdersAt(restaurant, nowMs)
-      : false) &&
+    canAcceptOrders &&
     !hasUnavailableItem &&
     (isPickup ? pricing.customerTotalCents !== null : true);
 
@@ -192,16 +188,14 @@ export default function ClientCartPage() {
         </p>
       ) : null}
 
-      {restaurantPaused ? (
+      {nowMs > 0 && availability && !availability.canAcceptOrders ? (
         <div className={flowStyles.warningNotice} role="status">
-          Ресторан временно не принимает новые заказы. Попробуйте позже или
-          выберите другой ресторан.
-          {restaurant && getRestaurantResumeHint(restaurant, nowMs) ? (
-            <>
-              {" "}
-              {getRestaurantResumeHint(restaurant, nowMs)}
-            </>
-          ) : null}
+          {availability.state === "OPERATIONAL_PAUSE"
+            ? "Ресторан временно не принимает новые заказы. Попробуйте позже или выберите другой ресторан."
+            : availability.state === "CLOSED_SCHEDULE"
+              ? "Ресторан сейчас закрыт. Оформить заказ можно в рабочие часы."
+              : "Ресторан сейчас не принимает заказы. Выберите другой ресторан."}
+          {availability.detailLabel ? <> {availability.detailLabel}</> : null}
         </div>
       ) : null}
       {hasUnavailableItem ? (
