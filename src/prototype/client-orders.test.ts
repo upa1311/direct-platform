@@ -300,7 +300,7 @@ function pickedUpOrder(): { state: PrototypeState; orderId: string } {
   st = acceptRestaurantOrder(st, orderId, 20); // PREPARING
   st = markOrderReady(st, orderId); // READY_FOR_PICKUP
   const code = st.orders.find((o) => o.id === orderId)?.pickupCode as string;
-  st = completePickupWithCode(st, orderId, code).state; // PICKED_UP
+  st = completePickupWithCode(st, orderId, code, "CASH").state; // PICKED_UP
   return { state: st, orderId };
 }
 

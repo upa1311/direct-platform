@@ -849,3 +849,64 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Выдача самовывоза на кухне (KDS) ------------------------------------- */
+.pickupHandoff {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--kds-border);
+  border-radius: 12px;
+  background: var(--kds-surface-subtle);
+}
+
+.pickupAmount {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 750;
+  color: var(--kds-text);
+}
+
+.pickupMethods {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--kds-border);
+  border-radius: 10px;
+  background: var(--kds-surface);
+}
+
+.pickupMethods legend {
+  padding: 0 6px;
+  color: var(--kds-muted);
+  font-size: 13px;
+}
+
+.pickupMethodOption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 650;
+  color: var(--kds-text);
+}
+
+.pickupInstruction {
+  margin: 0;
+  color: var(--kds-text);
+  font-weight: 650;
+}
+
+.pickupAdminHint {
+  margin: 0;
+  color: var(--kds-muted);
+  font-size: 13px;
+}
+
+.pickupError {
+  margin: 0;
+  color: var(--kds-danger);
+  font-size: 14px;
+  font-weight: 700;
+}

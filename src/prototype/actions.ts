@@ -53,6 +53,8 @@ import {
   isMenuItemAvailableAt,
   isOperationalPauseActiveAt,
   isRestaurantAcceptingOrdersAt,
+  getPickupNoShowEligibleAtIso,
+  isPickupNoShowEligibleAt,
   WORKING_RESTAURANT_IDS,
 } from "./selectors";
 import {
@@ -532,6 +534,11 @@ export function createOrderFromCart(
     cancellationReason: null,
     pickupCode,
     pickupCodeUsed: false,
+    // §3: исторический снимок способов оплаты на точке (для PICKUP).
+    pickupPaymentMethodsSnapshot: isPickup
+      ? [...restaurant.pickupPaymentMethods]
+      : [],
+    pickupPaidWith: null,
     assignedDriverId: null,
     driverAssignedAt: null,
     etaAdjustments: [],
@@ -1741,47 +1748,114 @@ export function markOrderDelivered(
 export interface CompletePickupResult {
   ok: boolean;
   error: string | null;
+  /** Способ, которым фактически заплатил клиент; null при любой ошибке. */
+  paidWith: PickupPaymentMethod | null;
+}
+
+/** Ровно четыре цифры (после trim). */
+function isFourDigitCode(value: string): boolean {
+  return /^\d{4}$/.test(value.trim());
 }
 
 /**
- * Атомарная выдача самовывоза по коду клиента: оплата в ресторане, выдача,
- * начисление комиссии Direct. Единственный путь завершить PICKUP-заказ.
+ * Атомарная выдача самовывоза по коду клиента: фиксирует оплату на точке,
+ * переводит заказ в PICKED_UP и один раз начисляет комиссию Direct. Единственный
+ * штатный путь завершить PICKUP-заказ. Все проверки — до любой мутации; при любой
+ * ошибке состояние возвращается тем же ref (идемпотентность повторного вызова).
  */
 export function completePickupWithCode(
   state: PrototypeState,
   orderId: string,
   code: string,
+  paidWith: PickupPaymentMethod,
   actor: OrderActionActor = "RESTAURANT",
+  nowIso: string = new Date().toISOString(),
 ): ActionResult<CompletePickupResult> {
-  const order = state.orders.find((o) => o.id === orderId);
-  const done = (error: string | null): ActionResult<CompletePickupResult> => ({
+  const fail = (error: string): ActionResult<CompletePickupResult> => ({
     state,
-    result: { ok: error === null, error },
+    result: { ok: false, error, paidWith: null },
   });
 
+  // 1. Корректное время операции (детерминизм, единый nowIso).
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return fail("Некорректное время операции.");
+  }
+  // 2-3. Существование и тип заказа.
+  const order = state.orders.find((o) => o.id === orderId);
   if (!order || order.deliveryMode !== "PICKUP") {
-    return done("Заказ не найден или не является самовывозом.");
+    return fail("Заказ не найден или не является самовывозом.");
   }
+  // 14. Повторная выдача — без двойной мутации, тот же ref состояния.
   if (order.status === "PICKED_UP" || order.pickupCodeUsed) {
-    return done("Заказ уже выдан.");
+    return fail("Заказ уже выдан.");
   }
+  // 4. Готовность к выдаче.
   if (order.status !== "READY_FOR_PICKUP") {
-    return done("Заказ ещё не готов к выдаче.");
+    return fail("Заказ ещё не готов к выдаче.");
   }
-  if (!order.pickupCode || code.trim() !== order.pickupCode) {
-    return done("Неверный код клиента.");
+  // 5. Способ оплаты заказа — оплата на точке.
+  if (order.paymentMethod !== "PAY_AT_RESTAURANT") {
+    return fail("Этот заказ не оплачивается при получении.");
+  }
+  // 6. Оплата ещё ожидается на точке.
+  if (order.paymentStatus !== "DUE_AT_PICKUP") {
+    return fail("Оплата по заказу не ожидается.");
+  }
+  // 7. Код выдачи существует.
+  if (!order.pickupCode) {
+    return fail("Для заказа не сгенерирован код выдачи.");
+  }
+  // 8. Код ещё не использован (дублирует 14 на уровне флага).
+  if (order.pickupCodeUsed) {
+    return fail("Заказ уже выдан.");
+  }
+  // 9. Ровно четыре цифры.
+  if (!isFourDigitCode(code)) {
+    return fail("Код должен состоять из четырёх цифр.");
+  }
+  // 10. Код совпадает.
+  if (code.trim() !== order.pickupCode) {
+    return fail("Неверный код клиента.");
+  }
+  // 11. Способ оплаты выбран корректно.
+  if (paidWith !== "CASH" && paidWith !== "CARD") {
+    return fail("Выберите способ оплаты.");
+  }
+  // 12. Способ доступен на точке (по историческому снимку).
+  if (!order.pickupPaymentMethodsSnapshot.includes(paidWith)) {
+    return fail("Этот способ оплаты недоступен на точке.");
+  }
+  // 13. Комиссия ещё не начислена.
+  const settlementId = `settlement-${orderId}`;
+  if (
+    state.settlements.some(
+      (entry) => entry.id === settlementId || entry.orderId === orderId,
+    )
+  ) {
+    return fail("Начисление по заказу уже создано.");
   }
 
-  const now = new Date().toISOString();
+  const now = nowIso;
   const nextHistoryNumber = order.history.length + 1;
-  const issuedBy =
-    actor === "ADMIN" ? "Администратор Direct подтвердил выдачу" : "Заказ выдан";
+  const paymentMessage =
+    actor === "ADMIN"
+      ? paidWith === "CASH"
+        ? "Администратор Direct подтвердил оплату наличными в ресторане."
+        : "Администратор Direct подтвердил оплату картой в ресторане."
+      : paidWith === "CASH"
+        ? "Оплата получена в ресторане наличными."
+        : "Оплата получена в ресторане картой.";
+  const statusMessage =
+    actor === "ADMIN"
+      ? "Администратор Direct подтвердил выдачу клиенту по коду."
+      : "Заказ выдан клиенту по коду.";
   const updatedOrder: Order = {
     ...order,
     status: "PICKED_UP",
     paymentStatus: "PAID_AT_RESTAURANT",
     paidAt: now,
     pickupCodeUsed: true,
+    pickupPaidWith: paidWith,
     updatedAt: now,
     history: [
       ...order.history,
@@ -1792,7 +1866,7 @@ export function completePickupWithCode(
         type: "PAYMENT",
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "READY_FOR_PICKUP",
-        message: "Оплата получена в ресторане.",
+        message: paymentMessage,
       },
       {
         id: `${order.id}-history-${nextHistoryNumber + 1}`,
@@ -1801,16 +1875,12 @@ export function completePickupWithCode(
         type: "STATUS",
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "PICKED_UP",
-        message: `${issuedBy} клиенту по коду.`,
+        message: statusMessage,
       },
     ],
   };
 
-  // Начисление комиссии создаётся один раз (id привязан к заказу).
-  const settlementId = `settlement-${orderId}`;
-  const alreadySettled = state.settlements.some(
-    (entry) => entry.id === settlementId || entry.orderId === orderId,
-  );
+  // Начисление комиссии по историческому финснимку заказа (без пересчёта).
   const settlement: SettlementEntry = {
     id: settlementId,
     orderId,
@@ -1826,37 +1896,67 @@ export function completePickupWithCode(
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
-      settlements: alreadySettled
-        ? state.settlements
-        : [...state.settlements, settlement],
+      settlements: [...state.settlements, settlement],
     },
     now,
   );
-  return { state: nextState, result: { ok: true, error: null } };
+  return { state: nextState, result: { ok: true, error: null, paidWith } };
+}
+
+export const PICKUP_NO_SHOW_REASON_MAX_LENGTH = 300;
+
+export interface PickupNoShowResult {
+  ok: boolean;
+  error: string | null;
+  /** ISO-момент, с которого невыкуп допустим (для UI); null, если неприменимо. */
+  eligibleAt: string | null;
 }
 
 /**
  * Невыкуп: заказ готов, но клиент не пришёл. Закрывается без комиссии Direct;
- * увеличивается счётчик невыкупов клиента.
+ * увеличивается счётчик невыкупов клиента. Разрешён не раньше 30 минут после
+ * РЕАЛЬНОГО перехода в READY_FOR_PICKUP (по STATUS-событию, не по updatedAt).
+ * Оплата остаётся DUE_AT_PICKUP, paidAt/pickupPaidWith — null, код не гасится,
+ * начислений нет. Идемпотентен: повторный вызов не мутирует состояние повторно.
  */
 export function markPickupNoShow(
   state: PrototypeState,
   orderId: string,
   reason: string,
   actor: OrderActionActor = "RESTAURANT",
-): PrototypeState {
+  nowIso: string = new Date().toISOString(),
+): ActionResult<PickupNoShowResult> {
+  const fail = (
+    error: string,
+    eligibleAt: string | null = null,
+  ): ActionResult<PickupNoShowResult> => ({
+    state,
+    result: { ok: false, error, eligibleAt },
+  });
+
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return fail("Некорректное время операции.");
+  }
   const order = state.orders.find((o) => o.id === orderId);
+  if (!order || order.deliveryMode !== "PICKUP") {
+    return fail("Заказ не найден или не является самовывозом.");
+  }
+  if (order.status !== "READY_FOR_PICKUP") {
+    return fail("Невыкуп можно отметить только для готового к выдаче заказа.");
+  }
   const normalizedReason = reason.trim();
-  if (
-    !order ||
-    order.deliveryMode !== "PICKUP" ||
-    order.status !== "READY_FOR_PICKUP" ||
-    !normalizedReason
-  ) {
-    return state;
+  if (!normalizedReason) {
+    return fail("Укажите причину невыкупа.");
+  }
+  if (normalizedReason.length > PICKUP_NO_SHOW_REASON_MAX_LENGTH) {
+    return fail("Причина слишком длинная.");
+  }
+  const eligibleAt = getPickupNoShowEligibleAtIso(order);
+  if (!isPickupNoShowEligibleAt(order, nowIso)) {
+    return fail("Невыкуп ещё нельзя отметить: не прошло 30 минут.", eligibleAt);
   }
 
-  const now = new Date().toISOString();
+  const now = nowIso;
   const noShowPrefix =
     actor === "ADMIN" ? "Администратор Direct отметил невыкуп. " : "";
   const updatedOrder: Order = {
@@ -1878,7 +1978,7 @@ export function markPickupNoShow(
     ],
   };
 
-  return finalizeMutation(
+  const nextState = finalizeMutation(
     state,
     {
       ...state,
@@ -1893,6 +1993,7 @@ export function markPickupNoShow(
     },
     now,
   );
+  return { state: nextState, result: { ok: true, error: null, eligibleAt } };
 }
 
 // --- Оперативные административные действия -----------------------------------
@@ -2948,59 +3049,94 @@ export function correctOrderStatus(
 }
 
 /**
- * Аварийная выдача самовывоза без кода (§9). Доступна только администратору,
- * требует причину. Логика оплаты и начисления идентична выдаче по коду; вторая
- * комиссия не создаётся (settlement идемпотентен по id заказа).
+ * Аварийная выдача самовывоза без кода (§10). Доступна только администратору
+ * Direct (кухня такой кнопки не имеет), требует причину (1..300) и способ оплаты
+ * на точке. Инварианты оплаты, статуса и начисления идентичны штатной выдаче по
+ * коду; вторая комиссия не создаётся (settlement идемпотентен по id заказа).
  */
 export function issuePickupWithoutCode(
   state: PrototypeState,
   orderId: string,
   reason: string,
+  paidWith: PickupPaymentMethod,
+  actor: OrderActionActor = "ADMIN",
+  nowIso: string = new Date().toISOString(),
 ): ActionResult<AdminActionResult> {
-  const order = state.orders.find((o) => o.id === orderId);
-  const normalizedReason = reason.trim();
-  const done = (error: string | null): ActionResult<AdminActionResult> => ({
+  const fail = (error: string): ActionResult<AdminActionResult> => ({
     state,
-    result: { ok: error === null, error },
+    result: { ok: false, error },
   });
 
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return fail("Некорректное время операции.");
+  }
+  const order = state.orders.find((o) => o.id === orderId);
   if (!order || order.deliveryMode !== "PICKUP") {
-    return done("Заказ не найден или не является самовывозом.");
+    return fail("Заказ не найден или не является самовывозом.");
   }
   if (order.status === "PICKED_UP" || order.pickupCodeUsed) {
-    return done("Заказ уже выдан.");
+    return fail("Заказ уже выдан.");
   }
   if (order.status !== "READY_FOR_PICKUP") {
-    return done("Заказ ещё не готов к выдаче.");
+    return fail("Заказ ещё не готов к выдаче.");
   }
+  if (order.paymentMethod !== "PAY_AT_RESTAURANT") {
+    return fail("Этот заказ не оплачивается при получении.");
+  }
+  if (order.paymentStatus !== "DUE_AT_PICKUP") {
+    return fail("Оплата по заказу не ожидается.");
+  }
+  const normalizedReason = reason.trim();
   if (!normalizedReason) {
-    return done("Укажите причину аварийной выдачи.");
+    return fail("Укажите причину аварийной выдачи.");
+  }
+  if (normalizedReason.length > PICKUP_NO_SHOW_REASON_MAX_LENGTH) {
+    return fail("Причина слишком длинная.");
+  }
+  if (paidWith !== "CASH" && paidWith !== "CARD") {
+    return fail("Выберите способ оплаты.");
+  }
+  if (!order.pickupPaymentMethodsSnapshot.includes(paidWith)) {
+    return fail("Этот способ оплаты недоступен на точке.");
+  }
+  const settlementId = `settlement-${orderId}`;
+  if (
+    state.settlements.some(
+      (entry) => entry.id === settlementId || entry.orderId === orderId,
+    )
+  ) {
+    return fail("Начисление по заказу уже создано.");
   }
 
-  const now = new Date().toISOString();
+  const now = nowIso;
   const nextHistoryNumber = order.history.length + 1;
+  const paymentMessage =
+    paidWith === "CASH"
+      ? "Оплата получена в ресторане наличными (аварийная выдача)."
+      : "Оплата получена в ресторане картой (аварийная выдача).";
   const updatedOrder: Order = {
     ...order,
     status: "PICKED_UP",
     paymentStatus: "PAID_AT_RESTAURANT",
     paidAt: now,
     pickupCodeUsed: true,
+    pickupPaidWith: paidWith,
     updatedAt: now,
     history: [
       ...order.history,
       {
         id: `${order.id}-history-${nextHistoryNumber}`,
         occurredAt: now,
-        actor: "ADMIN",
+        actor,
         type: "PAYMENT",
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "READY_FOR_PICKUP",
-        message: "Оплата получена в ресторане (аварийная выдача).",
+        message: paymentMessage,
       },
       {
         id: `${order.id}-history-${nextHistoryNumber + 1}`,
         occurredAt: now,
-        actor: "ADMIN",
+        actor,
         type: "STATUS",
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "PICKED_UP",
@@ -3009,10 +3145,6 @@ export function issuePickupWithoutCode(
     ],
   };
 
-  const settlementId = `settlement-${orderId}`;
-  const alreadySettled = state.settlements.some(
-    (entry) => entry.id === settlementId || entry.orderId === orderId,
-  );
   const settlement: SettlementEntry = {
     id: settlementId,
     orderId,
@@ -3028,9 +3160,7 @@ export function issuePickupWithoutCode(
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
-      settlements: alreadySettled
-        ? state.settlements
-        : [...state.settlements, settlement],
+      settlements: [...state.settlements, settlement],
     },
     now,
   );

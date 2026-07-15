@@ -8,6 +8,7 @@ import { OrderHistory } from "@/components/order-flow/order-history";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
+import type { Order } from "@/prototype/models";
 import {
   deliveryModeLabels,
   formatMoney,
@@ -19,7 +20,81 @@ import {
   orderStatusLabels,
   paymentMethodLabels,
   paymentStatusLabels,
+  pickupPaymentMethodLabels,
 } from "@/prototype/selectors";
+
+/** Невыкуп: PICKUP-заказ закрыт из статуса «Готов к выдаче» (по истории). */
+function isPickupNoShow(order: Order): boolean {
+  return (
+    order.deliveryMode === "PICKUP" &&
+    order.status === "CANCELED" &&
+    order.history.some(
+      (e) =>
+        e.type === "STATUS" &&
+        e.fromStatus === "READY_FOR_PICKUP" &&
+        e.toStatus === "CANCELED",
+    )
+  );
+}
+
+/**
+ * §13: клиентский блок самовывоза. До готовности — подсказка; в READY_FOR_PICKUP
+ * — карточка «Заказ готов к выдаче» с рестораном, адресом, суммой, способами
+ * оплаты, крупным четырёхзначным кодом и инструкцией. После выдачи код скрыт и
+ * показано «Заказ получен.»; при невыкупе — нейтральное сообщение без внутренних
+ * причин/счётчиков/начислений.
+ */
+function ClientPickupBlock({ order }: { order: Order }) {
+  if (order.status === "PICKED_UP" || order.pickupCodeUsed) {
+    return (
+      <div className={flowStyles.successNotice} role="status">
+        Заказ получен.
+      </div>
+    );
+  }
+  if (isPickupNoShow(order)) {
+    return (
+      <div className={flowStyles.warningNotice} role="status">
+        Заказ был закрыт как невыкупленный.
+      </div>
+    );
+  }
+  if (order.status === "READY_FOR_PICKUP" && order.pickupCode) {
+    const methods =
+      order.pickupPaymentMethodsSnapshot.length > 0
+        ? order.pickupPaymentMethodsSnapshot
+            .map((m) => pickupPaymentMethodLabels[m])
+            .join(" или ")
+        : "уточните в ресторане";
+    return (
+      <div className={`${flowStyles.zoneNotice} ${flowStyles.pickupReadyCard}`}>
+        <strong>Заказ готов к выдаче</strong>
+        <div>
+          {order.restaurant.name} · {order.restaurant.address}
+        </div>
+        <div>К оплате в ресторане: {formatMoney(order.financials.customerTotalCents)}</div>
+        <div>Способы оплаты на точке: {methods}</div>
+        <span className={flowStyles.pickupCode}>{order.pickupCode}</span>
+        <p className={flowStyles.pickupInstruction}>
+          Назовите этот четырёхзначный код в ресторане при получении и оплате
+          заказа.
+        </p>
+      </div>
+    );
+  }
+  if (
+    order.status === "RESTAURANT_REVIEW" ||
+    order.status === "AWAITING_PAYMENT" ||
+    order.status === "PREPARING"
+  ) {
+    return (
+      <p className={flowStyles.summaryHint}>
+        Код получения появится, когда заказ будет готов.
+      </p>
+    );
+  }
+  return null;
+}
 
 export default function ClientOrderPage() {
   const params = useParams<{ orderId: string }>();
@@ -108,23 +183,8 @@ export default function ClientOrderPage() {
               Ожидаемая готовность: {formatOrderEtaClock(state, order)}.
             </div>
           ) : null}
-          {order.deliveryMode === "PICKUP" &&
-          order.pickupCode &&
-          !order.pickupCodeUsed &&
-          (order.status === "RESTAURANT_REVIEW" ||
-            order.status === "PREPARING") ? (
-            <p className={flowStyles.summaryHint}>
-              Код получения появится, когда заказ будет готов.
-            </p>
-          ) : null}
-          {order.deliveryMode === "PICKUP" &&
-          order.pickupCode &&
-          !order.pickupCodeUsed &&
-          order.status === "READY_FOR_PICKUP" ? (
-            <div className={flowStyles.zoneNotice}>
-              Код получения: <strong>{order.pickupCode}</strong>. Назовите его в
-              ресторане при получении и оплате заказа.
-            </div>
+          {order.deliveryMode === "PICKUP" ? (
+            <ClientPickupBlock order={order} />
           ) : null}
           <h3>Состав заказа</h3>
           <div className={flowStyles.orderItemList}>
@@ -188,7 +248,7 @@ export default function ClientOrderPage() {
               {getClientAutoCancelMessage(order)}
             </div>
           ) : null}
-          {order.cancellationReason ? (
+          {order.cancellationReason && !isPickupNoShow(order) ? (
             <div className={flowStyles.warningNotice}>
               Причина отмены: {order.cancellationReason}
             </div>

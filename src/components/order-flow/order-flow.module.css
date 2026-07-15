@@ -1730,3 +1730,91 @@
   font-size: 13px;
   font-weight: 700;
 }
+
+/* --- Выдача самовывоза (KDS / админ / клиент) ----------------------------- */
+.pickupHandoff {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #dfe3df;
+  border-radius: 12px;
+  background: #fbfcfb;
+}
+
+.pickupAmount {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 750;
+}
+
+.pickupMethods {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #dfe3df;
+  border-radius: 10px;
+}
+
+.pickupMethods legend {
+  padding: 0 6px;
+  color: #59625c;
+  font-size: 13px;
+}
+
+.pickupMethodOption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 650;
+}
+
+.pickupEmergency {
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid #ead3b8;
+  border-radius: 10px;
+  background: #fff8ef;
+}
+
+.pickupEmergency summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #744a1c;
+}
+
+.pickupEmergency .field,
+.pickupEmergency .pickupMethods {
+  margin-top: 12px;
+}
+
+.errorText {
+  margin: 0;
+  color: #a12a1a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* Крупный код выдачи в клиентском экране «Заказ готов». */
+.pickupCode {
+  display: inline-flex;
+  gap: 10px;
+  margin: 8px 0;
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: 10px;
+  color: #1f6f43;
+}
+
+.pickupReadyCard {
+  display: grid;
+  gap: 12px;
+}
+
+.pickupInstruction {
+  margin: 0;
+  color: #202522;
+  font-size: 15px;
+  font-weight: 650;
+}

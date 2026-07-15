@@ -433,6 +433,13 @@ export interface Order {
   /** Одноразовый код выдачи самовывоза (только для PICKUP). */
   pickupCode: string | null;
   pickupCodeUsed: boolean;
+  /**
+   * Исторический снимок способов оплаты на точке на момент заказа (§3).
+   * Для не-PICKUP — []. Изменение настроек ресторана его не меняет.
+   */
+  pickupPaymentMethodsSnapshot: PickupPaymentMethod[];
+  /** Чем клиент фактически заплатил при выдаче (§4). null до выдачи/невыкупа. */
+  pickupPaidWith: PickupPaymentMethod | null;
   /** Назначенный водитель Direct (только PLATFORM_DRIVER). */
   assignedDriverId: string | null;
   /** Время назначения водителя. */

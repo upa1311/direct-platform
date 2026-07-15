@@ -15,6 +15,7 @@ import {
   type RestaurantFormInput,
 } from "./actions.ts";
 import { upgradeToV6 } from "./prototype-store.ts";
+import { getPickupNoShowEligibleAtIso } from "./selectors.ts";
 import type { PrototypeState } from "./models.ts";
 
 function makeReadyPickupOrder(): {
@@ -50,7 +51,7 @@ test("самовывоз: заказ не запускает онлайн-опл
 
 test("неправильный код не завершает заказ и не создаёт settlement", () => {
   const { state, orderId } = makeReadyPickupOrder();
-  const result = completePickupWithCode(state, orderId, "0000");
+  const result = completePickupWithCode(state, orderId, "0000", "CASH");
   assert.equal(result.result.ok, false);
   const order = result.state.orders.find((o) => o.id === orderId);
   assert.equal(order?.status, "READY_FOR_PICKUP");
@@ -59,11 +60,12 @@ test("неправильный код не завершает заказ и не
 
 test("правильный код завершает заказ, оплата и одна ledger-запись", () => {
   const { state, orderId, code } = makeReadyPickupOrder();
-  const result = completePickupWithCode(state, orderId, code);
+  const result = completePickupWithCode(state, orderId, code, "CASH");
   assert.equal(result.result.ok, true);
   const order = result.state.orders.find((o) => o.id === orderId);
   assert.equal(order?.status, "PICKED_UP");
   assert.equal(order?.paymentStatus, "PAID_AT_RESTAURANT");
+  assert.equal(order?.pickupPaidWith, "CASH");
   assert.equal(result.state.settlements.length, 1);
   const entry = result.state.settlements[0];
   assert.equal(entry.orderId, orderId);
@@ -75,8 +77,8 @@ test("правильный код завершает заказ, оплата и
 
 test("повторное использование кода не создаёт вторую ledger-запись", () => {
   const { state, orderId, code } = makeReadyPickupOrder();
-  const first = completePickupWithCode(state, orderId, code);
-  const second = completePickupWithCode(first.state, orderId, code);
+  const first = completePickupWithCode(state, orderId, code, "CASH");
+  const second = completePickupWithCode(first.state, orderId, code, "CASH");
   assert.equal(second.result.ok, false);
   assert.equal(second.state.settlements.length, 1);
 });
@@ -84,11 +86,22 @@ test("повторное использование кода не создаёт
 test("невыкуп: без комиссии и увеличивает noShowPickupCount", () => {
   const { state, orderId } = makeReadyPickupOrder();
   const before = state.customer.noShowPickupCount;
-  const next = markPickupNoShow(state, orderId, "Клиент не пришёл");
-  const order = next.orders.find((o) => o.id === orderId);
+  const order0 = state.orders.find((o) => o.id === orderId);
+  assert.ok(order0);
+  const eligibleAt = getPickupNoShowEligibleAtIso(order0);
+  assert.ok(eligibleAt);
+  const next = markPickupNoShow(
+    state,
+    orderId,
+    "Клиент не пришёл",
+    "RESTAURANT",
+    eligibleAt,
+  );
+  assert.equal(next.result.ok, true);
+  const order = next.state.orders.find((o) => o.id === orderId);
   assert.equal(order?.status, "CANCELED");
-  assert.equal(next.settlements.length, 0);
-  assert.equal(next.customer.noShowPickupCount, before + 1);
+  assert.equal(next.state.settlements.length, 0);
+  assert.equal(next.state.customer.noShowPickupCount, before + 1);
 });
 
 test("расчётная комиссия начисляется только после выдачи", () => {
@@ -97,7 +110,7 @@ test("расчётная комиссия начисляется только п
   assert.equal(state.settlements.length, 0);
   const order = state.orders.find((o) => o.id === orderId);
   assert.equal(order?.financials.restaurantCommissionCents, 240);
-  const done = completePickupWithCode(state, orderId, code);
+  const done = completePickupWithCode(state, orderId, code, "CASH");
   assert.equal(done.state.settlements.length, 1);
 });
 

@@ -70,6 +70,7 @@ import {
   type CreateRestaurantResult,
   type OperationalActionResult,
   type OrderActionActor,
+  type PickupNoShowResult,
   type RepeatOrderResult,
   type RequestCancellationResult,
   type RestaurantFormInput,
@@ -85,6 +86,7 @@ import type {
   OperationalPauseMode,
   OrderStatus,
   PaymentMethod,
+  PickupPaymentMethod,
   Promotion,
   PrototypeState,
   TariffMatrix,
@@ -194,13 +196,14 @@ interface PrototypeContextValue {
   completePickup: (
     orderId: string,
     code: string,
+    paidWith: PickupPaymentMethod,
     actor?: OrderActionActor,
   ) => CompletePickupResult;
   markPickupNoShow: (
     orderId: string,
     reason: string,
     actor?: OrderActionActor,
-  ) => void;
+  ) => PickupNoShowResult;
   markOutForDelivery: (orderId: string, actor?: OrderActionActor) => void;
   markArriving: (orderId: string, actor?: OrderActionActor) => void;
   markDelivered: (orderId: string, actor?: OrderActionActor) => void;
@@ -220,7 +223,11 @@ interface PrototypeContextValue {
     newStatus: OrderStatus,
     reason: string,
   ) => AdminActionResult;
-  issuePickupNoCode: (orderId: string, reason: string) => AdminActionResult;
+  issuePickupNoCode: (
+    orderId: string,
+    reason: string,
+    paidWith: PickupPaymentMethod,
+  ) => AdminActionResult;
   saveTariffMatrix: (tariffs: TariffMatrix) => void;
   restoreTariffs: () => void;
   createRestaurantEntry: (input: RestaurantFormInput) => CreateRestaurantResult;
@@ -681,12 +688,19 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const completePickup = useCallback(
-    (orderId: string, code: string, actor: OrderActionActor = "RESTAURANT") => {
+    (
+      orderId: string,
+      code: string,
+      paidWith: PickupPaymentMethod,
+      actor: OrderActionActor = "RESTAURANT",
+    ) => {
       const action = completePickupWithCode(
         stateRef.current,
         orderId,
         code,
+        paidWith,
         actor,
+        new Date().toISOString(),
       );
       if (action.state !== stateRef.current) {
         replaceState(action.state);
@@ -698,7 +712,17 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
   const markPickupNoShow = useCallback(
     (orderId: string, reason: string, actor: OrderActionActor = "RESTAURANT") => {
-      replaceState(runPickupNoShow(stateRef.current, orderId, reason, actor));
+      const action = runPickupNoShow(
+        stateRef.current,
+        orderId,
+        reason,
+        actor,
+        new Date().toISOString(),
+      );
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
     },
     [replaceState],
   );
@@ -804,8 +828,17 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const issuePickupNoCode = useCallback(
-    (orderId: string, reason: string) =>
-      runAdminOrderAction((s) => issuePickupWithoutCode(s, orderId, reason)),
+    (orderId: string, reason: string, paidWith: PickupPaymentMethod) =>
+      runAdminOrderAction((s) =>
+        issuePickupWithoutCode(
+          s,
+          orderId,
+          reason,
+          paidWith,
+          "ADMIN",
+          new Date().toISOString(),
+        ),
+      ),
     [runAdminOrderAction],
   );
 

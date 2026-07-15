@@ -18,9 +18,15 @@ import {
 } from "@/components/workspaces/kitchen-sound";
 import { usePrototype } from "@/prototype/prototype-provider";
 import { RESTAURANT_RESPONSE_TIMEOUT_MS } from "@/prototype/actions";
-import type { CancellationRequest, DeliveryMode, Order } from "@/prototype/models";
+import type {
+  CancellationRequest,
+  DeliveryMode,
+  Order,
+  PickupPaymentMethod,
+} from "@/prototype/models";
 import {
   formatKitchenCountdown,
+  formatMoney,
   getAudibleKitchenReviewOrders,
   getCancellationRequestForOrder,
   getKitchenAwaitingPaymentOrders,
@@ -34,6 +40,7 @@ import {
   getRestaurant,
   isKitchenBeepDue,
   paymentStatusLabels,
+  pickupPaymentMethodLabels,
 } from "@/prototype/selectors";
 
 const ATTENTION_THRESHOLD_MS = 2 * 60 * 1000;
@@ -390,15 +397,111 @@ function PreparingCard({
   );
 }
 
+/**
+ * §8: инлайновая выдача самовывоза на кухне. Способ оплаты (радио, авто-выбор
+ * при одном), ввод названного клиентом четырёхзначного кода (только цифры),
+ * подтверждение одним доменным действием. Код клиента здесь НЕ отображается.
+ * Ошибка не закрывает панель и не стирает код; успех убирает карточку (статус
+ * заказа меняется на PICKED_UP).
+ */
+function KitchenPickupHandoff({ order }: { order: Order }) {
+  const { completePickup } = usePrototype();
+  const methods = order.pickupPaymentMethodsSnapshot;
+  const single = methods.length === 1 ? methods[0] : null;
+  const [paidWith, setPaidWith] = useState<PickupPaymentMethod | null>(single);
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const codeValid = /^\d{4}$/.test(code.trim());
+  const canConfirm = codeValid && paidWith !== null;
+
+  const doConfirm = () => {
+    if (!paidWith) {
+      setError("Выберите способ оплаты.");
+      return;
+    }
+    const res = completePickup(order.id, code, paidWith, "RESTAURANT");
+    if (!res.ok) {
+      setError(res.error ?? "Не удалось подтвердить выдачу.");
+      return;
+    }
+    setError(null);
+  };
+
+  return (
+    <div className={kds.pickupHandoff}>
+      <p className={kds.pickupAmount}>
+        К оплате: {formatMoney(order.financials.customerTotalCents)}
+      </p>
+      <fieldset className={kds.pickupMethods}>
+        <legend>Способ оплаты на точке</legend>
+        {methods.length === 0 ? (
+          <span>Способы оплаты не заданы.</span>
+        ) : (
+          methods.map((method) => (
+            <label key={method} className={kds.pickupMethodOption}>
+              <input
+                type="radio"
+                name={`kds-pay-${order.id}`}
+                value={method}
+                checked={paidWith === method}
+                onChange={() => {
+                  setPaidWith(method);
+                  setError(null);
+                }}
+              />
+              <span>{pickupPaymentMethodLabels[method]}</span>
+            </label>
+          ))
+        )}
+      </fieldset>
+      <label className={kds.field}>
+        <span>Код клиента</span>
+        <input
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          maxLength={4}
+          value={code}
+          placeholder="4 цифры"
+          onChange={(event) => {
+            setCode(event.target.value.replace(/\D/g, "").slice(0, 4));
+            setError(null);
+          }}
+        />
+      </label>
+      <p className={kds.pickupInstruction}>
+        Попросите клиента назвать четырёхзначный код.
+      </p>
+      {error ? (
+        <p className={kds.pickupError} role="alert">
+          {error}
+        </p>
+      ) : null}
+      <button
+        className={`${kds.btn} ${kds.btnGreen}`}
+        type="button"
+        disabled={!canConfirm}
+        onClick={doConfirm}
+      >
+        Подтвердить оплату и выдать
+      </button>
+      <p className={kds.pickupAdminHint}>
+        Нет кода клиента? Обратитесь к администратору Direct.
+      </p>
+    </div>
+  );
+}
+
 function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
   const { state } = usePrototype();
   const request = getCancellationRequestForOrder(state, order.id);
-  const waitingFor =
-    order.status === "READY_FOR_PICKUP"
-      ? "Ожидает клиента"
-      : order.deliveryMode === "RESTAURANT_DELIVERY"
-        ? "Ожидает курьера ресторана"
-        : "Ожидает водителя Direct";
+  const isPickup = order.status === "READY_FOR_PICKUP";
+  const waitingFor = isPickup
+    ? "Ожидает клиента"
+    : order.deliveryMode === "RESTAURANT_DELIVERY"
+      ? "Ожидает курьера ресторана"
+      : "Ожидает водителя Direct";
 
   return (
     <article className={kds.card}>
@@ -414,6 +517,12 @@ function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
       {request?.status === "PENDING" ? (
         <CancellationRequestNotice request={request} />
       ) : null}
+      {isPickup ? (
+        <div className={kds.metaLine}>
+          Клиент: {order.customer.name || "—"}
+          {order.customer.phone ? ` · ${order.customer.phone}` : ""}
+        </div>
+      ) : null}
       <div className={kds.metaLine}>
         Оплата: {paymentStatusLabels[order.paymentStatus]}
       </div>
@@ -422,6 +531,7 @@ function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
       <p className={kds.subtle}>
         Готов {formatElapsed(getOrderReadySince(order), nowMs)} назад
       </p>
+      {isPickup ? <KitchenPickupHandoff order={order} /> : null}
     </article>
   );
 }

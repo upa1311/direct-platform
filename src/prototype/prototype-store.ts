@@ -205,7 +205,15 @@ function normalizeFinancials(
   };
 }
 
-function normalizeOrder(value: unknown): Order {
+function normalizePickupMethods(value: unknown): ("CASH" | "CARD")[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((m): m is "CASH" | "CARD" => m === "CASH" || m === "CARD");
+}
+
+function normalizeOrder(
+  value: unknown,
+  restaurants: PrototypeState["restaurants"],
+): Order {
   const raw = isRecord(value) ? value : {};
   const deliveryMode = normalizeDeliveryMode(raw.deliveryMode);
   const wasCashOrder =
@@ -227,6 +235,27 @@ function normalizeOrder(value: unknown): Order {
     : [];
   const restaurant = isRecord(raw.restaurant) ? raw.restaurant : {};
   const customer = isRecord(raw.customer) ? raw.customer : {};
+
+  // §3: снимок способов оплаты на точке. Если поле есть — сохраняем как есть;
+  // для legacy PICKUP без поля восстанавливаем из ресторана, иначе безопасный
+  // fallback ["CASH","CARD"]; для не-PICKUP — [].
+  let pickupPaymentMethodsSnapshot: ("CASH" | "CARD")[];
+  if (Array.isArray(raw.pickupPaymentMethodsSnapshot)) {
+    pickupPaymentMethodsSnapshot = normalizePickupMethods(
+      raw.pickupPaymentMethodsSnapshot,
+    );
+  } else if (deliveryMode === "PICKUP") {
+    const rest = restaurants.find((r) => r.id === str(restaurant.id, ""));
+    const fromRestaurant = normalizePickupMethods(rest?.pickupPaymentMethods);
+    pickupPaymentMethodsSnapshot =
+      fromRestaurant.length > 0 ? fromRestaurant : ["CASH", "CARD"];
+  } else {
+    pickupPaymentMethodsSnapshot = [];
+  }
+  const pickupPaidWith =
+    raw.pickupPaidWith === "CASH" || raw.pickupPaidWith === "CARD"
+      ? raw.pickupPaidWith
+      : null;
 
   return {
     id: str(raw.id, ""),
@@ -285,6 +314,8 @@ function normalizeOrder(value: unknown): Order {
         : null,
     pickupCode: typeof raw.pickupCode === "string" ? raw.pickupCode : null,
     pickupCodeUsed: raw.pickupCodeUsed === true,
+    pickupPaymentMethodsSnapshot,
+    pickupPaidWith,
     // Назначение водителя: у старых заказов отсутствует → null (без пересчётов).
     assignedDriverId:
       typeof raw.assignedDriverId === "string" ? raw.assignedDriverId : null,
@@ -601,6 +632,11 @@ export function normalizePrototypeState(
   state: PrototypeState,
 ): PrototypeState {
   const defaults = createDefaultState();
+  // §3: рестораны нормализуем до заказов, чтобы восстановить снимок способов
+  // оплаты legacy PICKUP-заказов из актуального списка ресторана.
+  const restaurants = Array.isArray(state.restaurants)
+    ? state.restaurants.map(normalizeRestaurantV5)
+    : defaults.restaurants;
   return {
     ...state,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
@@ -612,9 +648,7 @@ export function normalizePrototypeState(
     },
     zones: Array.isArray(state.zones) ? state.zones : defaults.zones,
     tariffs: isRecord(state.tariffs) ? state.tariffs : defaults.tariffs,
-    restaurants: Array.isArray(state.restaurants)
-      ? state.restaurants.map(normalizeRestaurantV5)
-      : defaults.restaurants,
+    restaurants,
     menuItems: Array.isArray(state.menuItems)
       ? state.menuItems.map(normalizeMenuItem)
       : defaults.menuItems,
@@ -625,7 +659,7 @@ export function normalizePrototypeState(
     drivers: normalizeDrivers(state.drivers, defaults.drivers),
     cart: normalizeCart(state.cart, defaults.cart),
     orders: Array.isArray(state.orders)
-      ? state.orders.map(normalizeOrder)
+      ? state.orders.map((order) => normalizeOrder(order, restaurants))
       : [],
     settlements: normalizeSettlements(state.settlements),
     cancellationRequests: normalizeCancellationRequests(
@@ -646,6 +680,10 @@ export function normalizePrototypeState(
 export function upgradeToV6(raw: unknown): PrototypeState {
   const source = isRecord(raw) ? raw : {};
   const defaults = createDefaultState();
+  const upgradeRestaurants =
+    Array.isArray(source.restaurants) && source.restaurants.length > 0
+      ? (source.restaurants as unknown as PrototypeState["restaurants"])
+      : defaults.restaurants;
   const merged: PrototypeState = {
     ...defaults,
     revision: num(source.revision, 0),
@@ -659,10 +697,7 @@ export function upgradeToV6(raw: unknown): PrototypeState {
     tariffs: isRecord(source.tariffs)
       ? (source.tariffs as unknown as PrototypeState["tariffs"])
       : defaults.tariffs,
-    restaurants:
-      Array.isArray(source.restaurants) && source.restaurants.length > 0
-        ? (source.restaurants as unknown as PrototypeState["restaurants"])
-        : defaults.restaurants,
+    restaurants: upgradeRestaurants,
     menuItems:
       Array.isArray(source.menuItems) && source.menuItems.length > 0
         ? (source.menuItems as unknown as PrototypeState["menuItems"])
@@ -676,7 +711,9 @@ export function upgradeToV6(raw: unknown): PrototypeState {
       : defaults.drivers,
     cart: normalizeCart(source.cart, defaults.cart),
     orders: Array.isArray(source.orders)
-      ? (source.orders as unknown[]).map(normalizeOrder)
+      ? (source.orders as unknown[]).map((order) =>
+          normalizeOrder(order, upgradeRestaurants),
+        )
       : [],
     settlements: [],
     cancellationRequests: normalizeCancellationRequests(

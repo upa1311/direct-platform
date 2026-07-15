@@ -948,6 +948,61 @@ export function getOrderReadySince(order: Order): string {
   return getOrderStatusSince(order, order.status);
 }
 
+/**
+ * §11: невыкуп самовывоза можно отметить не раньше, чем через 30 минут после
+ * РЕАЛЬНОГО перехода PREPARING → READY_FOR_PICKUP. Единый порог для домена и UI.
+ */
+export const PICKUP_NO_SHOW_WAIT_MS = 30 * 60 * 1000;
+
+/**
+ * Момент реального перехода заказа в READY_FOR_PICKUP (по STATUS-событию, не по
+ * updatedAt — чтобы платёжные/технические события того же статуса не сбрасывали
+ * отсчёт). Для не-READY_FOR_PICKUP возвращает null.
+ */
+export function getReadyForPickupSinceIso(order: Order): string | null {
+  if (order.status !== "READY_FOR_PICKUP") {
+    return null;
+  }
+  const event = [...order.history]
+    .reverse()
+    .find(
+      (e) =>
+        e.type === "STATUS" &&
+        e.toStatus === "READY_FOR_PICKUP" &&
+        e.fromStatus !== e.toStatus,
+    );
+  return event?.occurredAt ?? null;
+}
+
+/**
+ * ISO-момент, начиная с которого допустим невыкуп (READY_FOR_PICKUP + 30 мин).
+ * null, если заказ не в READY_FOR_PICKUP или нет реального перехода.
+ */
+export function getPickupNoShowEligibleAtIso(order: Order): string | null {
+  const since = getReadyForPickupSinceIso(order);
+  if (!since) {
+    return null;
+  }
+  const sinceMs = Date.parse(since);
+  if (Number.isNaN(sinceMs)) {
+    return null;
+  }
+  return new Date(sinceMs + PICKUP_NO_SHOW_WAIT_MS).toISOString();
+}
+
+/** Наступил ли момент, когда невыкуп можно отметить (на nowIso). */
+export function isPickupNoShowEligibleAt(order: Order, nowIso: string): boolean {
+  const eligibleAt = getPickupNoShowEligibleAtIso(order);
+  if (!eligibleAt) {
+    return false;
+  }
+  const nowMs = Date.parse(nowIso);
+  if (Number.isNaN(nowMs)) {
+    return false;
+  }
+  return nowMs >= Date.parse(eligibleAt);
+}
+
 /** «Новые» — RESTAURANT_REVIEW, самые старые сверху (ждут дольше всех). */
 export function getKitchenNewOrders(
   state: PrototypeState,
