@@ -182,7 +182,7 @@ export function EtaAdjustPanel({
     setError(null);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!intent) {
       setError("Выберите новое время.");
       return;
@@ -191,7 +191,7 @@ export function EtaAdjustPanel({
       setError("Укажите причину.");
       return;
     }
-    const res = adjustOrderEta(order.id, intent, effectiveReason, "RESTAURANT", "KITCHEN");
+    const res = await adjustOrderEta(order.id, intent, effectiveReason, "RESTAURANT", "KITCHEN");
     // §9: при ошибке панель не закрываем и показываем domain error рядом.
     if (!res.ok) {
       setError(res.error);
@@ -422,9 +422,9 @@ export function RestaurantPauseControl({
   // Единый источник состояния приёма (§ единый helper).
   const acceptance = getKitchenAcceptanceState(restaurant, nowMs);
 
-  const confirmPause = (reason: string, choice: DurationChoice) => {
+  const confirmPause = async (reason: string, choice: DurationChoice) => {
     const { mode, resumeAt } = durationToPause(choice);
-    const res = pauseRestaurant(restaurant.id, reason, mode, resumeAt, "RESTAURANT");
+    const res = await pauseRestaurant(restaurant.id, reason, mode, resumeAt, "RESTAURANT");
     // §11: панель не закрываем и показываем ошибку, если действие не прошло.
     if (!res.ok) {
       setError(res.error);
@@ -469,9 +469,9 @@ export function RestaurantPauseControl({
           <button
             className={`${styles.btn} ${styles.btnDark}`}
             type="button"
-            onClick={() => {
+            onClick={async () => {
               // §6: показываем ошибку возобновления рядом с блоком.
-              const res = resumeRestaurant(restaurant.id, "RESTAURANT");
+              const res = await resumeRestaurant(restaurant.id, "RESTAURANT");
               setResumeError(res.ok ? null : res.error);
             }}
           >
@@ -542,9 +542,9 @@ function MenuAvailabilityRow({
   const [error, setError] = useState<string | null>(null);
   const available = isMenuItemAvailableAt(item, nowMs);
 
-  const confirm = (reason: string, choice: DurationChoice) => {
+  const confirm = async (reason: string, choice: DurationChoice) => {
     const { mode, resumeAt } = durationToPause(choice);
-    const res = setMenuItemUnavailable(
+    const res = await setMenuItemUnavailable(
       restaurant.id,
       item.id,
       reason,
@@ -560,8 +560,8 @@ function MenuAvailabilityRow({
     setOpen(false);
   };
 
-  const restore = () => {
-    const res = restoreMenuItem(restaurant.id, item.id, "RESTAURANT");
+  const restore = async () => {
+    const res = await restoreMenuItem(restaurant.id, item.id, "RESTAURANT");
     setError(res.ok ? null : res.error);
   };
 
@@ -735,8 +735,8 @@ export function MenuAvailabilitySection({
             <button
               className={`${styles.btn} ${styles.btnGreen}`}
               type="button"
-              onClick={() => {
-                const res = restoreCategory(restaurant.id, bulkCategory, "RESTAURANT");
+              onClick={async () => {
+                const res = await restoreCategory(restaurant.id, bulkCategory, "RESTAURANT");
                 setBulkError(res.ok ? null : res.error);
               }}
             >
@@ -755,9 +755,9 @@ export function MenuAvailabilitySection({
               confirmLabel="Отключить категорию"
               affectedLabel={`Будет отключено: ${bulkAffected}`}
               error={bulkError}
-              onConfirm={(reason, choice) => {
+              onConfirm={async (reason, choice) => {
                 const { mode, resumeAt } = durationToPause(choice);
-                const res = pauseCategory(
+                const res = await pauseCategory(
                   restaurant.id,
                   bulkCategory,
                   reason,

@@ -113,7 +113,7 @@ export default function ClientCartPage() {
     });
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     // Доставка без корректного адреса: не создаём заказ, показываем ошибку
     // рядом с формой, прокручиваем к адресу и фокусируем первое пустое поле.
@@ -125,7 +125,7 @@ export default function ClientCartPage() {
       return;
     }
     setAddressError("");
-    const result = createOrder();
+    const result = await createOrder();
     if (result.error || !result.orderId) {
       setSubmitError(result.error ?? "Не удалось создать заказ.");
       return;
@@ -237,7 +237,7 @@ export default function ClientCartPage() {
                         type="button"
                         aria-label={`Уменьшить количество: ${menuItem.name}`}
                         onClick={() =>
-                          setItemQuantity(
+                          void setItemQuantity(
                             menuItem.id,
                             cartItem.variantId,
                             cartItem.quantity - 1,
@@ -252,7 +252,7 @@ export default function ClientCartPage() {
                         type="button"
                         aria-label={`Увеличить количество: ${menuItem.name}`}
                         onClick={() =>
-                          setItemQuantity(
+                          void setItemQuantity(
                             menuItem.id,
                             cartItem.variantId,
                             cartItem.quantity + 1,
@@ -265,7 +265,7 @@ export default function ClientCartPage() {
                         className={flowStyles.removeButton}
                         type="button"
                         onClick={() =>
-                          setItemQuantity(menuItem.id, cartItem.variantId, 0)
+                          void setItemQuantity(menuItem.id, cartItem.variantId, 0)
                         }
                       >
                         Удалить
@@ -277,7 +277,7 @@ export default function ClientCartPage() {
                     <input
                       value={cartItem.cookingComment}
                       onChange={(event) =>
-                        setItemComment(
+                        void setItemComment(
                           menuItem.id,
                           cartItem.variantId,
                           event.target.value,
@@ -317,7 +317,7 @@ export default function ClientCartPage() {
                   value={state.customer.name}
                   aria-invalid={!customerNameIsValid}
                   onChange={(event) =>
-                    updateCustomer({ name: event.target.value })
+                    void updateCustomer({ name: event.target.value })
                   }
                   autoComplete="name"
                 />
@@ -335,7 +335,7 @@ export default function ClientCartPage() {
                   value={state.customer.phone}
                   aria-invalid={!customerPhoneIsValid}
                   onChange={(event) =>
-                    updateCustomer({ phone: event.target.value })
+                    void updateCustomer({ phone: event.target.value })
                   }
                   autoComplete="tel"
                   placeholder="Введите номер телефона"
@@ -368,7 +368,7 @@ export default function ClientCartPage() {
                     ref={streetFieldRef}
                     value={state.cart.address.street}
                     onChange={(event) => {
-                      updateAddress({ street: event.target.value });
+                      void updateAddress({ street: event.target.value });
                       setAddressError("");
                     }}
                   >
@@ -388,7 +388,7 @@ export default function ClientCartPage() {
                     ref={houseFieldRef}
                     value={state.cart.address.house}
                     onChange={(event) => {
-                      updateAddress({ house: event.target.value });
+                      void updateAddress({ house: event.target.value });
                       setAddressError("");
                     }}
                   />
@@ -398,7 +398,7 @@ export default function ClientCartPage() {
                   <input
                     value={state.cart.address.apartment}
                     onChange={(event) =>
-                      updateAddress({ apartment: event.target.value })
+                      void updateAddress({ apartment: event.target.value })
                     }
                   />
                 </label>
@@ -407,7 +407,7 @@ export default function ClientCartPage() {
                   <input
                     value={state.cart.address.entrance}
                     onChange={(event) =>
-                      updateAddress({ entrance: event.target.value })
+                      void updateAddress({ entrance: event.target.value })
                     }
                   />
                 </label>
@@ -416,7 +416,7 @@ export default function ClientCartPage() {
                   <input
                     value={state.cart.address.floor}
                     onChange={(event) =>
-                      updateAddress({ floor: event.target.value })
+                      void updateAddress({ floor: event.target.value })
                     }
                   />
                 </label>
@@ -427,7 +427,7 @@ export default function ClientCartPage() {
                   <textarea
                     value={state.cart.address.comment}
                     onChange={(event) =>
-                      updateAddress({ comment: event.target.value })
+                      void updateAddress({ comment: event.target.value })
                     }
                     placeholder="Домофон, ориентир или пожелание"
                   />
@@ -494,7 +494,7 @@ export default function ClientCartPage() {
                   type="radio"
                   name="checkout-delivery-mode"
                   checked={isDelivery}
-                  onChange={() => setFulfillmentChoice("DELIVERY")}
+                  onChange={() => void setFulfillmentChoice("DELIVERY")}
                 />
                 <span>Доставка</span>
               </label>
@@ -503,7 +503,7 @@ export default function ClientCartPage() {
                   type="radio"
                   name="checkout-delivery-mode"
                   checked={isPickup}
-                  onChange={() => setFulfillmentChoice("PICKUP")}
+                  onChange={() => void setFulfillmentChoice("PICKUP")}
                 />
                 <span>Самовывоз</span>
               </label>

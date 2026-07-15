@@ -160,10 +160,10 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
                         <span>{formatMoney(lineTotalCents)}</span>
                       </div>
                       <div className={styles.drawerQuantity}>
-                        <button type="button" aria-label={`Уменьшить количество: ${menuItem.name}`} onClick={() => setItemQuantity(menuItem.id, cartItem.variantId, cartItem.quantity - 1)}><Minus aria-hidden="true" /></button>
+                        <button type="button" aria-label={`Уменьшить количество: ${menuItem.name}`} onClick={() => void setItemQuantity(menuItem.id, cartItem.variantId, cartItem.quantity - 1)}><Minus aria-hidden="true" /></button>
                         <span>{cartItem.quantity}</span>
-                        <button type="button" aria-label={`Увеличить количество: ${menuItem.name}`} onClick={() => setItemQuantity(menuItem.id, cartItem.variantId, cartItem.quantity + 1)}><Plus aria-hidden="true" /></button>
-                        <button type="button" aria-label={`Удалить: ${menuItem.name}`} onClick={() => setItemQuantity(menuItem.id, cartItem.variantId, 0)}><Trash2 aria-hidden="true" /></button>
+                        <button type="button" aria-label={`Увеличить количество: ${menuItem.name}`} onClick={() => void setItemQuantity(menuItem.id, cartItem.variantId, cartItem.quantity + 1)}><Plus aria-hidden="true" /></button>
+                        <button type="button" aria-label={`Удалить: ${menuItem.name}`} onClick={() => void setItemQuantity(menuItem.id, cartItem.variantId, 0)}><Trash2 aria-hidden="true" /></button>
                       </div>
                     </article>
                   ))}

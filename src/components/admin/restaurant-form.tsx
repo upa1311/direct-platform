@@ -284,7 +284,7 @@ export function RestaurantBuilderEditor({
 
   const isRestaurantType = form.deliveryProvider === "RESTAURANT";
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const servedZoneIds = ZONE_IDS.filter((zone) => form.servedZones[zone]);
     const patch: Partial<RestaurantFormInput> = {
       name: form.name,
@@ -329,7 +329,7 @@ export function RestaurantBuilderEditor({
       ...form.contacts,
       weeklySchedule: form.weeklySchedule,
     };
-    const result = updateRestaurantEntry(restaurant.id, patch);
+    const result = await updateRestaurantEntry(restaurant.id, patch);
     if (!result.ok) {
       setSaveError(result.error ?? "Не удалось сохранить ресторан.");
       setSaved(false);
@@ -738,7 +738,7 @@ export function CreateRestaurantForm() {
   const [created, setCreated] = useState("");
   const [createdId, setCreatedId] = useState<string | null>(null);
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     const input: RestaurantFormInput = {
       name: name.trim() || "Новый ресторан",
       description: "",
@@ -757,7 +757,7 @@ export function CreateRestaurantForm() {
       ...contacts,
       weeklySchedule,
     };
-    const result = createRestaurantEntry(input);
+    const result = await createRestaurantEntry(input);
     if (!result.restaurantId) {
       setCreated(result.error ?? "Не удалось создать ресторан.");
       setCreatedId(null);

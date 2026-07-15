@@ -13,12 +13,12 @@ export default function AdminZonesPage() {
   const [feedback, setFeedback] = useState("");
 
   const handleSave = (tariffs: TariffMatrix) => {
-    saveTariffMatrix(tariffs);
+    void saveTariffMatrix(tariffs);
     setFeedback("Тарифы сохранены и уже используются в клиентской корзине.");
   };
 
   const handleRestore = () => {
-    restoreTariffs();
+    void restoreTariffs();
     setFeedback("Начальные тарифы восстановлены.");
   };
 

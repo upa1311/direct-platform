@@ -11,7 +11,7 @@ export function PrototypeResetButton() {
       "Сбросить корзину, заказы и тарифы до начальных тестовых данных?",
     );
     if (confirmed) {
-      resetPrototype();
+      void resetPrototype();
     }
   };
 

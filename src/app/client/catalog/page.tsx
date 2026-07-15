@@ -100,7 +100,7 @@ export default function ClientCatalogPage() {
                   <button
                     className={flowStyles.fulfillmentSwitchButton}
                     type="button"
-                    onClick={() => setFulfillmentChoice("PICKUP")}
+                    onClick={() => void setFulfillmentChoice("PICKUP")}
                   >
                     Забрать самому
                   </button>
@@ -113,7 +113,7 @@ export default function ClientCatalogPage() {
                       ref={streetFieldRef}
                       value={state.cart.address.street}
                       onChange={(event) =>
-                        updateAddress({ street: event.target.value })
+                        void updateAddress({ street: event.target.value })
                       }
                     >
                       <option value="">Выберите улицу</option>
@@ -132,7 +132,7 @@ export default function ClientCatalogPage() {
                       required
                       value={state.cart.address.house}
                       onChange={(event) =>
-                        updateAddress({ house: event.target.value })
+                        void updateAddress({ house: event.target.value })
                       }
                       placeholder="Номер дома"
                     />
@@ -166,7 +166,7 @@ export default function ClientCatalogPage() {
               <button
                 className={flowStyles.fulfillmentSwitchButton}
                 type="button"
-                onClick={() => setFulfillmentChoice("DELIVERY")}
+                onClick={() => void setFulfillmentChoice("DELIVERY")}
               >
                 Доставка
               </button>

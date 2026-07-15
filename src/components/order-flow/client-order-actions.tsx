@@ -46,7 +46,7 @@ function RepeatOrderButton({ order }: { order: Order }) {
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState<string[]>([]);
 
-  const handleRepeat = () => {
+  const handleRepeat = async () => {
     setError(null);
     setUnavailable([]);
     if (
@@ -55,7 +55,7 @@ function RepeatOrderButton({ order }: { order: Order }) {
     ) {
       return;
     }
-    const result = repeatOrder(order.id);
+    const result = await repeatOrder(order.id);
     if (!result.ok) {
       if (result.unavailableItems.length > 0) {
         setUnavailable(result.unavailableItems);
@@ -120,8 +120,8 @@ function DirectCancel({ order }: { order: Order }) {
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
 
-  const confirmCancel = () => {
-    const result = cancelClientOrder(order.id, effectiveReason);
+  const confirmCancel = async () => {
+    const result = await cancelClientOrder(order.id, effectiveReason);
     if (!result.ok) {
       setError(result.error ?? "Не удалось отменить заказ.");
       return;
@@ -240,8 +240,8 @@ function RequestCancellation({ order }: { order: Order }) {
     );
   }
 
-  const submitRequest = () => {
-    const result = requestCancellation(order.id, effectiveReason);
+  const submitRequest = async () => {
+    const result = await requestCancellation(order.id, effectiveReason);
     if (!result.ok) {
       setError(result.error ?? "Не удалось отправить запрос.");
       return;

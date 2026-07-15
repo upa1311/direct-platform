@@ -139,22 +139,22 @@ function DriverAssignment({ order }: { order: Order }) {
   const [selected, setSelected] = useState(available[0]?.id ?? "");
   const assignedDriver = getDriverById(state, order.assignedDriverId);
 
-  const doAssign = () => {
+  const doAssign = async () => {
     if (!selected) return;
-    const res = assignDriver(order.id, selected);
+    const res = await assignDriver(order.id, selected);
     if (!res.ok) window.alert(res.error ?? "Не удалось назначить водителя.");
   };
-  const doReassign = () => {
+  const doReassign = async () => {
     if (!selected) return;
     const reason = window.prompt("Причина переназначения водителя:");
     if (reason === null) return;
-    const res = reassignDriver(order.id, selected, reason);
+    const res = await reassignDriver(order.id, selected, reason);
     if (!res.ok) window.alert(res.error ?? "Не удалось переназначить.");
   };
-  const doUnassign = () => {
+  const doUnassign = async () => {
     const reason = window.prompt("Причина снятия назначения:");
     if (reason === null) return;
-    const res = unassignDriver(order.id, reason);
+    const res = await unassignDriver(order.id, reason);
     if (!res.ok) window.alert(res.error ?? "Не удалось снять назначение.");
   };
 
@@ -233,8 +233,8 @@ function StatusCorrection({ order }: { order: Order }) {
   );
   const [reason, setReason] = useState("");
 
-  const apply = () => {
-    const res = correctStatus(order.id, target, reason);
+  const apply = async () => {
+    const res = await correctStatus(order.id, target, reason);
     if (!res.ok) {
       window.alert(res.error ?? "Не удалось исправить статус.");
       return;
@@ -358,7 +358,7 @@ function AdminPickupHandoff({ order }: { order: Order }) {
   );
   const [emError, setEmError] = useState<string | null>(null);
 
-  const doEmergency = () => {
+  const doEmergency = async () => {
     if (!emPaidWith) {
       setEmError("Выберите способ оплаты.");
       return;
@@ -367,7 +367,7 @@ function AdminPickupHandoff({ order }: { order: Order }) {
       setEmError("Укажите причину аварийной выдачи.");
       return;
     }
-    const res = issuePickupNoCode(order.id, emReason, emPaidWith);
+    const res = await issuePickupNoCode(order.id, emReason, emPaidWith);
     if (!res.ok) {
       // Ошибка не закрывает форму: причина и способ оплаты сохраняются.
       setEmError(res.error ?? "Не удалось выдать заказ.");
@@ -445,20 +445,48 @@ function OrderActions({ order }: { order: Order }) {
     setPreparationMinutes,
   } = usePrototype();
   const [prep, setPrep] = useState(20);
+  // Исправление 9: приём/отклонение — async с pending, inline-ошибкой и
+  // inline-формой причины (без fire-and-forget и unhandled Promise).
+  const [actionPending, setActionPending] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
 
-  const doReject = () => {
-    const reason = window.prompt("Причина отклонения заказа:");
-    if (reason === null) return;
-    if (!reason.trim()) {
-      window.alert("Причина обязательна.");
+  const doAccept = async () => {
+    if (actionPending) return;
+    setActionPending(true);
+    try {
+      const res = await acceptOrder(order.id, prep, "ADMIN");
+      setActionError(res.ok ? null : (res.error ?? "Не удалось принять заказ."));
+    } finally {
+      setActionPending(false);
+    }
+  };
+  const doReject = async () => {
+    if (actionPending) return;
+    if (!rejectReason.trim()) {
+      setActionError("Укажите причину отклонения.");
       return;
     }
-    rejectOrder(order.id, reason, "ADMIN");
+    setActionPending(true);
+    try {
+      const res = await rejectOrder(order.id, rejectReason, "ADMIN");
+      if (!res.ok) {
+        // Форма остаётся открытой, причина сохраняется, заказ не исчезает.
+        setActionError(res.error ?? "Не удалось отклонить заказ.");
+        return;
+      }
+      setActionError(null);
+      setRejectOpen(false);
+      setRejectReason("");
+    } finally {
+      setActionPending(false);
+    }
   };
-  const doCancel = () => {
+  const doCancel = async () => {
     const reason = window.prompt("Причина отмены заказа:");
     if (reason === null) return;
-    const res = cancelOrderByAdmin(order.id, reason);
+    const res = await cancelOrderByAdmin(order.id, reason);
     if (!res.ok) window.alert(res.error ?? "Не удалось отменить заказ.");
   };
 
@@ -489,18 +517,66 @@ function OrderActions({ order }: { order: Order }) {
           <button
             className={flowStyles.primaryButton}
             type="button"
-            onClick={() => acceptOrder(order.id, prep, "ADMIN")}
+            disabled={actionPending}
+            onClick={doAccept}
           >
-            Принять от имени ресторана
+            {actionPending ? "Выполняем…" : "Принять от имени ресторана"}
           </button>
           <button
             className={flowStyles.secondaryButton}
             type="button"
-            onClick={doReject}
+            disabled={actionPending}
+            onClick={() => {
+              setRejectOpen((open) => !open);
+              setActionError(null);
+            }}
           >
             Отклонить заказ
           </button>
         </div>
+      ) : null}
+
+      {order.status === "RESTAURANT_REVIEW" && rejectOpen ? (
+        <div className={flowStyles.fieldGrid}>
+          <label className={flowStyles.field}>
+            <span>Причина отклонения</span>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => {
+                setRejectReason(e.target.value);
+                setActionError(null);
+              }}
+              placeholder="Например: ресторан не подтвердил заказ"
+            />
+          </label>
+          <div className={flowStyles.buttonRow}>
+            <button
+              className={flowStyles.dangerButton}
+              type="button"
+              disabled={actionPending || !rejectReason.trim()}
+              onClick={doReject}
+            >
+              {actionPending ? "Отклоняем…" : "Подтвердить отклонение"}
+            </button>
+            <button
+              className={flowStyles.secondaryButton}
+              type="button"
+              disabled={actionPending}
+              onClick={() => {
+                setRejectOpen(false);
+                setActionError(null);
+              }}
+            >
+              Не отклонять
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {order.status === "RESTAURANT_REVIEW" && actionError ? (
+        <p className={flowStyles.errorText} role="alert">
+          {actionError}
+        </p>
       ) : null}
 
       {order.status === "PREPARING" ? (
@@ -512,7 +588,7 @@ function OrderActions({ order }: { order: Order }) {
               onChange={(e) => {
                 const m = Number(e.target.value);
                 setPrep(m);
-                setPreparationMinutes(order.id, m);
+                void setPreparationMinutes(order.id, m);
               }}
             >
               {PREP_MINUTES.map((m) => (
@@ -525,7 +601,7 @@ function OrderActions({ order }: { order: Order }) {
           <button
             className={flowStyles.primaryButton}
             type="button"
-            onClick={() => markReady(order.id, "ADMIN")}
+            onClick={() => void markReady(order.id, "ADMIN")}
           >
             Отметить готовым
           </button>
@@ -541,7 +617,7 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => markOutForDelivery(order.id, "ADMIN")}
+          onClick={() => void markOutForDelivery(order.id, "ADMIN")}
         >
           Курьер выехал
         </button>
@@ -550,7 +626,7 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => markArriving(order.id, "ADMIN")}
+          onClick={() => void markArriving(order.id, "ADMIN")}
         >
           Курьер скоро будет
         </button>
@@ -559,7 +635,7 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => markDelivered(order.id, "ADMIN")}
+          onClick={() => void markDelivered(order.id, "ADMIN")}
         >
           Заказ доставлен, наличные получены
         </button>
@@ -574,7 +650,7 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => markOutForDelivery(order.id, "ADMIN")}
+          onClick={() => void markOutForDelivery(order.id, "ADMIN")}
         >
           Водитель выехал
         </button>
@@ -583,7 +659,7 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => markArriving(order.id, "ADMIN")}
+          onClick={() => void markArriving(order.id, "ADMIN")}
         >
           Водитель скоро будет
         </button>
@@ -593,7 +669,7 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => markDeliveredByDriver(order.id)}
+          onClick={() => void markDeliveredByDriver(order.id)}
         >
           Отметить доставленным
         </button>
@@ -636,11 +712,11 @@ function CancellationRequestCard({
   const paidOnline =
     order.paymentMethod === "ONLINE" && order.paymentStatus === "PAID";
 
-  const submit = () => {
+  const submit = async () => {
     const result =
       mode === "approve"
-        ? approveCancellation(request.id, note)
-        : rejectCancellation(request.id, note);
+        ? await approveCancellation(request.id, note)
+        : await rejectCancellation(request.id, note);
     if (!result.ok) {
       setError(result.error ?? "Не удалось выполнить действие.");
       return;

@@ -80,7 +80,7 @@ export default function ClientRestaurantPage() {
   const checkoutHref = "/client/cart#checkout-cart";
   const checkoutLabel = "Перейти к оформлению";
 
-  const getAddFeedback = (result: ReturnType<typeof addItem>) => {
+  const getAddFeedback = (result: Awaited<ReturnType<typeof addItem>>) => {
     if (result === "ADDED") {
       return "Блюдо добавлено в корзину.";
     }
@@ -90,12 +90,13 @@ export default function ClientRestaurantPage() {
     return "Блюдо сейчас недоступно.";
   };
 
-  const handleAdd = (
+  const handleAdd = async (
     menuItemId: string,
     variantId: string | null,
     event: MouseEvent<HTMLButtonElement>,
   ) => {
-    const result = addItem(menuItemId, variantId);
+    const target = event.currentTarget;
+    const result = await addItem(menuItemId, variantId);
 
     if (result === "RESTAURANT_CONFLICT") {
       const confirmed = window.confirm(
@@ -104,18 +105,18 @@ export default function ClientRestaurantPage() {
       if (!confirmed) {
         return;
       }
-      const replacementResult = addItem(menuItemId, variantId, true);
+      const replacementResult = await addItem(menuItemId, variantId, true);
       setFeedback(
         replacementResult === "ADDED"
           ? "Предыдущая корзина очищена. Блюдо добавлено."
           : getAddFeedback(replacementResult),
       );
-      if (replacementResult === "ADDED") notifyItemAdded(event.currentTarget);
+      if (replacementResult === "ADDED") notifyItemAdded(target);
       return;
     }
 
     setFeedback(getAddFeedback(result));
-    if (result === "ADDED") notifyItemAdded(event.currentTarget);
+    if (result === "ADDED") notifyItemAdded(target);
   };
 
   return (
@@ -254,7 +255,7 @@ export default function ClientRestaurantPage() {
                       type="button"
                       aria-label={`Уменьшить количество: ${menuItem.name}`}
                       onClick={() =>
-                        setItemQuantity(menuItem.id, lineVariantId, quantity - 1)
+                        void setItemQuantity(menuItem.id, lineVariantId, quantity - 1)
                       }
                     >
                       −

@@ -224,8 +224,8 @@ function PreparationProblemPanel({
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
 
-  const doReport = () => {
-    const res = reportPreparationProblem(
+  const doReport = async () => {
+    const res = await reportPreparationProblem(
       order.id,
       effectiveReason,
       "RESTAURANT",
@@ -346,6 +346,8 @@ function NewOrderCard({
   const [customReason, setCustomReason] = useState("");
   const [acceptPending, setAcceptPending] = useState(false);
   const [acceptError, setAcceptError] = useState<string | null>(null);
+  const [rejectPending, setRejectPending] = useState(false);
+  const [rejectError, setRejectError] = useState<string | null>(null);
 
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
@@ -366,6 +368,24 @@ function NewOrderCard({
       setAcceptError(null);
     } finally {
       setAcceptPending(false);
+    }
+  };
+
+  // Исправление 8: отклонение в COMBINED — тоже async с pending и ошибкой;
+  // форма не закрывается ложно, причина при ошибке сохраняется.
+  const doReject = async () => {
+    if (rejectPending) return;
+    setRejectPending(true);
+    try {
+      const result = await rejectOrder(order.id, effectiveReason, "RESTAURANT");
+      if (!result.ok) {
+        setRejectError(result.error ?? "Не удалось отклонить заказ.");
+        return;
+      }
+      setRejectError(null);
+      setRejectOpen(false);
+    } finally {
+      setRejectPending(false);
     }
   };
 
@@ -471,12 +491,17 @@ function NewOrderCard({
             <button
               className={`${kds.btn} ${kds.btnRedOutline}`}
               type="button"
-              disabled={!effectiveReason.trim()}
-              onClick={() => rejectOrder(order.id, effectiveReason)}
+              disabled={!effectiveReason.trim() || rejectPending}
+              onClick={doReject}
             >
-              Подтвердить отклонение
+              {rejectPending ? "Отклоняем…" : "Подтвердить отклонение"}
             </button>
           </div>
+          {rejectError ? (
+            <p className={kds.pickupError} role="alert">
+              {rejectError}
+            </p>
+          ) : null}
         </div>
       )}
     </article>
@@ -546,7 +571,7 @@ function PreparingCard({
         <button
           className={`${kds.btn} ${kds.btnGreen}`}
           type="button"
-          onClick={() => markReady(order.id, "RESTAURANT", "KITCHEN")}
+          onClick={() => void markReady(order.id, "RESTAURANT", "KITCHEN")}
         >
           {readyLabel}
         </button>
@@ -624,12 +649,12 @@ function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) 
   const effectiveReason = isOther ? customReason : reason;
   const canConfirm = effectiveReason.trim().length > 0;
 
-  const doConfirm = () => {
+  const doConfirm = async () => {
     if (!canConfirm) {
       setError("Укажите причину невыкупа.");
       return;
     }
-    const res = markPickupNoShow(order.id, effectiveReason, "RESTAURANT", "KITCHEN");
+    const res = await markPickupNoShow(order.id, effectiveReason, "RESTAURANT", "KITCHEN");
     if (!res.ok) {
       // Панель остаётся открытой, причина сохраняется, ошибка рядом.
       setError(res.error ?? "Не удалось закрыть как невыкуп.");
@@ -747,12 +772,12 @@ function KitchenPickupHandoff({
   const codeValid = /^\d{4}$/.test(code.trim());
   const canConfirm = codeValid && paidWith !== null;
 
-  const doConfirm = () => {
+  const doConfirm = async () => {
     if (!paidWith) {
       setError("Выберите способ оплаты.");
       return;
     }
-    const res = completePickup(order.id, code, paidWith, "RESTAURANT", "KITCHEN");
+    const res = await completePickup(order.id, code, paidWith, "RESTAURANT", "KITCHEN");
     if (!res.ok) {
       setError(res.error ?? "Не удалось подтвердить выдачу.");
       return;

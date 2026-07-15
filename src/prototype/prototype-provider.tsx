@@ -110,12 +110,17 @@ import {
   parseLegacyStoredState,
   parseStoredState,
   PROTOTYPE_CHANNEL_NAME,
+  PROTOTYPE_SAVE_FAILED_ERROR,
   PROTOTYPE_STORAGE_KEY,
-  selectLatestPrototypeState,
+  SAFE_TAB_SYNC_UNAVAILABLE_ERROR,
+  executeSerializedPrototypeMutation,
 } from "./prototype-store";
 
 /** Общее имя Web Lock для сериализации мутаций заказа между вкладками. */
 const PROTOTYPE_MUTATION_LOCK_NAME = "direct-prototype-state-v7-mutation";
+
+/** Результат сериализованной state-only мутации (Исправление 2.2). */
+export type MutationAck = Promise<{ ok: boolean; error: string | null }>;
 
 interface PrototypeContextValue {
   state: PrototypeState;
@@ -124,43 +129,52 @@ interface PrototypeContextValue {
     menuItemId: string,
     variantId?: string | null,
     replaceRestaurant?: boolean,
-  ) => AddCartItemResult;
+  ) => Promise<AddCartItemResult>;
   setItemQuantity: (
     menuItemId: string,
     variantId: string | null,
     quantity: number,
-  ) => void;
+  ) => MutationAck;
   setItemComment: (
     menuItemId: string,
     variantId: string | null,
     comment: string,
-  ) => void;
-  updateAddress: (patch: Partial<Omit<DeliveryAddress, "zoneId">>) => void;
+  ) => MutationAck;
+  updateAddress: (patch: Partial<Omit<DeliveryAddress, "zoneId">>) => MutationAck;
   updateCustomer: (
     patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>,
-  ) => void;
-  setPaymentMethod: (paymentMethod: PaymentMethod) => void;
-  setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => void;
-  createOrder: () => CreateOrderResult;
-  repeatOrder: (orderId: string) => RepeatOrderResult;
-  cancelClientOrder: (orderId: string, reason: string) => ClientCancelResult;
+  ) => MutationAck;
+  setPaymentMethod: (paymentMethod: PaymentMethod) => MutationAck;
+  setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => MutationAck;
+  createOrder: () => Promise<CreateOrderResult>;
+  repeatOrder: (orderId: string) => Promise<RepeatOrderResult>;
+  cancelClientOrder: (
+    orderId: string,
+    reason: string,
+  ) => Promise<ClientCancelResult>;
   requestCancellation: (
     orderId: string,
     reason: string,
-  ) => RequestCancellationResult;
-  approveCancellation: (requestId: string, note: string) => AdminActionResult;
-  rejectCancellation: (requestId: string, note: string) => AdminActionResult;
+  ) => Promise<RequestCancellationResult>;
+  approveCancellation: (
+    requestId: string,
+    note: string,
+  ) => Promise<AdminActionResult>;
+  rejectCancellation: (
+    requestId: string,
+    note: string,
+  ) => Promise<AdminActionResult>;
   pauseRestaurant: (
     restaurantId: string,
     reason: string,
     mode: OperationalPauseMode,
     resumeAt: string | null,
     actor: OperationalActor,
-  ) => OperationalActionResult;
+  ) => Promise<OperationalActionResult>;
   resumeRestaurant: (
     restaurantId: string,
     actor: OperationalActor,
-  ) => OperationalActionResult;
+  ) => Promise<OperationalActionResult>;
   setMenuItemUnavailable: (
     restaurantId: string,
     menuItemId: string,
@@ -168,12 +182,12 @@ interface PrototypeContextValue {
     mode: OperationalPauseMode,
     resumeAt: string | null,
     actor: OperationalActor,
-  ) => OperationalActionResult;
+  ) => Promise<OperationalActionResult>;
   restoreMenuItem: (
     restaurantId: string,
     menuItemId: string,
     actor: OperationalActor,
-  ) => OperationalActionResult;
+  ) => Promise<OperationalActionResult>;
   pauseCategory: (
     restaurantId: string,
     category: string,
@@ -181,12 +195,12 @@ interface PrototypeContextValue {
     mode: OperationalPauseMode,
     resumeAt: string | null,
     actor: OperationalActor,
-  ) => BulkOperationalResult;
+  ) => Promise<BulkOperationalResult>;
   restoreCategory: (
     restaurantId: string,
     category: string,
     actor: OperationalActor,
-  ) => BulkOperationalResult;
+  ) => Promise<BulkOperationalResult>;
   acceptOrder: (
     orderId: string,
     preparationMinutes: number,
@@ -199,85 +213,99 @@ interface PrototypeContextValue {
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
   ) => Promise<RejectRestaurantOrderResult>;
-  simulateOnlinePayment: (orderId: string) => void;
+  simulateOnlinePayment: (orderId: string) => MutationAck;
   markReady: (
     orderId: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => void;
+  ) => MutationAck;
   adjustOrderEta: (
     orderId: string,
     intent: EtaAdjustmentIntent,
     reason: string,
     actor?: "RESTAURANT" | "ADMIN",
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => AdjustOrderEtaResult;
+  ) => Promise<AdjustOrderEtaResult>;
   reportPreparationProblem: (
     orderId: string,
     reason: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => PreparationProblemResult;
+  ) => Promise<PreparationProblemResult>;
   completePickup: (
     orderId: string,
     code: string,
     paidWith: PickupPaymentMethod,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => CompletePickupResult;
+  ) => Promise<CompletePickupResult>;
   markPickupNoShow: (
     orderId: string,
     reason: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => PickupNoShowResult;
+  ) => Promise<PickupNoShowResult>;
   setRestaurantWorkflow: (
     restaurantId: string,
     mode: RestaurantOrderWorkflowMode,
-  ) => void;
+  ) => MutationAck;
   markOutForDelivery: (
     orderId: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => void;
+  ) => MutationAck;
   markArriving: (
     orderId: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => void;
+  ) => MutationAck;
   markDelivered: (
     orderId: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => void;
-  markDeliveredByDriver: (orderId: string) => void;
-  setPreparationMinutes: (orderId: string, minutes: number) => void;
-  setRestaurantAccepting: (restaurantId: string, accepting: boolean) => void;
-  assignDriver: (orderId: string, driverId: string) => AdminActionResult;
+  ) => MutationAck;
+  markDeliveredByDriver: (orderId: string) => MutationAck;
+  setPreparationMinutes: (orderId: string, minutes: number) => MutationAck;
+  setRestaurantAccepting: (
+    restaurantId: string,
+    accepting: boolean,
+  ) => MutationAck;
+  assignDriver: (
+    orderId: string,
+    driverId: string,
+  ) => Promise<AdminActionResult>;
   reassignDriver: (
     orderId: string,
     newDriverId: string,
     reason: string,
-  ) => AdminActionResult;
-  unassignDriver: (orderId: string, reason: string) => AdminActionResult;
-  cancelOrderByAdmin: (orderId: string, reason: string) => AdminActionResult;
+  ) => Promise<AdminActionResult>;
+  unassignDriver: (
+    orderId: string,
+    reason: string,
+  ) => Promise<AdminActionResult>;
+  cancelOrderByAdmin: (
+    orderId: string,
+    reason: string,
+  ) => Promise<AdminActionResult>;
   correctStatus: (
     orderId: string,
     newStatus: OrderStatus,
     reason: string,
-  ) => AdminActionResult;
+  ) => Promise<AdminActionResult>;
   issuePickupNoCode: (
     orderId: string,
     reason: string,
     paidWith: PickupPaymentMethod,
-  ) => AdminActionResult;
-  saveTariffMatrix: (tariffs: TariffMatrix) => void;
-  restoreTariffs: () => void;
-  createRestaurantEntry: (input: RestaurantFormInput) => CreateRestaurantResult;
+  ) => Promise<AdminActionResult>;
+  saveTariffMatrix: (tariffs: TariffMatrix) => MutationAck;
+  restoreTariffs: () => MutationAck;
+  createRestaurantEntry: (
+    input: RestaurantFormInput,
+  ) => Promise<CreateRestaurantResult>;
   updateRestaurantEntry: (
     restaurantId: string,
     patch: Partial<RestaurantFormInput>,
-  ) => UpdateRestaurantResult;
+  ) => Promise<UpdateRestaurantResult>;
   setMenuItemVariants: (
     menuItemId: string,
     variants: MenuItemVariant[] | null,
@@ -306,64 +334,124 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     setState(nextState);
   }, []);
 
+  /** Запись состояния в localStorage; исключение — транзакция НЕ успешна. */
+  const persistState = useCallback((nextState: PrototypeState) => {
+    window.localStorage.setItem(
+      PROTOTYPE_STORAGE_KEY,
+      JSON.stringify(nextState),
+    );
+  }, []);
+
+  const broadcastState = useCallback((nextState: PrototypeState) => {
+    channelRef.current?.postMessage({
+      sourceId: sourceIdRef.current,
+      state: nextState,
+    } satisfies PrototypeChannelMessage);
+  }, []);
+
   /**
-   * Исправление 3: сериализация конфликтующих мутаций заказа между вкладками.
+   * Исправление 1–3: ЕДИНСТВЕННЫЙ путь сохранения изменённого PrototypeState.
    * BroadcastChannel — не блокировка: две вкладки могут одновременно мутировать
-   * одну ревизию N, и поздний updatedAt молча перезапишет чужую операцию.
-   * Поэтому конфликтующие операции (приём/отклонение) выполняются под общим
-   * Web Lock: внутри lock перечитывается авторитетный persisted state, mutation
-   * применяется к самому свежему base, а результат сохраняется в localStorage и
-   * рассылается СИНХРОННО до освобождения lock. Production-backend позднее
-   * заменит это серверной транзакцией и optimistic concurrency по ревизии.
+   * одну ревизию N, и поздний updatedAt молча перезапишет чужую операцию. Поэтому
+   * каждая сохраняемая мутация выполняется под общим Web Lock: внутри lock
+   * перечитывается авторитетный persisted state, мутация применяется к самому
+   * свежему base (executeSerializedPrototypeMutation), результат СНАЧАЛА
+   * записывается в localStorage, и только затем принимается локально и
+   * рассылается — до освобождения lock. Ошибка записи возвращает русскую
+   * инфраструктурную ошибку без ложного успеха. Без Web Locks критические
+   * lifecycle-мутации работают fail-closed (никакого spin-lock/busy-wait);
+   * production-backend заменит это серверной транзакцией и optimistic
+   * concurrency по ревизии.
    */
-  const runSerializedPrototypeMutation = useCallback(
-    async <T,>(
-      mutation: (baseState: PrototypeState) => { state: PrototypeState; result: T },
-    ): Promise<T> => {
+  const runSerializedActionMutation = useCallback(
+    async <T,>({
+      mutation,
+      infrastructureFailure,
+      critical = true,
+    }: {
+      mutation: (
+        baseState: PrototypeState,
+      ) => { state: PrototypeState; result: T };
+      infrastructureFailure: (error: string) => T;
+      critical?: boolean;
+    }): Promise<T> => {
       const execute = (): T => {
-        // Rebase: localStorage может быть новее локального stateRef (другая
-        // вкладка уже сохранила свою мутацию). Мутировать устаревший state нельзя.
         const stored = parseStoredState(
           window.localStorage.getItem(PROTOTYPE_STORAGE_KEY),
         );
-        const baseState = selectLatestPrototypeState(stateRef.current, stored);
-        if (baseState !== stateRef.current) {
-          replaceState(baseState);
+        try {
+          const outcome = executeSerializedPrototypeMutation({
+            localState: stateRef.current,
+            storedState: stored,
+            mutation,
+            persist: persistState,
+            broadcast: broadcastState,
+          });
+          if (outcome.nextState !== stateRef.current) {
+            // Принимаем локально либо rebased base, либо уже СОХРАНЁННЫЙ результат.
+            stateRef.current = outcome.nextState;
+            setState(outcome.nextState);
+          }
+          return outcome.result;
+        } catch {
+          // localStorage.setItem бросил: state не подтверждён — не принимаем его
+          // и не объявляем успех.
+          return infrastructureFailure(PROTOTYPE_SAVE_FAILED_ERROR);
         }
-        const action = mutation(baseState);
-        if (action.state !== baseState) {
-          // Критическая транзакция: сохранить и разослать до выхода из lock,
-          // не полагаясь на более поздний persistence-effect.
-          stateRef.current = action.state;
-          window.localStorage.setItem(
-            PROTOTYPE_STORAGE_KEY,
-            JSON.stringify(action.state),
-          );
-          channelRef.current?.postMessage({
-            sourceId: sourceIdRef.current,
-            state: action.state,
-          } satisfies PrototypeChannelMessage);
-          setState(action.state);
-        }
-        return action.result;
       };
 
-      const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+      const locks =
+        typeof navigator !== "undefined" ? navigator.locks : undefined;
       if (locks?.request) {
-        return locks.request(PROTOTYPE_MUTATION_LOCK_NAME, async () => execute());
+        try {
+          return await locks.request(
+            PROTOTYPE_MUTATION_LOCK_NAME,
+            async () => execute(),
+          );
+        } catch {
+          return infrastructureFailure(PROTOTYPE_SAVE_FAILED_ERROR);
+        }
       }
-      // Best-effort fallback без Web Locks: перечитать latest перед мутацией и
-      // сохранить немедленно. Без spin-lock/busy-wait — это осознанный компромисс.
+      if (critical) {
+        // Исправление 7: без Web Locks конкурентную запись честно блокируем.
+        return infrastructureFailure(SAFE_TAB_SYNC_UNAVAILABLE_ERROR);
+      }
       return execute();
     },
-    [replaceState],
+    [broadcastState, persistState],
+  );
+
+  /**
+   * Исправление 2.2: обёртка для legacy-функций вида (state) => PrototypeState.
+   * No-op не увеличивает revision и ничего не записывает.
+   */
+  const runSerializedStateMutation = useCallback(
+    ({
+      mutation,
+      critical = true,
+    }: {
+      mutation: (baseState: PrototypeState) => PrototypeState;
+      critical?: boolean;
+    }): Promise<{ ok: boolean; error: string | null }> =>
+      runSerializedActionMutation<{ ok: boolean; error: string | null }>({
+        mutation: (baseState) => ({
+          state: mutation(baseState),
+          result: { ok: true, error: null },
+        }),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+        critical,
+      }),
+    [runSerializedActionMutation],
   );
 
   useEffect(() => {
     sourceIdRef.current = crypto.randomUUID();
 
+    const storedV7State = parseStoredState(
+      window.localStorage.getItem(PROTOTYPE_STORAGE_KEY),
+    );
     const storedState =
-      parseStoredState(window.localStorage.getItem(PROTOTYPE_STORAGE_KEY)) ??
+      storedV7State ??
       parseLegacyStoredState(
         window.localStorage.getItem(LEGACY_V6_PROTOTYPE_STORAGE_KEY),
       ) ??
@@ -418,6 +506,19 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       }
       if (storedState) {
         replaceState(storedState);
+        // Исправление 4: одноразовый bootstrap миграции. Если v7-ключа не было,
+        // а состояние пришло из legacy-версии — сохраняем его как v7 один раз.
+        // Более свежий уже существующий v7 state НЕ перезаписывается.
+        if (!storedV7State) {
+          try {
+            window.localStorage.setItem(
+              PROTOTYPE_STORAGE_KEY,
+              JSON.stringify(storedState),
+            );
+          } catch {
+            // Гидратация не должна падать из-за недоступного хранилища.
+          }
+        }
       }
       setIsHydrated(true);
     });
@@ -430,182 +531,182 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     };
   }, [replaceState]);
 
-  useEffect(() => {
-    if (!isHydrated) {
-      return;
-    }
-    window.localStorage.setItem(PROTOTYPE_STORAGE_KEY, JSON.stringify(state));
-    channelRef.current?.postMessage({
-      sourceId: sourceIdRef.current,
-      state,
-    } satisfies PrototypeChannelMessage);
-  }, [isHydrated, state]);
+  // Исправление 4: опасный безусловный persistence-effect УДАЛЁН. Транзакционные
+  // мутации сами записывают state внутри Web Lock; входящие storage/Broadcast-
+  // обновления только обновляют локальное представление и не пишутся обратно.
 
-  // §4: единый системный sweep автозакрытия неотвеченных заказов (7 минут).
-  // Проверяем сразу после гидрации и затем раз в 5 секунд для всех ресторанов.
-  // Идемпотентно — несколько вкладок не создают повторных событий; результат
-  // расходится через тот же localStorage/BroadcastChannel.
+  // Исправление 6: системный maintenance sweep (автоотмена 7 минут + снятие
+  // истёкших пауз) идёт через ТОТ ЖЕ общий Web Lock: внутри перечитывается
+  // свежий persisted state, обе функции применяются последовательно, запись —
+  // только при фактическом изменении. Повторный sweep не стартует поверх уже
+  // выполняющегося; принятие/отклонение заказа перезаписать он не может.
+  const sweepInFlightRef = useRef(false);
   useEffect(() => {
     if (!isHydrated) {
       return;
     }
-    const sweep = () => {
-      const nowIso = new Date().toISOString();
-      // Единый maintenance-цикл: автоотмена неотвеченных + снятие истёкших
-      // операционных пауз (§17). Оба идемпотентны и возвращают ту же ссылку
-      // state при отсутствии изменений.
-      let next = expireUnansweredRestaurantOrders(stateRef.current, nowIso);
-      next = resumeExpiredOperationalPauses(next, nowIso);
-      if (next !== stateRef.current) {
-        replaceState(next);
+    const sweep = async () => {
+      if (sweepInFlightRef.current) {
+        return;
+      }
+      sweepInFlightRef.current = true;
+      try {
+        await runSerializedStateMutation({
+          mutation: (baseState) => {
+            const nowIso = new Date().toISOString();
+            let next = expireUnansweredRestaurantOrders(baseState, nowIso);
+            next = resumeExpiredOperationalPauses(next, nowIso);
+            return next;
+          },
+        });
+      } finally {
+        sweepInFlightRef.current = false;
       }
     };
-    sweep();
-    const intervalId = window.setInterval(sweep, 5000);
+    void sweep();
+    const intervalId = window.setInterval(() => void sweep(), 5000);
     return () => window.clearInterval(intervalId);
-  }, [isHydrated, replaceState]);
+  }, [isHydrated, runSerializedStateMutation]);
 
   const addItem = useCallback(
     (
       menuItemId: string,
       variantId: string | null = null,
       replaceRestaurant = false,
-    ) => {
-      const action = addCartItem(
-        stateRef.current,
-        menuItemId,
-        variantId,
-        replaceRestaurant,
-      );
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
+    ) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          addCartItem(baseState, menuItemId, variantId, replaceRestaurant),
+        // Инфраструктурный сбой отображается как недоступность позиции.
+        infrastructureFailure: () => "NOT_AVAILABLE" as const,
+      }),
+    [runSerializedActionMutation],
   );
 
   const setItemQuantity = useCallback(
-    (menuItemId: string, variantId: string | null, quantity: number) => {
-      replaceState(
-        setCartItemQuantity(stateRef.current, menuItemId, variantId, quantity),
-      );
-    },
-    [replaceState],
+    (menuItemId: string, variantId: string | null, quantity: number) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => setCartItemQuantity(baseState, menuItemId, variantId, quantity),
+      }),
+    [runSerializedStateMutation],
   );
 
   const setItemComment = useCallback(
-    (menuItemId: string, variantId: string | null, comment: string) => {
-      replaceState(
-        setCartItemComment(stateRef.current, menuItemId, variantId, comment),
-      );
-    },
-    [replaceState],
+    (menuItemId: string, variantId: string | null, comment: string) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => setCartItemComment(baseState, menuItemId, variantId, comment),
+      }),
+    [runSerializedStateMutation],
   );
 
   const updateAddress = useCallback(
-    (patch: Partial<Omit<DeliveryAddress, "zoneId">>) => {
-      replaceState(updateCartAddress(stateRef.current, patch));
-    },
-    [replaceState],
+    (patch: Partial<Omit<DeliveryAddress, "zoneId">>) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => updateCartAddress(baseState, patch),
+      }),
+    [runSerializedStateMutation],
   );
 
   const updateCustomer = useCallback(
-    (patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>) => {
-      replaceState(updateCustomerProfile(stateRef.current, patch));
-    },
-    [replaceState],
+    (patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => updateCustomerProfile(baseState, patch),
+      }),
+    [runSerializedStateMutation],
   );
 
   const setPaymentMethod = useCallback(
-    (paymentMethod: PaymentMethod) => {
-      replaceState(setCartPaymentMethod(stateRef.current, paymentMethod));
-    },
-    [replaceState],
+    (paymentMethod: PaymentMethod) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => setCartPaymentMethod(baseState, paymentMethod),
+      }),
+    [runSerializedStateMutation],
   );
 
   const setFulfillmentChoice = useCallback(
-    (fulfillmentChoice: FulfillmentChoice) => {
-      replaceState(
-        setCartFulfillmentChoice(stateRef.current, fulfillmentChoice),
-      );
-    },
-    [replaceState],
+    (fulfillmentChoice: FulfillmentChoice) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => setCartFulfillmentChoice(baseState, fulfillmentChoice),
+      }),
+    [runSerializedStateMutation],
   );
 
-  const createOrder = useCallback(() => {
-    const action = createOrderFromCart(stateRef.current);
-    if (action.state !== stateRef.current) {
-      replaceState(action.state);
-    }
-    return action.result;
-  }, [replaceState]);
+  const createOrder = useCallback(
+    () =>
+      // Критично: две клиентские вкладки не должны создать одинаковый orderId
+      // или publicNumber — nextOrderNumber растёт только под общим lock.
+      runSerializedActionMutation({
+        mutation: (baseState) => createOrderFromCart(baseState),
+        infrastructureFailure: (error) => ({ orderId: null, error }),
+      }),
+    [runSerializedActionMutation],
+  );
 
   const repeatOrder = useCallback(
-    (orderId: string) => {
-      const action = repeatOrderToCart(stateRef.current, orderId);
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
+    (orderId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) => repeatOrderToCart(baseState, orderId),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          unavailableItems: [],
+          pricesChanged: false,
+          fulfillmentChanged: false,
+        }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const cancelClientOrder = useCallback(
-    (orderId: string, reason: string) => {
-      const action = cancelOrderByClient(stateRef.current, orderId, reason);
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
+    (orderId: string, reason: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          cancelOrderByClient(baseState, orderId, reason),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const requestCancellation = useCallback(
-    (orderId: string, reason: string) => {
-      const action = requestOrderCancellationByClient(
-        stateRef.current,
-        orderId,
-        reason,
-      );
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
+    (orderId: string, reason: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          requestOrderCancellationByClient(
+            baseState,
+            orderId,
+            reason,
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const approveCancellation = useCallback(
-    (requestId: string, note: string) => {
-      const action = approveCancellationRequest(
-        stateRef.current,
-        requestId,
-        note,
-      );
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
+    (requestId: string, note: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          approveCancellationRequest(
+            baseState,
+            requestId,
+            note,
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const rejectCancellation = useCallback(
-    (requestId: string, note: string) => {
-      const action = rejectCancellationRequest(
-        stateRef.current,
-        requestId,
-        note,
-      );
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
+    (requestId: string, note: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          rejectCancellationRequest(
+            baseState,
+            requestId,
+            note,
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const pauseRestaurant = useCallback(
@@ -616,35 +717,33 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resumeAt: string | null,
       actor: OperationalActor,
     ) => {
-      const action = pauseRestaurantOrders(
-        stateRef.current,
-        restaurantId,
-        reason,
-        mode,
-        resumeAt,
-        actor,
-        // Экран паузы — кухонный; в COMBINED роль резолвится в COMBINED.
-        "KITCHEN",
-      );
-      if (action.state !== stateRef.current) replaceState(action.state);
-      return action.result;
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          pauseRestaurantOrders(
+            baseState,
+            restaurantId,
+            reason,
+            mode,
+            resumeAt,
+            actor,
+            // Экран паузы — кухонный; в COMBINED роль резолвится в COMBINED.
+            "KITCHEN",
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const resumeRestaurant = useCallback(
     (restaurantId: string, actor: OperationalActor) => {
-      const action = resumeRestaurantOrders(
-        stateRef.current,
-        restaurantId,
-        actor,
-        "",
-        "KITCHEN",
-      );
-      if (action.state !== stateRef.current) replaceState(action.state);
-      return action.result;
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          resumeRestaurantOrders(baseState, restaurantId, actor, "", "KITCHEN"),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const setMenuItemUnavailable = useCallback(
@@ -656,36 +755,40 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resumeAt: string | null,
       actor: OperationalActor,
     ) => {
-      const action = setMenuItemOperationallyUnavailable(
-        stateRef.current,
-        restaurantId,
-        menuItemId,
-        reason,
-        mode,
-        resumeAt,
-        actor,
-        "KITCHEN",
-      );
-      if (action.state !== stateRef.current) replaceState(action.state);
-      return action.result;
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          setMenuItemOperationallyUnavailable(
+            baseState,
+            restaurantId,
+            menuItemId,
+            reason,
+            mode,
+            resumeAt,
+            actor,
+            "KITCHEN",
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const restoreMenuItem = useCallback(
     (restaurantId: string, menuItemId: string, actor: OperationalActor) => {
-      const action = restoreMenuItemAvailability(
-        stateRef.current,
-        restaurantId,
-        menuItemId,
-        actor,
-        "",
-        "KITCHEN",
-      );
-      if (action.state !== stateRef.current) replaceState(action.state);
-      return action.result;
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          restoreMenuItemAvailability(
+            baseState,
+            restaurantId,
+            menuItemId,
+            actor,
+            "",
+            "KITCHEN",
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const pauseCategory = useCallback(
@@ -697,35 +800,33 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resumeAt: string | null,
       actor: OperationalActor,
     ) => {
-      const action = pauseCategoryItems(
-        stateRef.current,
-        restaurantId,
-        category,
-        reason,
-        mode,
-        resumeAt,
-        actor,
-        "KITCHEN",
-      );
-      if (action.state !== stateRef.current) replaceState(action.state);
-      return action.result;
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          pauseCategoryItems(
+            baseState,
+            restaurantId,
+            category,
+            reason,
+            mode,
+            resumeAt,
+            actor,
+            "KITCHEN",
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error, affected: 0 }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const restoreCategory = useCallback(
     (restaurantId: string, category: string, actor: OperationalActor) => {
-      const action = restoreCategoryItems(
-        stateRef.current,
-        restaurantId,
-        category,
-        actor,
-        "KITCHEN",
-      );
-      if (action.state !== stateRef.current) replaceState(action.state);
-      return action.result;
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          restoreCategoryItems(baseState, restaurantId, category, actor, "KITCHEN"),
+        infrastructureFailure: (error) => ({ ok: false, error, affected: 0 }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const acceptOrder = useCallback(
@@ -735,16 +836,18 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) =>
-      runSerializedPrototypeMutation((baseState) =>
-        acceptRestaurantOrderWithResult(
-          baseState,
-          orderId,
-          preparationMinutes,
-          actor,
-          workspaceRole,
-        ),
-      ),
-    [runSerializedPrototypeMutation],
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          acceptRestaurantOrderWithResult(
+            baseState,
+            orderId,
+            preparationMinutes,
+            actor,
+            workspaceRole,
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const rejectOrder = useCallback(
@@ -754,25 +857,27 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) =>
-      runSerializedPrototypeMutation((baseState) =>
-        rejectRestaurantOrderWithResult(
-          baseState,
-          orderId,
-          reason,
-          actor,
-          workspaceRole,
-        ),
-      ),
-    [runSerializedPrototypeMutation],
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          rejectRestaurantOrderWithResult(
+            baseState,
+            orderId,
+            reason,
+            actor,
+            workspaceRole,
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const simulateOnlinePayment = useCallback(
-    (orderId: string) => {
-      replaceState(
-        simulateSuccessfulOnlinePayment(stateRef.current, orderId),
-      );
-    },
-    [replaceState],
+    (orderId: string) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          simulateSuccessfulOnlinePayment(baseState, orderId),
+      }),
+    [runSerializedStateMutation],
   );
 
   const markReady = useCallback(
@@ -780,12 +885,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       orderId: string,
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
-    ) => {
-      replaceState(
-        markOrderReady(stateRef.current, orderId, actor, workspaceRole),
-      );
-    },
-    [replaceState],
+    ) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          markOrderReady(baseState, orderId, actor, workspaceRole),
+      }),
+    [runSerializedStateMutation],
   );
 
   const adjustOrderEta = useCallback(
@@ -797,21 +902,27 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       workspaceRole?: RestaurantWorkspaceRole,
     ) => {
       // §1: один общий nowIso и для расчёта из intent, и для валидации.
-      const action = adjustOrderEtaFromIntent(
-        stateRef.current,
-        orderId,
-        intent,
-        reason,
-        actor,
-        new Date().toISOString(),
-        workspaceRole,
-      );
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          adjustOrderEtaFromIntent(
+            baseState,
+            orderId,
+            intent,
+            reason,
+            actor,
+            nowIso,
+            workspaceRole,
+          ),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          previousExpectedReadyAt: null,
+          nextExpectedReadyAt: null,
+        }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const reportPreparationProblem = useCallback(
@@ -821,20 +932,21 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) => {
-      const action = reportRestaurantPreparationProblem(
-        stateRef.current,
-        orderId,
-        reason,
-        actor,
-        new Date().toISOString(),
-        workspaceRole,
-      );
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          reportRestaurantPreparationProblem(
+            baseState,
+            orderId,
+            reason,
+            actor,
+            nowIso,
+            workspaceRole,
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const completePickup = useCallback(
@@ -845,21 +957,26 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) => {
-      const action = completePickupWithCode(
-        stateRef.current,
-        orderId,
-        code,
-        paidWith,
-        actor,
-        new Date().toISOString(),
-        workspaceRole,
-      );
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          completePickupWithCode(
+            baseState,
+            orderId,
+            code,
+            paidWith,
+            actor,
+            nowIso,
+            workspaceRole,
+          ),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          paidWith: null,
+        }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const markPickupNoShow = useCallback(
@@ -869,29 +986,34 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) => {
-      const action = runPickupNoShow(
-        stateRef.current,
-        orderId,
-        reason,
-        actor,
-        new Date().toISOString(),
-        workspaceRole,
-      );
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          runPickupNoShow(
+            baseState,
+            orderId,
+            reason,
+            actor,
+            nowIso,
+            workspaceRole,
+          ),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          eligibleAt: null,
+        }),
+      });
     },
-    [replaceState],
+    [runSerializedActionMutation],
   );
 
   const setRestaurantWorkflow = useCallback(
-    (restaurantId: string, mode: RestaurantOrderWorkflowMode) => {
-      replaceState(
-        setRestaurantWorkflowMode(stateRef.current, restaurantId, mode),
-      );
-    },
-    [replaceState],
+    (restaurantId: string, mode: RestaurantOrderWorkflowMode) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          setRestaurantWorkflowMode(baseState, restaurantId, mode),
+      }),
+    [runSerializedStateMutation],
   );
 
   const markOutForDelivery = useCallback(
@@ -899,12 +1021,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       orderId: string,
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
-    ) => {
-      replaceState(
-        markOrderOutForDelivery(stateRef.current, orderId, actor, workspaceRole),
-      );
-    },
-    [replaceState],
+    ) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          markOrderOutForDelivery(baseState, orderId, actor, workspaceRole),
+      }),
+    [runSerializedStateMutation],
   );
 
   const markArriving = useCallback(
@@ -912,12 +1034,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       orderId: string,
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
-    ) => {
-      replaceState(
-        markOrderArriving(stateRef.current, orderId, actor, workspaceRole),
-      );
-    },
-    [replaceState],
+    ) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          markOrderArriving(baseState, orderId, actor, workspaceRole),
+      }),
+    [runSerializedStateMutation],
   );
 
   const markDelivered = useCallback(
@@ -925,41 +1047,38 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       orderId: string,
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
-    ) => {
-      replaceState(
-        markOrderDelivered(stateRef.current, orderId, actor, workspaceRole),
-      );
-    },
-    [replaceState],
+    ) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          markOrderDelivered(baseState, orderId, actor, workspaceRole),
+      }),
+    [runSerializedStateMutation],
   );
 
   const markDeliveredByDriver = useCallback(
-    (orderId: string) => {
-      replaceState(markOrderDeliveredByDriver(stateRef.current, orderId));
-    },
-    [replaceState],
+    (orderId: string) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => markOrderDeliveredByDriver(baseState, orderId),
+      }),
+    [runSerializedStateMutation],
   );
 
   const setPreparationMinutes = useCallback(
-    (orderId: string, minutes: number) => {
-      replaceState(
-        adminSetPreparationMinutes(stateRef.current, orderId, minutes),
-      );
-    },
-    [replaceState],
+    (orderId: string, minutes: number) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          adminSetPreparationMinutes(baseState, orderId, minutes),
+      }),
+    [runSerializedStateMutation],
   );
 
   const setRestaurantAccepting = useCallback(
-    (restaurantId: string, accepting: boolean) => {
-      replaceState(
-        setRestaurantAcceptingOrders(
-          stateRef.current,
-          restaurantId,
-          accepting,
-        ),
-      );
-    },
-    [replaceState],
+    (restaurantId: string, accepting: boolean) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          setRestaurantAcceptingOrders(baseState, restaurantId, accepting),
+      }),
+    [runSerializedStateMutation],
   );
 
   const runAdminOrderAction = useCallback(
@@ -968,14 +1087,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         state: PrototypeState;
         result: AdminActionResult;
       },
-    ): AdminActionResult => {
-      const outcome = action(stateRef.current);
-      if (outcome.state !== stateRef.current) {
-        replaceState(outcome.state);
-      }
-      return outcome.result;
-    },
-    [replaceState],
+    ): Promise<AdminActionResult> =>
+      runSerializedActionMutation({
+        mutation: action,
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const assignDriver = useCallback(
@@ -1027,64 +1144,72 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const saveTariffMatrix = useCallback(
-    (tariffs: TariffMatrix) => {
-      replaceState(saveTariffs(stateRef.current, tariffs));
-    },
-    [replaceState],
+    (tariffs: TariffMatrix) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => saveTariffs(baseState, tariffs),
+      }),
+    [runSerializedStateMutation],
   );
 
-  const restoreTariffs = useCallback(() => {
-    replaceState(restoreDefaultTariffs(stateRef.current));
-  }, [replaceState]);
+  const restoreTariffs = useCallback(
+    () =>
+      runSerializedStateMutation({
+        mutation: (baseState) => restoreDefaultTariffs(baseState),
+      }),
+    [runSerializedStateMutation],
+  );
 
   const createRestaurantEntry = useCallback(
-    (input: RestaurantFormInput) => {
-      const action = createRestaurant(stateRef.current, input);
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
+    (input: RestaurantFormInput) =>
+      runSerializedActionMutation({
+        mutation: (baseState) => createRestaurant(baseState, input),
+        infrastructureFailure: (error) => ({ restaurantId: null, error }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const updateRestaurantEntry = useCallback(
-    (restaurantId: string, patch: Partial<RestaurantFormInput>) => {
-      const action = updateRestaurant(stateRef.current, restaurantId, patch);
-      if (action.state !== stateRef.current) {
-        replaceState(action.state);
-      }
-      return action.result;
-    },
-    [replaceState],
+    (restaurantId: string, patch: Partial<RestaurantFormInput>) =>
+      runSerializedActionMutation({
+        mutation: (baseState) => updateRestaurant(baseState, restaurantId, patch),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const setMenuItemVariants = useCallback(
-    (menuItemId: string, variants: MenuItemVariant[] | null) => {
-      replaceState(
-        updateMenuItemVariants(stateRef.current, menuItemId, variants),
-      );
-    },
-    [replaceState],
+    (menuItemId: string, variants: MenuItemVariant[] | null) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          updateMenuItemVariants(baseState, menuItemId, variants),
+      }),
+    [runSerializedStateMutation],
   );
 
   const savePromotion = useCallback(
-    (promotion: Promotion) => {
-      replaceState(upsertPromotion(stateRef.current, promotion));
-    },
-    [replaceState],
+    (promotion: Promotion) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => upsertPromotion(baseState, promotion),
+      }),
+    [runSerializedStateMutation],
   );
 
   const togglePromotion = useCallback(
-    (promotionId: string, enabled: boolean) => {
-      replaceState(setPromotionEnabled(stateRef.current, promotionId, enabled));
-    },
-    [replaceState],
+    (promotionId: string, enabled: boolean) =>
+      runSerializedStateMutation({
+        mutation: (baseState) =>
+          setPromotionEnabled(baseState, promotionId, enabled),
+      }),
+    [runSerializedStateMutation],
   );
 
-  const resetPrototype = useCallback(() => {
-    replaceState(resetPrototypeState(stateRef.current));
-  }, [replaceState]);
+  const resetPrototype = useCallback(
+    () =>
+      runSerializedStateMutation({
+        mutation: (baseState) => resetPrototypeState(baseState),
+      }),
+    [runSerializedStateMutation],
+  );
 
   const value = useMemo<PrototypeContextValue>(
     () => ({

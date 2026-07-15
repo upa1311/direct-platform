@@ -58,7 +58,7 @@ function RestaurantOperationalCard({
         `Приостановить приём новых заказов рестораном «${restaurant.name}»? Существующие заказы продолжат обрабатываться.`,
       )
     ) {
-      setRestaurantAccepting(restaurant.id, false);
+      void setRestaurantAccepting(restaurant.id, false);
     }
   };
 
@@ -291,7 +291,7 @@ function RestaurantOperationalCard({
           <button
             className={flowStyles.secondaryButton}
             type="button"
-            onClick={() => setRestaurantAccepting(restaurant.id, true)}
+            onClick={() => void setRestaurantAccepting(restaurant.id, true)}
           >
             Возобновить приём заказов
           </button>

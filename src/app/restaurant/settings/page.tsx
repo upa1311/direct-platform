@@ -89,7 +89,7 @@ export default function RestaurantSettingsPage() {
                 name="workflow-mode"
                 checked={active}
                 onChange={() =>
-                  setRestaurantWorkflow(restaurant.id, option.mode)
+                  void setRestaurantWorkflow(restaurant.id, option.mode)
                 }
               />
               <span className={styles.modeBody}>

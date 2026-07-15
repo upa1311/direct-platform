@@ -47,7 +47,7 @@ function DetailContent({ restaurant }: { restaurant: Restaurant }) {
         `Приостановить приём заказов рестораном «${restaurant.name}»?`,
       )
     ) {
-      setRestaurantAccepting(restaurant.id, false);
+      void setRestaurantAccepting(restaurant.id, false);
     }
   };
 
@@ -88,7 +88,7 @@ function DetailContent({ restaurant }: { restaurant: Restaurant }) {
           <button
             className={flowStyles.secondaryButton}
             type="button"
-            onClick={() => setRestaurantAccepting(restaurant.id, true)}
+            onClick={() => void setRestaurantAccepting(restaurant.id, true)}
           >
             Возобновить заказы
           </button>

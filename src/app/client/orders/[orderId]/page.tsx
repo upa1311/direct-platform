@@ -224,7 +224,7 @@ export default function ClientOrderPage() {
               <button
                 className={flowStyles.primaryButton}
                 type="button"
-                onClick={() => simulateOnlinePayment(order.id)}
+                onClick={() => void simulateOnlinePayment(order.id)}
               >
                 Имитировать успешную онлайн-оплату
               </button>

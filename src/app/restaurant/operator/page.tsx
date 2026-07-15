@@ -238,12 +238,12 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
 
-  const doConfirm = () => {
+  const doConfirm = async () => {
     if (!paidWith) {
       setError("Выберите способ оплаты.");
       return;
     }
-    const res = completePickup(order.id, code, paidWith, "RESTAURANT", "OPERATOR");
+    const res = await completePickup(order.id, code, paidWith, "RESTAURANT", "OPERATOR");
     if (!res.ok) {
       setError(res.error ?? "Не удалось подтвердить выдачу.");
       return;
@@ -251,12 +251,12 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
     setError(null);
   };
 
-  const doNoShow = () => {
+  const doNoShow = async () => {
     if (!effectiveReason.trim()) {
       setNoShowError("Укажите причину невыкупа.");
       return;
     }
-    const res = markPickupNoShow(order.id, effectiveReason, "RESTAURANT", "OPERATOR");
+    const res = await markPickupNoShow(order.id, effectiveReason, "RESTAURANT", "OPERATOR");
     if (!res.ok) {
       setNoShowError(res.error ?? "Не удалось закрыть как невыкуп.");
       return;
@@ -412,7 +412,7 @@ function OperatorHandoffActions({ order }: { order: Order }) {
         <button
           className={`${kds.btn} ${kds.btnGreen}`}
           type="button"
-          onClick={() => markOutForDelivery(order.id, "RESTAURANT", "OPERATOR")}
+          onClick={() => void markOutForDelivery(order.id, "RESTAURANT", "OPERATOR")}
         >
           Курьер выехал
         </button>
@@ -423,7 +423,7 @@ function OperatorHandoffActions({ order }: { order: Order }) {
         <button
           className={`${kds.btn} ${kds.btnDark}`}
           type="button"
-          onClick={() => markArriving(order.id, "RESTAURANT", "OPERATOR")}
+          onClick={() => void markArriving(order.id, "RESTAURANT", "OPERATOR")}
         >
           Курьер скоро будет
         </button>
@@ -434,7 +434,7 @@ function OperatorHandoffActions({ order }: { order: Order }) {
         <button
           className={`${kds.btn} ${kds.btnGreen}`}
           type="button"
-          onClick={() => markDelivered(order.id, "RESTAURANT", "OPERATOR")}
+          onClick={() => void markDelivered(order.id, "RESTAURANT", "OPERATOR")}
         >
           Заказ доставлен
         </button>

@@ -784,6 +784,63 @@ export function selectLatestPrototypeState(
   return isNewerState(storedState, localState) ? storedState : localState;
 }
 
+/** Русская инфраструктурная ошибка неудачного сохранения транзакции. */
+export const PROTOTYPE_SAVE_FAILED_ERROR =
+  "Не удалось сохранить действие. Обновите страницу и повторите.";
+
+/** Русская fail-closed ошибка при недоступном Web Locks API. */
+export const SAFE_TAB_SYNC_UNAVAILABLE_ERROR =
+  "Безопасная синхронизация вкладок недоступна в этом браузере.";
+
+export interface SerializedMutationOutcome<T> {
+  /** Состояние, которое вкладка должна принять локально (rebase либо результат). */
+  nextState: PrototypeState;
+  /** Была ли записана новая версия состояния (persist выполнен успешно). */
+  committed: boolean;
+  /** Доменный результат мутации. */
+  result: T;
+}
+
+/**
+ * Чистое ядро сериализованной транзакции (Исправления 1–3). Порядок commit:
+ * 1) выбрать свежий base (local vs persisted); 2) выполнить чистую мутацию;
+ * 3) если state не изменился — ничего не записывать (revision не растёт);
+ * 4) иначе СНАЧАЛА persist (может бросить — тогда транзакция НЕ успешна и
+ * вызывающий не должен принимать неподтверждённый state), ЗАТЕМ рассылка;
+ * ошибка broadcast ПОСЛЕ успешного persist транзакцию не откатывает — другие
+ * вкладки получат событие storage. Тестируется без React и navigator.locks.
+ */
+export function executeSerializedPrototypeMutation<T>({
+  localState,
+  storedState,
+  mutation,
+  persist,
+  broadcast,
+}: {
+  localState: PrototypeState;
+  storedState: PrototypeState | null;
+  mutation: (baseState: PrototypeState) => { state: PrototypeState; result: T };
+  persist: (state: PrototypeState) => void;
+  broadcast?: (state: PrototypeState) => void;
+}): SerializedMutationOutcome<T> {
+  const baseState = selectLatestPrototypeState(localState, storedState);
+  const action = mutation(baseState);
+  if (action.state === baseState) {
+    // No-op мутация: не записываем и не увеличиваем revision; вкладка при этом
+    // принимает rebased base (он мог быть свежее локального).
+    return { nextState: baseState, committed: false, result: action.result };
+  }
+  // Сначала persist: если запись бросила — исключение уходит вызывающему,
+  // stateRef остаётся на подтверждённом состоянии, успех не объявляется.
+  persist(action.state);
+  try {
+    broadcast?.(action.state);
+  } catch {
+    // Рассылка после успешной записи не критична: событие storage догонит.
+  }
+  return { nextState: action.state, committed: true, result: action.result };
+}
+
 export function isNewerState(
   candidate: PrototypeState,
   current: PrototypeState,

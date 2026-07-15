@@ -25,9 +25,9 @@ function MenuItemSizeEditor({ menuItem }: { menuItem: MenuItem }) {
 
   const save = () => {
     if (!enabled) {
-      setMenuItemVariants(menuItem.id, null);
+      void setMenuItemVariants(menuItem.id, null);
     } else {
-      setMenuItemVariants(menuItem.id, [
+      void setMenuItemVariants(menuItem.id, [
         {
           id: "size-standard",
           name: "Стандартная",
@@ -126,7 +126,7 @@ function PromotionEditor({
   const [saved, setSaved] = useState(false);
 
   const save = () => {
-    savePromotion({
+    void savePromotion({
       ...promotion,
       title: form.title,
       displayText: form.displayText,
@@ -147,7 +147,7 @@ function PromotionEditor({
           <input
             type="checkbox"
             checked={promotion.enabled}
-            onChange={(e) => togglePromotion(promotion.id, e.target.checked)}
+            onChange={(e) => void togglePromotion(promotion.id, e.target.checked)}
           />
           <span>{promotion.enabled ? "Включена" : "Выключена"}</span>
         </label>
@@ -298,7 +298,7 @@ export function PromotionsSection({ restaurantId }: { restaurantId: string }) {
   const create = () => {
     const eligible = items.map((item) => item.id);
     const id = `promo-${restaurantId}-${state.promotions.length + 1}`;
-    savePromotion({
+    void savePromotion({
       id,
       restaurantId,
       title: "Каждая 4-я пицца — бесплатно",
