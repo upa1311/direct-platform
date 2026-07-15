@@ -37,11 +37,20 @@ export function ClientRestaurantSchedule({
   // может быть вчерашний день (тот, чей интервал сейчас продолжается).
   const activeDayId = summary?.activeScheduleWeekdayId ?? null;
 
-  // §2: строка графика показывает ТОЛЬКО рабочие часы. Фактическую возможность
-  // заказа (открыто/пауза/закрыто) + вторичную подсказку показывает единый
-  // RestaurantAvailabilityBadge — статус не дублируется.
+  // §0.2: ночной интервал предыдущего дня, продолжающийся после полуночи. Тогда
+  // «Сегодня: Закрыто» рядом с бейджем «Открыто» противоречиво — показываем
+  // объясняющий текст «Сейчас открыто до 02:00 · Сегодня: Закрыто».
+  const isCarriedOverNight =
+    summary?.isOpen === true &&
+    summary.activeScheduleWeekdayId !== summary.currentWeekdayId;
+
+  // §2: в обычном случае строка графика показывает ТОЛЬКО рабочие часы.
+  // Фактическую возможность заказа (открыто/пауза/закрыто) + вторичную подсказку
+  // показывает единый RestaurantAvailabilityBadge — статус не дублируется.
   const hoursText = summary
-    ? `Сегодня: ${summary.todayScheduleLabel}`
+    ? isCarriedOverNight
+      ? summary.statusText
+      : `Сегодня: ${summary.todayScheduleLabel}`
     : "Сегодня: —";
 
   return (

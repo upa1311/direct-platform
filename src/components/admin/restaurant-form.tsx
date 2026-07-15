@@ -29,6 +29,7 @@ import {
   getZoneName,
   parseDollarsToCents,
   publicationStatusLabels,
+  workflowModeLabels,
 } from "@/prototype/selectors";
 
 const ZONE_IDS: ZoneId[] = ["zone-1", "zone-2", "zone-3", "zone-4"];
@@ -274,6 +275,7 @@ export function RestaurantBuilderEditor({
     weeklySchedule: cloneWeeklySchedule(restaurant.weeklySchedule),
     pickupCommissionPercent: (restaurant.pickupCommissionRateBps / 100).toString(),
     timeZone: restaurant.timeZone,
+    orderWorkflowMode: restaurant.orderWorkflowMode,
   });
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -297,6 +299,7 @@ export function RestaurantBuilderEditor({
           0) * 100,
       ),
       timeZone: form.timeZone.trim() || "Europe/Chisinau",
+      orderWorkflowMode: form.orderWorkflowMode,
       defaultPreparationMinutes:
         Number.parseInt(form.defaultPreparationMinutes, 10) || 25,
       pickupEnabled: form.pickupEnabled,
@@ -480,6 +483,26 @@ export function RestaurantBuilderEditor({
                   {option.label}
                 </option>
               ))}
+            </select>
+          </label>
+          <label className={flowStyles.field}>
+            <span>Организация работы с заказами</span>
+            <select
+              value={form.orderWorkflowMode}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  orderWorkflowMode: e.target
+                    .value as Restaurant["orderWorkflowMode"],
+                }))
+              }
+            >
+              <option value="COMBINED">
+                {workflowModeLabels.COMBINED}
+              </option>
+              <option value="SPLIT_OPERATOR_KITCHEN">
+                {workflowModeLabels.SPLIT_OPERATOR_KITCHEN}
+              </option>
             </select>
           </label>
         </div>

@@ -34,10 +34,17 @@ import type {
   RestaurantDeliveryProvider,
   RestaurantDeliverySnapshot,
   RestaurantDeliverySettings,
+  RestaurantOrderWorkflowMode,
+  RestaurantWorkspaceAction,
+  RestaurantWorkspaceRole,
   SettlementEntry,
   TariffMatrix,
   WeeklySchedule,
 } from "./models";
+import {
+  canRestaurantWorkspacePerformAction,
+  resolveRestaurantWorkspaceRole,
+} from "./restaurant-workflow";
 import {
   calculateCartPricing,
   canPlacePrototypeOrder,
@@ -634,6 +641,71 @@ function isWorkingRestaurantOrder(order: Order | undefined): boolean {
 /** Тип автора действия над заказом. */
 export type OrderActionActor = "RESTAURANT" | "ADMIN";
 
+/** Режим работы ресторана заказа (Этап 4); отсутствует → COMBINED. */
+function orderRestaurantWorkflowMode(
+  state: PrototypeState,
+  order: Order,
+): RestaurantOrderWorkflowMode {
+  return (
+    state.restaurants.find((r) => r.id === order.restaurant.id)
+      ?.orderWorkflowMode ?? "COMBINED"
+  );
+}
+
+/**
+ * Этап 4: проверка права ресторанной workspace выполнить действие над заказом.
+ * ADMIN — отдельный actor: матрицу ресторана не проходит (своя авторитетность),
+ * ресторанную роль на события не ставит. Для RESTAURANT работает fail-closed:
+ * в COMBINED роль резолвится в «COMBINED» (старые вызовы), в SPLIT требуется явная
+ * OPERATOR/KITCHEN, иначе действие блокируется. `role` стампится на новые события.
+ */
+function checkRestaurantWorkspace(
+  state: PrototypeState,
+  order: Order,
+  actor: OrderActionActor,
+  action: RestaurantWorkspaceAction,
+  workspaceRole?: RestaurantWorkspaceRole,
+): { allowed: boolean; role?: RestaurantWorkspaceRole } {
+  if (actor === "ADMIN") {
+    return { allowed: true, role: undefined };
+  }
+  const workflowMode = orderRestaurantWorkflowMode(state, order);
+  const allowed = canRestaurantWorkspacePerformAction({
+    workflowMode,
+    workspaceRole,
+    action,
+  });
+  return {
+    allowed,
+    role: resolveRestaurantWorkspaceRole(workflowMode, workspaceRole) ?? undefined,
+  };
+}
+
+/**
+ * Этап 4: guard для действий уровня РЕСТОРАНА (пауза, доступность меню).
+ * ADMIN и SYSTEM — собственная авторитетность, матрицу ресторана не проходят.
+ * Для RESTAURANT работает так же fail-closed, как заказный guard.
+ */
+function checkRestaurantWorkspaceForRestaurant(
+  state: PrototypeState,
+  restaurantId: string,
+  actor: OperationalActor,
+  action: RestaurantWorkspaceAction,
+  workspaceRole?: RestaurantWorkspaceRole,
+): boolean {
+  if (actor !== "RESTAURANT") {
+    return true;
+  }
+  const workflowMode =
+    state.restaurants.find((r) => r.id === restaurantId)?.orderWorkflowMode ??
+    "COMBINED";
+  return canRestaurantWorkspacePerformAction({
+    workflowMode,
+    workspaceRole,
+    action,
+  });
+}
+
 /**
  * Общий transition над заказом с явным автором. Кабинет ресторана вызывает те
  * же actions с actor="RESTAURANT" (по умолчанию), а `/admin/orders` — c "ADMIN".
@@ -644,6 +716,7 @@ export function acceptRestaurantOrder(
   orderId: string,
   preparationMinutes: number,
   actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
 ): PrototypeState {
   const allowedMinutes = [10, 15, 20, 25, 30, 40];
   if (!allowedMinutes.includes(preparationMinutes)) {
@@ -658,6 +731,20 @@ export function acceptRestaurantOrder(
   ) {
     return state;
   }
+
+  // Этап 4: приём заказа (и установка начального времени) — действие кухни/общего
+  // экрана. В SPLIT оператор принять не может.
+  const guard = checkRestaurantWorkspace(
+    state,
+    targetOrder,
+    actor,
+    "ACCEPT_ORDER",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
+    return state;
+  }
+  const workspace = guard.role;
 
   const now = new Date().toISOString();
   const acceptedBy =
@@ -698,6 +785,7 @@ export function acceptRestaurantOrder(
             message: isCourierCash
               ? `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Оплата наличными курьеру ресторана при получении.`
               : `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Оплата в ресторане при получении.`,
+            restaurantWorkspaceRole: workspace,
           },
         ],
       }),
@@ -729,6 +817,7 @@ export function acceptRestaurantOrder(
           fromStatus: "RESTAURANT_REVIEW",
           toStatus: "AWAITING_PAYMENT",
           message: `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Ожидается онлайн-оплата.`,
+          restaurantWorkspaceRole: workspace,
         },
       ],
     }),
@@ -741,9 +830,27 @@ export function rejectRestaurantOrder(
   orderId: string,
   reason: string,
   actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
 ): PrototypeState {
   const normalizedReason = reason.trim();
   if (!normalizedReason) {
+    return state;
+  }
+
+  // Этап 4: отклонение — часть работы с отменой (оператор/общий экран). Кухня в
+  // SPLIT использует «Не можем приготовить» (REPORT_PREPARATION_PROBLEM).
+  const targetOrder = state.orders.find((order) => order.id === orderId);
+  if (!targetOrder) {
+    return state;
+  }
+  const guard = checkRestaurantWorkspace(
+    state,
+    targetOrder,
+    actor,
+    "MANAGE_CANCELLATION",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
     return state;
   }
 
@@ -775,6 +882,7 @@ export function rejectRestaurantOrder(
             fromStatus: "RESTAURANT_REVIEW",
             toStatus: "CANCELED",
             message: `${rejectedBy}. Причина: ${normalizedReason}`,
+            restaurantWorkspaceRole: guard.role,
           },
         ],
       };
@@ -1370,10 +1478,28 @@ export function markOrderReady(
   state: PrototypeState,
   orderId: string,
   actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
 ): PrototypeState {
   const now = new Date().toISOString();
   const readyPrefix =
     actor === "ADMIN" ? "Администратор Direct отметил готовность. " : "";
+
+  // Этап 4: готовность — действие кухни/общего экрана; оператор в SPLIT не может.
+  const targetOrder = state.orders.find((order) => order.id === orderId);
+  if (!targetOrder) {
+    return state;
+  }
+  const guard = checkRestaurantWorkspace(
+    state,
+    targetOrder,
+    actor,
+    "MARK_READY",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
+    return state;
+  }
+  const workspace = guard.role;
 
   return replaceOrder(
     state,
@@ -1406,6 +1532,7 @@ export function markOrderReady(
             fromStatus: "PREPARING",
             toStatus: nextStatus,
             message: `${readyPrefix}${message}`,
+            restaurantWorkspaceRole: workspace,
           },
         ],
       };
@@ -1446,6 +1573,7 @@ export function adjustOrderExpectedReadyAt(
   reason: string,
   actor: "RESTAURANT" | "ADMIN",
   nowIso: string,
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<AdjustOrderEtaResult> {
   const order = state.orders.find((o) => o.id === orderId);
   const fail = (error: string): ActionResult<AdjustOrderEtaResult> => ({
@@ -1459,6 +1587,18 @@ export function adjustOrderExpectedReadyAt(
   });
 
   if (!order) return fail("Заказ не найден.");
+  // Этап 4: корректировка времени — действие кухни/общего экрана; оператор нет.
+  const guard = checkRestaurantWorkspace(
+    state,
+    order,
+    actor,
+    "ADJUST_ETA",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
+    return fail("Недостаточно прав для изменения времени.");
+  }
+  const workspace = guard.role;
   if (Number.isNaN(Date.parse(nowIso))) {
     return fail("Некорректное время операции.");
   }
@@ -1502,6 +1642,7 @@ export function adjustOrderExpectedReadyAt(
     previousExpectedReadyAt: prev,
     nextExpectedReadyAt,
     reason: normReason,
+    restaurantWorkspaceRole: workspace,
   };
 
   const updatedOrder: Order = {
@@ -1519,6 +1660,7 @@ export function adjustOrderExpectedReadyAt(
         fromStatus: "PREPARING",
         toStatus: "PREPARING",
         message,
+        restaurantWorkspaceRole: workspace,
       },
     ],
   };
@@ -1555,14 +1697,127 @@ export function adjustOrderEtaFromIntent(
   reason: string,
   actor: "RESTAURANT" | "ADMIN",
   nowIso: string,
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<AdjustOrderEtaResult> {
   const order = state.orders.find((o) => o.id === orderId);
   if (!order || !order.expectedReadyAt) {
     // Делегируем — adjustOrderExpectedReadyAt вернёт корректную ошибку.
-    return adjustOrderExpectedReadyAt(state, orderId, "", reason, actor, nowIso);
+    return adjustOrderExpectedReadyAt(
+      state,
+      orderId,
+      "",
+      reason,
+      actor,
+      nowIso,
+      workspaceRole,
+    );
   }
   const next = computeEtaFromIntent(intent, order.expectedReadyAt, nowIso);
-  return adjustOrderExpectedReadyAt(state, orderId, next, reason, actor, nowIso);
+  return adjustOrderExpectedReadyAt(
+    state,
+    orderId,
+    next,
+    reason,
+    actor,
+    nowIso,
+    workspaceRole,
+  );
+}
+
+export interface PreparationProblemResult {
+  ok: boolean;
+  error: string | null;
+}
+
+/** Допустимые причины проблемы приготовления (Этап 6), для UI. */
+export const PREPARATION_PROBLEM_REASONS = [
+  "Нет блюда",
+  "Закончился ингредиент",
+  "Кухня перегружена",
+  "Техническая проблема",
+  "Не можем выполнить комментарий",
+  "Ресторан скоро закрывается",
+  "Другая причина",
+] as const;
+
+/**
+ * Этап 6: кухня сообщает «не можем приготовить». Разрешено COMBINED (в COMBINED)
+ * и KITCHEN (в SPLIT), для статусов RESTAURANT_REVIEW и PREPARING. Действие НЕ
+ * меняет статус, оплату, refund, financial snapshot, settlement, expectedReadyAt
+ * и не отменяет заказ — только добавляет структурное событие истории, сразу
+ * видимое оператору. Финансовую отмену выполняет оператор существующим flow.
+ */
+export function reportRestaurantPreparationProblem(
+  state: PrototypeState,
+  orderId: string,
+  reason: string,
+  actor: OrderActionActor = "RESTAURANT",
+  nowIso: string = new Date().toISOString(),
+  workspaceRole?: RestaurantWorkspaceRole,
+): ActionResult<PreparationProblemResult> {
+  const fail = (error: string): ActionResult<PreparationProblemResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return fail("Некорректное время операции.");
+  }
+  const order = state.orders.find((o) => o.id === orderId);
+  if (!order) {
+    return fail("Заказ не найден.");
+  }
+  const guard = checkRestaurantWorkspace(
+    state,
+    order,
+    actor,
+    "REPORT_PREPARATION_PROBLEM",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
+    return fail("Недостаточно прав для сообщения о проблеме приготовления.");
+  }
+  if (order.status !== "RESTAURANT_REVIEW" && order.status !== "PREPARING") {
+    return fail("Сообщить о проблеме можно только до готовности заказа.");
+  }
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) {
+    return fail("Укажите причину.");
+  }
+  if (normalizedReason.length > ETA_REASON_MAX_LENGTH) {
+    return fail("Причина слишком длинная.");
+  }
+
+  const now = nowIso;
+  const prefix =
+    actor === "ADMIN" ? "Администратор Direct: " : "Кухня сообщила о проблеме: ";
+  const updatedOrder: Order = {
+    ...order,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      {
+        id: `${order.id}-history-${order.history.length + 1}`,
+        occurredAt: now,
+        actor,
+        type: "PREPARATION_PROBLEM",
+        fromStatus: order.status,
+        toStatus: order.status,
+        message: `${prefix}${normalizedReason}`,
+        restaurantWorkspaceRole: guard.role,
+      },
+    ],
+  };
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
 }
 
 /**
@@ -1579,6 +1834,7 @@ function advanceCourierStatus(
   platformMessage: string,
   actor: OrderActionActor = "RESTAURANT",
   requireDriverForPlatform = false,
+  workspaceRole?: RestaurantWorkspaceRole,
 ): PrototypeState {
   const targetOrder = state.orders.find((order) => order.id === orderId);
   if (
@@ -1587,6 +1843,17 @@ function advanceCourierStatus(
       targetOrder.deliveryMode !== "PLATFORM_DRIVER") ||
     targetOrder.status !== fromStatus
   ) {
+    return state;
+  }
+  // Этап 4: передача заказа курьеру/водителю — зона оператора/общего экрана.
+  const guard = checkRestaurantWorkspace(
+    state,
+    targetOrder,
+    actor,
+    "HANDOFF_ORDER",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
     return state;
   }
   if (
@@ -1618,6 +1885,7 @@ function advanceCourierStatus(
           fromStatus,
           toStatus,
           message,
+          restaurantWorkspaceRole: guard.role,
         },
       ],
     }),
@@ -1629,6 +1897,7 @@ export function markOrderOutForDelivery(
   state: PrototypeState,
   orderId: string,
   actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
 ): PrototypeState {
   return advanceCourierStatus(
     state,
@@ -1639,6 +1908,7 @@ export function markOrderOutForDelivery(
     "Водитель Direct выехал.",
     actor,
     true,
+    workspaceRole,
   );
 }
 
@@ -1646,6 +1916,7 @@ export function markOrderArriving(
   state: PrototypeState,
   orderId: string,
   actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
 ): PrototypeState {
   return advanceCourierStatus(
     state,
@@ -1656,6 +1927,7 @@ export function markOrderArriving(
     "Водитель Direct скоро будет.",
     actor,
     false,
+    workspaceRole,
   );
 }
 
@@ -1673,6 +1945,7 @@ export function markOrderDelivered(
   state: PrototypeState,
   orderId: string,
   actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
 ): PrototypeState {
   const targetOrder = state.orders.find((order) => order.id === orderId);
   if (
@@ -1680,6 +1953,17 @@ export function markOrderDelivered(
     targetOrder.deliveryMode !== "RESTAURANT_DELIVERY" ||
     targetOrder.status !== "ARRIVING"
   ) {
+    return state;
+  }
+  // Этап 4: завершение доставки — выдача заказа (оператор/общий экран).
+  const guard = checkRestaurantWorkspace(
+    state,
+    targetOrder,
+    actor,
+    "HANDOFF_ORDER",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
     return state;
   }
 
@@ -1703,6 +1987,7 @@ export function markOrderDelivered(
         fromStatus: "ARRIVING",
         toStatus: "ARRIVING",
         message: `${deliveredPrefix}курьер ресторана получил оплату наличными.`,
+        restaurantWorkspaceRole: guard.role,
       },
       {
         id: `${targetOrder.id}-history-${nextHistoryNumber + 1}`,
@@ -1712,6 +1997,7 @@ export function markOrderDelivered(
         fromStatus: "ARRIVING",
         toStatus: "DELIVERED",
         message: "Заказ доставлен клиенту.",
+        restaurantWorkspaceRole: guard.role,
       },
     ],
   };
@@ -1771,6 +2057,7 @@ export function completePickupWithCode(
   paidWith: PickupPaymentMethod,
   actor: OrderActionActor = "RESTAURANT",
   nowIso: string = new Date().toISOString(),
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<CompletePickupResult> {
   const fail = (error: string): ActionResult<CompletePickupResult> => ({
     state,
@@ -1786,6 +2073,18 @@ export function completePickupWithCode(
   if (!order || order.deliveryMode !== "PICKUP") {
     return fail("Заказ не найден или не является самовывозом.");
   }
+  // Этап 4: выдача заказа — действие оператора/общего экрана; кухня в SPLIT нет.
+  const handoffGuard = checkRestaurantWorkspace(
+    state,
+    order,
+    actor,
+    "HANDOFF_ORDER",
+    workspaceRole,
+  );
+  if (!handoffGuard.allowed) {
+    return fail("Недостаточно прав для выдачи заказа.");
+  }
+  const handoffWorkspace = handoffGuard.role;
   // 14. Повторная выдача — без двойной мутации, тот же ref состояния.
   if (order.status === "PICKED_UP" || order.pickupCodeUsed) {
     return fail("Заказ уже выдан.");
@@ -1868,6 +2167,7 @@ export function completePickupWithCode(
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "READY_FOR_PICKUP",
         message: paymentMessage,
+        restaurantWorkspaceRole: handoffWorkspace,
       },
       {
         id: `${order.id}-history-${nextHistoryNumber + 1}`,
@@ -1877,6 +2177,7 @@ export function completePickupWithCode(
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "PICKED_UP",
         message: statusMessage,
+        restaurantWorkspaceRole: handoffWorkspace,
       },
     ],
   };
@@ -1928,6 +2229,7 @@ export function markPickupNoShow(
   reason: string,
   actor: OrderActionActor = "RESTAURANT",
   nowIso: string = new Date().toISOString(),
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<PickupNoShowResult> {
   const fail = (
     error: string,
@@ -1943,6 +2245,18 @@ export function markPickupNoShow(
   const order = state.orders.find((o) => o.id === orderId);
   if (!order || order.deliveryMode !== "PICKUP") {
     return fail("Заказ не найден или не является самовывозом.");
+  }
+  // Этап 4: невыкуп — управление отменой; действие оператора/общего экрана.
+  if (
+    !checkRestaurantWorkspace(
+      state,
+      order,
+      actor,
+      "MANAGE_CANCELLATION",
+      workspaceRole,
+    ).allowed
+  ) {
+    return fail("Недостаточно прав для отметки невыкупа.");
   }
   if (order.status !== "READY_FOR_PICKUP") {
     return fail("Невыкуп можно отметить только для готового к выдаче заказа.");
@@ -2106,6 +2420,30 @@ export function setRestaurantAcceptingOrders(
   });
 }
 
+/**
+ * Этап 10: смена режима работы ресторана. Меняет ТОЛЬКО orderWorkflowMode —
+ * заказы, статусы, ETA, оплату, водителя, financial snapshot, settlement и
+ * историю не трогает.
+ */
+export function setRestaurantWorkflowMode(
+  state: PrototypeState,
+  restaurantId: string,
+  mode: RestaurantOrderWorkflowMode,
+): PrototypeState {
+  const target = state.restaurants.find((r) => r.id === restaurantId);
+  if (!target || target.orderWorkflowMode === mode) {
+    return state;
+  }
+  return finalizeMutation(state, {
+    ...state,
+    restaurants: state.restaurants.map((restaurant) =>
+      restaurant.id === restaurantId
+        ? { ...restaurant, orderWorkflowMode: mode }
+        : restaurant,
+    ),
+  });
+}
+
 // --- Операционная пауза приёма и доступность меню (Этап кухни 2) ------------
 
 export interface OperationalActionResult {
@@ -2190,6 +2528,7 @@ export function pauseRestaurantOrders(
   mode: OperationalPauseMode,
   resumeAt: string | null,
   actor: OperationalActor,
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<OperationalActionResult> {
   const restaurant = state.restaurants.find((r) => r.id === restaurantId);
   const fail = (error: string): ActionResult<OperationalActionResult> => ({
@@ -2197,6 +2536,18 @@ export function pauseRestaurantOrders(
     result: { ok: false, error },
   });
   if (!restaurant) return fail("Ресторан не найден.");
+  // Этап 4: пауза ресторана — кухня/общий экран; оператор в SPLIT не может.
+  if (
+    !checkRestaurantWorkspaceForRestaurant(
+      state,
+      restaurantId,
+      actor,
+      "PAUSE_RESTAURANT",
+      workspaceRole,
+    )
+  ) {
+    return fail("Недостаточно прав для паузы ресторана.");
+  }
   const normReason = reason.trim();
   if (!normReason) return fail("Укажите причину паузы.");
 
@@ -2260,6 +2611,7 @@ export function resumeRestaurantOrders(
   restaurantId: string,
   actor: OperationalActor,
   reason = "",
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<OperationalActionResult> {
   const restaurant = state.restaurants.find((r) => r.id === restaurantId);
   const fail = (error: string): ActionResult<OperationalActionResult> => ({
@@ -2267,6 +2619,17 @@ export function resumeRestaurantOrders(
     result: { ok: false, error },
   });
   if (!restaurant) return fail("Ресторан не найден.");
+  if (
+    !checkRestaurantWorkspaceForRestaurant(
+      state,
+      restaurantId,
+      actor,
+      "PAUSE_RESTAURANT",
+      workspaceRole,
+    )
+  ) {
+    return fail("Недостаточно прав для возобновления приёма.");
+  }
   if (restaurant.isAcceptingOrders && !restaurant.orderPause) {
     return { state, result: { ok: true, error: null } };
   }
@@ -2316,6 +2679,7 @@ export function setMenuItemOperationallyUnavailable(
   mode: OperationalPauseMode,
   resumeAt: string | null,
   actor: OperationalActor,
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<OperationalActionResult> {
   const restaurant = state.restaurants.find((r) => r.id === restaurantId);
   const item = state.menuItems.find((m) => m.id === menuItemId);
@@ -2327,6 +2691,18 @@ export function setMenuItemOperationallyUnavailable(
   if (!item) return fail("Блюдо не найдено.");
   if (item.restaurantId !== restaurantId) {
     return fail("Блюдо относится к другому ресторану.");
+  }
+  // Этап 4: доступность меню — кухня/общий экран.
+  if (
+    !checkRestaurantWorkspaceForRestaurant(
+      state,
+      restaurantId,
+      actor,
+      "CHANGE_MENU_AVAILABILITY",
+      workspaceRole,
+    )
+  ) {
+    return fail("Недостаточно прав для изменения доступности меню.");
   }
   const normReason = reason.trim();
   if (!normReason) return fail("Укажите причину.");
@@ -2387,6 +2763,7 @@ export function restoreMenuItemAvailability(
   menuItemId: string,
   actor: OperationalActor,
   reason = "",
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<OperationalActionResult> {
   const item = state.menuItems.find((m) => m.id === menuItemId);
   const fail = (error: string): ActionResult<OperationalActionResult> => ({
@@ -2399,6 +2776,17 @@ export function restoreMenuItemAvailability(
   if (!item) return fail("Блюдо не найдено.");
   if (item.restaurantId !== restaurantId) {
     return fail("Блюдо относится к другому ресторану.");
+  }
+  if (
+    !checkRestaurantWorkspaceForRestaurant(
+      state,
+      restaurantId,
+      actor,
+      "CHANGE_MENU_AVAILABILITY",
+      workspaceRole,
+    )
+  ) {
+    return fail("Недостаточно прав для изменения доступности меню.");
   }
   if (item.available && !item.availabilityPause) {
     return { state, result: { ok: true, error: null } };
@@ -2449,6 +2837,7 @@ export function pauseCategoryItems(
   mode: OperationalPauseMode,
   resumeAt: string | null,
   actor: OperationalActor,
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<BulkOperationalResult> {
   const restaurant = state.restaurants.find((r) => r.id === restaurantId);
   const fail = (error: string): ActionResult<BulkOperationalResult> => ({
@@ -2456,6 +2845,17 @@ export function pauseCategoryItems(
     result: { ok: false, error, affected: 0 },
   });
   if (!restaurant) return fail("Ресторан не найден.");
+  if (
+    !checkRestaurantWorkspaceForRestaurant(
+      state,
+      restaurantId,
+      actor,
+      "CHANGE_MENU_AVAILABILITY",
+      workspaceRole,
+    )
+  ) {
+    return fail("Недостаточно прав для изменения доступности меню.");
+  }
   const normReason = reason.trim();
   if (!normReason) return fail("Укажите причину.");
 
@@ -2518,6 +2918,7 @@ export function restoreCategoryItems(
   restaurantId: string,
   category: string,
   actor: OperationalActor,
+  workspaceRole?: RestaurantWorkspaceRole,
 ): ActionResult<BulkOperationalResult> {
   const restaurant = state.restaurants.find((r) => r.id === restaurantId);
   const fail = (error: string): ActionResult<BulkOperationalResult> => ({
@@ -2525,6 +2926,17 @@ export function restoreCategoryItems(
     result: { ok: false, error, affected: 0 },
   });
   if (!restaurant) return fail("Ресторан не найден.");
+  if (
+    !checkRestaurantWorkspaceForRestaurant(
+      state,
+      restaurantId,
+      actor,
+      "CHANGE_MENU_AVAILABILITY",
+      workspaceRole,
+    )
+  ) {
+    return fail("Недостаточно прав для изменения доступности меню.");
+  }
 
   const now = new Date().toISOString();
   const nowMs = Date.parse(now);
@@ -3289,6 +3701,8 @@ export interface RestaurantFormInput {
   emergencyPhone?: string;
   internalAdminNote?: string;
   weeklySchedule?: WeeklySchedule;
+  /** Этап 10: организация работы с заказами; по умолчанию COMBINED. */
+  orderWorkflowMode?: RestaurantOrderWorkflowMode;
 }
 
 export interface CreateRestaurantResult {
@@ -3351,6 +3765,7 @@ export function createRestaurant(
       internalAdminNote: input.internalAdminNote,
       weeklySchedule: input.weeklySchedule,
       timeZone: input.timeZone,
+      orderWorkflowMode: input.orderWorkflowMode,
     }),
   };
   const nextState = finalizeMutation(state, {
@@ -3426,6 +3841,7 @@ export function updateRestaurant(
     weeklySchedule: patch.weeklySchedule
       ? cloneWeeklySchedule(patch.weeklySchedule)
       : target.weeklySchedule,
+    orderWorkflowMode: patch.orderWorkflowMode ?? target.orderWorkflowMode,
   };
 
   const nextState = finalizeMutation(state, {

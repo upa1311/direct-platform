@@ -18,7 +18,10 @@ import {
   playKitchenBeep,
 } from "@/components/workspaces/kitchen-sound";
 import { usePrototype } from "@/prototype/prototype-provider";
-import { RESTAURANT_RESPONSE_TIMEOUT_MS } from "@/prototype/actions";
+import {
+  PREPARATION_PROBLEM_REASONS,
+  RESTAURANT_RESPONSE_TIMEOUT_MS,
+} from "@/prototype/actions";
 import type {
   CancellationRequest,
   DeliveryMode,
@@ -200,7 +203,129 @@ function KitchenCardHead({
   );
 }
 
-function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
+/**
+ * Этап 6/8: инлайновая панель «Не можем приготовить». Кухня сообщает оператору
+ * о проблеме — статус, оплата и финансы НЕ меняются, заказ не отменяется.
+ */
+function PreparationProblemPanel({ order }: { order: Order }) {
+  const { reportPreparationProblem } = usePrototype();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [customReason, setCustomReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+
+  const isOther = reason === "Другая причина";
+  const effectiveReason = isOther ? customReason : reason;
+
+  const doReport = () => {
+    const res = reportPreparationProblem(
+      order.id,
+      effectiveReason,
+      "RESTAURANT",
+      "KITCHEN",
+    );
+    if (!res.ok) {
+      setError(res.error ?? "Не удалось отправить сообщение.");
+      return;
+    }
+    setError(null);
+    setSent(true);
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <>
+        <button
+          className={`${kds.btn} ${kds.btnRedOutline}`}
+          type="button"
+          onClick={() => {
+            setOpen(true);
+            setSent(false);
+          }}
+        >
+          Не можем приготовить
+        </button>
+        {sent ? (
+          <p className={kds.units} role="status">
+            Сообщение о проблеме отправлено оператору.
+          </p>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <div className={kds.dialog} role="group" aria-label="Проблема приготовления">
+      <h4 className={kds.dialogTitle}>Что случилось?</h4>
+      <fieldset className={kds.reasonList}>
+        {PREPARATION_PROBLEM_REASONS.map((r) => (
+          <label className={kds.reasonOption} key={r}>
+            <input
+              type="radio"
+              name={`problem-${order.id}`}
+              checked={reason === r}
+              onChange={() => {
+                setReason(r);
+                setError(null);
+              }}
+            />
+            <span>{r}</span>
+          </label>
+        ))}
+      </fieldset>
+      {isOther ? (
+        <label className={kds.field}>
+          <span>Ваша причина</span>
+          <textarea
+            value={customReason}
+            onChange={(event) => {
+              setCustomReason(event.target.value);
+              setError(null);
+            }}
+            placeholder="Опишите проблему"
+          />
+        </label>
+      ) : null}
+      <p className={kds.pickupAdminHint}>
+        Заказ не отменяется: оператор увидит сообщение и решит, что делать.
+      </p>
+      {error ? (
+        <p className={kds.pickupError} role="alert">
+          {error}
+        </p>
+      ) : null}
+      <div className={kds.btnRowEnd}>
+        <button
+          className={`${kds.btn} ${kds.btnOutline}`}
+          type="button"
+          onClick={() => setOpen(false)}
+        >
+          Отмена
+        </button>
+        <button
+          className={`${kds.btn} ${kds.btnRedOutline}`}
+          type="button"
+          disabled={!effectiveReason.trim()}
+          onClick={doReport}
+        >
+          Сообщить оператору
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NewOrderCard({
+  order,
+  nowMs,
+  isSplit,
+}: {
+  order: Order;
+  nowMs: number;
+  isSplit: boolean;
+}) {
   const { state, acceptOrder, rejectOrder } = usePrototype();
   const restaurant = getRestaurant(state, order.restaurant.id);
   const [prep, setPrep] = useState(() =>
@@ -254,17 +379,23 @@ function NewOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
             <button
               className={`${kds.btn} ${kds.btnDark}`}
               type="button"
-              onClick={() => acceptOrder(order.id, prep)}
+              onClick={() => acceptOrder(order.id, prep, "RESTAURANT", "KITCHEN")}
             >
               Принять
             </button>
-            <button
-              className={`${kds.btn} ${kds.btnRedOutline}`}
-              type="button"
-              onClick={() => setRejectOpen(true)}
-            >
-              Отклонить
-            </button>
+            {/* Этап 8: в SPLIT кухня не отклоняет заказ (это отмена — зона
+                оператора), а сообщает о проблеме приготовления. */}
+            {isSplit ? (
+              <PreparationProblemPanel order={order} />
+            ) : (
+              <button
+                className={`${kds.btn} ${kds.btnRedOutline}`}
+                type="button"
+                onClick={() => setRejectOpen(true)}
+              >
+                Отклонить
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -377,7 +508,7 @@ function PreparingCard({
         <button
           className={`${kds.btn} ${kds.btnGreen}`}
           type="button"
-          onClick={() => markReady(order.id)}
+          onClick={() => markReady(order.id, "RESTAURANT", "KITCHEN")}
         >
           {readyLabel}
         </button>
@@ -410,6 +541,8 @@ function PreparingCard({
           Водитель уже назначен. Администратор Direct увидит обновлённое время.
         </p>
       ) : null}
+      {/* Этап 6: кухня может сообщить о проблеме и во время приготовления. */}
+      <PreparationProblemPanel order={order} />
     </article>
   );
 }
@@ -458,7 +591,7 @@ function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) 
       setError("Укажите причину невыкупа.");
       return;
     }
-    const res = markPickupNoShow(order.id, effectiveReason, "RESTAURANT");
+    const res = markPickupNoShow(order.id, effectiveReason, "RESTAURANT", "KITCHEN");
     if (!res.ok) {
       // Панель остаётся открытой, причина сохраняется, ошибка рядом.
       setError(res.error ?? "Не удалось закрыть как невыкуп.");
@@ -581,7 +714,7 @@ function KitchenPickupHandoff({
       setError("Выберите способ оплаты.");
       return;
     }
-    const res = completePickup(order.id, code, paidWith, "RESTAURANT");
+    const res = completePickup(order.id, code, paidWith, "RESTAURANT", "KITCHEN");
     if (!res.ok) {
       setError(res.error ?? "Не удалось подтвердить выдачу.");
       return;
@@ -655,7 +788,15 @@ function KitchenPickupHandoff({
   );
 }
 
-function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
+function ReadyCard({
+  order,
+  nowMs,
+  isSplit,
+}: {
+  order: Order;
+  nowMs: number;
+  isSplit: boolean;
+}) {
   const { state } = usePrototype();
   const request = getCancellationRequestForOrder(state, order.id);
   const isPickup = order.status === "READY_FOR_PICKUP";
@@ -679,7 +820,8 @@ function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
       {request?.status === "PENDING" ? (
         <CancellationRequestNotice request={request} />
       ) : null}
-      {isPickup ? (
+      {/* Этап 8: в SPLIT кухня не видит имя/телефон клиента. */}
+      {isPickup && !isSplit ? (
         <div className={kds.metaLine}>
           Клиент: {order.customer.name || "—"}
           {order.customer.phone ? ` · ${order.customer.phone}` : ""}
@@ -693,7 +835,15 @@ function ReadyCard({ order, nowMs }: { order: Order; nowMs: number }) {
       <p className={kds.subtle}>
         Готов {formatElapsed(getOrderReadySince(order), nowMs)} назад
       </p>
-      {isPickup ? <KitchenPickupHandoff order={order} nowMs={nowMs} /> : null}
+      {/* Этап 8: выдачу в SPLIT выполняет оператор — кухня без формы и кода. */}
+      {isPickup && isSplit ? (
+        <p className={kds.pickupAdminHint}>
+          Заказ готов. Выдачу выполняет оператор.
+        </p>
+      ) : null}
+      {isPickup && !isSplit ? (
+        <KitchenPickupHandoff order={order} nowMs={nowMs} />
+      ) : null}
     </article>
   );
 }
@@ -710,6 +860,8 @@ export default function RestaurantKitchenPage() {
   const [soundBlocked, setSoundBlocked] = useState(false);
 
   const restaurant = getRestaurant(state, selectedRestaurantId);
+  // Этап 8: в SPLIT кухня не видит приватные данные и не выполняет выдачу.
+  const isSplit = restaurant?.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN";
   // Единое состояние приёма для toolbar (тот же helper, что и в pause-контроле).
   const acceptanceState = restaurant
     ? getKitchenAcceptanceState(restaurant, nowMs)
@@ -919,7 +1071,7 @@ export default function RestaurantKitchenPage() {
                 <div className={kds.empty}>Новых заказов нет.</div>
               ) : (
                 newOrders.map((order) => (
-                  <NewOrderCard order={order} nowMs={nowMs} key={order.id} />
+                  <NewOrderCard order={order} nowMs={nowMs} isSplit={isSplit} key={order.id} />
                 ))
               )}
             </section>
@@ -950,7 +1102,7 @@ export default function RestaurantKitchenPage() {
                 <div className={kds.empty}>Готовых заказов пока нет.</div>
               ) : (
                 readyOrders.map((order) => (
-                  <ReadyCard order={order} nowMs={nowMs} key={order.id} />
+                  <ReadyCard order={order} nowMs={nowMs} isSplit={isSplit} key={order.id} />
                 ))
               )}
             </section>

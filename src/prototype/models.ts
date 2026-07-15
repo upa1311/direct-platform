@@ -4,7 +4,7 @@ import type {
   RestaurantDeliverySettings,
 } from "./pricing-engine";
 
-export const PROTOTYPE_SCHEMA_VERSION = 6 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 7 as const;
 
 export type {
   FulfillmentChoice,
@@ -169,6 +169,47 @@ export interface OperationalEvent {
   resumeAt: string | null;
 }
 
+/**
+ * Режим организации работы ресторана с заказами (Этап 1). Меняет только рабочий
+ * экран/роли/права, НЕ создаёт второй заказ и не меняет жизненный цикл.
+ * COMBINED — один общий экран; SPLIT_OPERATOR_KITCHEN — оператор и кухня отдельно.
+ */
+export type RestaurantOrderWorkflowMode = "COMBINED" | "SPLIT_OPERATOR_KITCHEN";
+
+/** Рабочая роль внутри ресторана — фиксируется в аудите, клиенту не видна. */
+export type RestaurantWorkspaceRole = "COMBINED" | "OPERATOR" | "KITCHEN";
+
+/** Действия ресторанной workspace для матрицы прав (Этап 3). */
+export type RestaurantWorkspaceAction =
+  | "ACCEPT_ORDER"
+  | "SET_INITIAL_ETA"
+  | "ADJUST_ETA"
+  | "MARK_READY"
+  | "REPORT_PREPARATION_PROBLEM"
+  | "MANAGE_CUSTOMER"
+  | "MANAGE_CANCELLATION"
+  | "MANAGE_DRIVER"
+  | "HANDOFF_ORDER"
+  | "PAUSE_RESTAURANT"
+  | "CHANGE_MENU_AVAILABILITY";
+
+/** Категории данных заказа для матрицы видимости (Этап 3). */
+export type RestaurantWorkspaceData =
+  | "ORDER_NUMBER"
+  | "FULFILLMENT"
+  | "ORDER_ITEMS"
+  | "COOKING_COMMENTS"
+  | "CUSTOMER_NAME"
+  | "CUSTOMER_PHONE"
+  | "FULL_ADDRESS"
+  | "PAYMENT_STATUS"
+  | "EXPECTED_READY_AT"
+  | "ETA_ADJUSTMENTS"
+  | "PREPARATION_PROBLEMS"
+  | "DRIVER_DETAILS"
+  | "PICKUP_HANDOFF"
+  | "FINANCIAL_BREAKDOWN";
+
 export interface Restaurant {
   id: string;
   name: string;
@@ -215,6 +256,11 @@ export interface Restaurant {
   timeZone: string;
   /** Операционная пауза приёма заказов (отдельно от publication status). */
   orderPause: OperationalPause | null;
+  /**
+   * Режим работы с заказами (Этап 1). Legacy/новые/seed → «COMBINED». Меняет
+   * только экран/роли/права, не заказы и не жизненный цикл.
+   */
+  orderWorkflowMode: RestaurantOrderWorkflowMode;
 }
 
 export interface MenuItemVariant {
@@ -395,10 +441,15 @@ export interface OrderHistoryEvent {
   id: string;
   occurredAt: string;
   actor: "CLIENT" | "RESTAURANT" | "SYSTEM" | "ADMIN";
-  type: "STATUS" | "PAYMENT" | "ETA";
+  type: "STATUS" | "PAYMENT" | "ETA" | "PREPARATION_PROBLEM";
   fromStatus: OrderStatus | null;
   toStatus: OrderStatus;
   message: string;
+  /**
+   * Рабочая роль ресторана, выполнившая действие (Этап 1). Только для внутреннего
+   * аудита; клиенту не показывается. Старые события без поля продолжают работать.
+   */
+  restaurantWorkspaceRole?: RestaurantWorkspaceRole;
 }
 
 /**
@@ -412,6 +463,8 @@ export interface OrderEtaAdjustment {
   previousExpectedReadyAt: string;
   nextExpectedReadyAt: string;
   reason: string;
+  /** Рабочая роль ресторана (Этап 1); внутренний аудит, клиенту не видна. */
+  restaurantWorkspaceRole?: RestaurantWorkspaceRole;
 }
 
 export interface Order {

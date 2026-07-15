@@ -62,6 +62,7 @@ type RestaurantExtras = Pick<
   | "weeklySchedule"
   | "timeZone"
   | "orderPause"
+  | "orderWorkflowMode"
 >;
 
 /** Часовой пояс по умолчанию (Бендеры / Приднестровье). */
@@ -86,6 +87,8 @@ export function createRestaurantExtras(
       : createDefaultWeeklySchedule(),
     timeZone: overrides.timeZone || DEFAULT_RESTAURANT_TIME_ZONE,
     orderPause: overrides.orderPause ?? null,
+    // Этап 1: по умолчанию единый общий экран.
+    orderWorkflowMode: overrides.orderWorkflowMode ?? "COMBINED",
   };
 }
 

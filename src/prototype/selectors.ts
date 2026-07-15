@@ -20,6 +20,7 @@ import type {
   PrototypeState,
   PublicationStatus,
   Restaurant,
+  RestaurantOrderWorkflowMode,
   SettlementEntry,
   SettlementStatus,
   SettlementType,
@@ -182,6 +183,12 @@ export const publicationStatusLabels: Record<PublicationStatus, string> = {
   PUBLISHED: "Опубликован",
   HIDDEN: "Скрыт",
   ARCHIVED: "Архив",
+};
+
+/** Этап 10/11: русские подписи режима работы с заказами (enum клиенту не виден). */
+export const workflowModeLabels: Record<RestaurantOrderWorkflowMode, string> = {
+  COMBINED: "Один общий экран",
+  SPLIT_OPERATOR_KITCHEN: "Оператор и кухня отдельно",
 };
 
 /** §3: русские подписи статусов начислений (единый источник для всех экранов). */

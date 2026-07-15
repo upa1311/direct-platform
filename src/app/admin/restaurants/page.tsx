@@ -16,6 +16,7 @@ import {
   getZoneName,
   isRestaurantOpenNow,
   publicationStatusLabels,
+  workflowModeLabels,
 } from "@/prototype/selectors";
 
 function RestaurantOperationalCard({
@@ -97,6 +98,10 @@ function RestaurantOperationalCard({
             <div className={flowStyles.definitionRow}>
               <dt>Часовой пояс</dt>
               <dd>{restaurant.timeZone}</dd>
+            </div>
+            <div className={flowStyles.definitionRow}>
+              <dt>Организация работы</dt>
+              <dd>{workflowModeLabels[restaurant.orderWorkflowMode]}</dd>
             </div>
             <div className={flowStyles.definitionRow}>
               <dt>Публичный телефон</dt>

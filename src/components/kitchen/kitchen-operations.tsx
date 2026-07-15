@@ -191,7 +191,7 @@ export function EtaAdjustPanel({
       setError("Укажите причину.");
       return;
     }
-    const res = adjustOrderEta(order.id, intent, effectiveReason, "RESTAURANT");
+    const res = adjustOrderEta(order.id, intent, effectiveReason, "RESTAURANT", "KITCHEN");
     // §9: при ошибке панель не закрываем и показываем domain error рядом.
     if (!res.ok) {
       setError(res.error);

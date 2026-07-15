@@ -191,10 +191,12 @@ export default function ClientCartPage() {
       {/* §1/§2: статус доступности показывает единый бейдж в
           ClientRestaurantSchedule (заголовок оформления) — большая плашка
           удалена. Компактная причина недоступности оформления — у кнопки. */}
+      {/* §0.1: нижняя строка — только факт недоступности. Время возобновления /
+          следующего открытия уже показывает ClientRestaurantSchedule/бейдж, поэтому
+          detailLabel здесь НЕ дублируем. */}
       {nowMs > 0 && availability && !availability.canAcceptOrders ? (
         <p className={flowStyles.restaurantAvailabilityNote} role="status">
           Оформление временно недоступно.
-          {availability.detailLabel ? <> {availability.detailLabel}</> : null}
         </p>
       ) : null}
       {hasUnavailableItem ? (

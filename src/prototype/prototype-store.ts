@@ -18,8 +18,9 @@ import {
 } from "./default-state";
 import { migrateFulfillmentChoice } from "./pricing-engine";
 
-export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v6";
-export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v6";
+export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
+export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
+export const LEGACY_V6_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v6";
 export const LEGACY_V5_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v5";
 export const LEGACY_V4_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v4";
 export const LEGACY_V3_PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v3";
@@ -507,6 +508,11 @@ function normalizeRestaurantV5(
     weeklySchedule: normalizeWeeklySchedule(raw.weeklySchedule),
     timeZone: str(raw.timeZone, "Europe/Chisinau"),
     orderPause: normalizeOperationalPause(raw.orderPause),
+    // Этап 2 (v6→v7): ресторан без режима или с неизвестным значением → COMBINED.
+    orderWorkflowMode:
+      raw.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN"
+        ? "SPLIT_OPERATOR_KITCHEN"
+        : "COMBINED",
   };
 }
 

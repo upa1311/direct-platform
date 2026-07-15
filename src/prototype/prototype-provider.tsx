@@ -39,6 +39,8 @@ import {
   markOrderOutForDelivery,
   markOrderReady,
   markPickupNoShow as runPickupNoShow,
+  reportRestaurantPreparationProblem,
+  setRestaurantWorkflowMode,
   reassignDriverForOrder,
   rejectCancellationRequest,
   rejectRestaurantOrder,
@@ -71,6 +73,7 @@ import {
   type OperationalActionResult,
   type OrderActionActor,
   type PickupNoShowResult,
+  type PreparationProblemResult,
   type RepeatOrderResult,
   type RequestCancellationResult,
   type RestaurantFormInput,
@@ -89,6 +92,8 @@ import type {
   PickupPaymentMethod,
   Promotion,
   PrototypeState,
+  RestaurantOrderWorkflowMode,
+  RestaurantWorkspaceRole,
   TariffMatrix,
 } from "./models";
 import {
@@ -98,6 +103,7 @@ import {
   LEGACY_V3_PROTOTYPE_STORAGE_KEY,
   LEGACY_V4_PROTOTYPE_STORAGE_KEY,
   LEGACY_V5_PROTOTYPE_STORAGE_KEY,
+  LEGACY_V6_PROTOTYPE_STORAGE_KEY,
   normalizePrototypeState,
   parseLegacyStoredState,
   parseStoredState,
@@ -179,34 +185,65 @@ interface PrototypeContextValue {
     orderId: string,
     preparationMinutes: number,
     actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
   ) => void;
   rejectOrder: (
     orderId: string,
     reason: string,
     actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
   ) => void;
   simulateOnlinePayment: (orderId: string) => void;
-  markReady: (orderId: string, actor?: OrderActionActor) => void;
+  markReady: (
+    orderId: string,
+    actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => void;
   adjustOrderEta: (
     orderId: string,
     intent: EtaAdjustmentIntent,
     reason: string,
     actor?: "RESTAURANT" | "ADMIN",
+    workspaceRole?: RestaurantWorkspaceRole,
   ) => AdjustOrderEtaResult;
+  reportPreparationProblem: (
+    orderId: string,
+    reason: string,
+    actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => PreparationProblemResult;
   completePickup: (
     orderId: string,
     code: string,
     paidWith: PickupPaymentMethod,
     actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
   ) => CompletePickupResult;
   markPickupNoShow: (
     orderId: string,
     reason: string,
     actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
   ) => PickupNoShowResult;
-  markOutForDelivery: (orderId: string, actor?: OrderActionActor) => void;
-  markArriving: (orderId: string, actor?: OrderActionActor) => void;
-  markDelivered: (orderId: string, actor?: OrderActionActor) => void;
+  setRestaurantWorkflow: (
+    restaurantId: string,
+    mode: RestaurantOrderWorkflowMode,
+  ) => void;
+  markOutForDelivery: (
+    orderId: string,
+    actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => void;
+  markArriving: (
+    orderId: string,
+    actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => void;
+  markDelivered: (
+    orderId: string,
+    actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => void;
   markDeliveredByDriver: (orderId: string) => void;
   setPreparationMinutes: (orderId: string, minutes: number) => void;
   setRestaurantAccepting: (restaurantId: string, accepting: boolean) => void;
@@ -268,6 +305,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
     const storedState =
       parseStoredState(window.localStorage.getItem(PROTOTYPE_STORAGE_KEY)) ??
+      parseLegacyStoredState(
+        window.localStorage.getItem(LEGACY_V6_PROTOTYPE_STORAGE_KEY),
+      ) ??
       parseLegacyStoredState(
         window.localStorage.getItem(LEGACY_V5_PROTOTYPE_STORAGE_KEY),
       ) ??
@@ -524,6 +564,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         mode,
         resumeAt,
         actor,
+        // Экран паузы — кухонный; в COMBINED роль резолвится в COMBINED.
+        "KITCHEN",
       );
       if (action.state !== stateRef.current) replaceState(action.state);
       return action.result;
@@ -537,6 +579,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         stateRef.current,
         restaurantId,
         actor,
+        "",
+        "KITCHEN",
       );
       if (action.state !== stateRef.current) replaceState(action.state);
       return action.result;
@@ -561,6 +605,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         mode,
         resumeAt,
         actor,
+        "KITCHEN",
       );
       if (action.state !== stateRef.current) replaceState(action.state);
       return action.result;
@@ -575,6 +620,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         restaurantId,
         menuItemId,
         actor,
+        "",
+        "KITCHEN",
       );
       if (action.state !== stateRef.current) replaceState(action.state);
       return action.result;
@@ -599,6 +646,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         mode,
         resumeAt,
         actor,
+        "KITCHEN",
       );
       if (action.state !== stateRef.current) replaceState(action.state);
       return action.result;
@@ -613,6 +661,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         restaurantId,
         category,
         actor,
+        "KITCHEN",
       );
       if (action.state !== stateRef.current) replaceState(action.state);
       return action.result;
@@ -625,6 +674,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       orderId: string,
       preparationMinutes: number,
       actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
     ) => {
       replaceState(
         acceptRestaurantOrder(
@@ -632,6 +682,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
           orderId,
           preparationMinutes,
           actor,
+          workspaceRole,
         ),
       );
     },
@@ -639,9 +690,20 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const rejectOrder = useCallback(
-    (orderId: string, reason: string, actor: OrderActionActor = "RESTAURANT") => {
+    (
+      orderId: string,
+      reason: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) => {
       replaceState(
-        rejectRestaurantOrder(stateRef.current, orderId, reason, actor),
+        rejectRestaurantOrder(
+          stateRef.current,
+          orderId,
+          reason,
+          actor,
+          workspaceRole,
+        ),
       );
     },
     [replaceState],
@@ -657,8 +719,14 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const markReady = useCallback(
-    (orderId: string, actor: OrderActionActor = "RESTAURANT") => {
-      replaceState(markOrderReady(stateRef.current, orderId, actor));
+    (
+      orderId: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) => {
+      replaceState(
+        markOrderReady(stateRef.current, orderId, actor, workspaceRole),
+      );
     },
     [replaceState],
   );
@@ -669,6 +737,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       intent: EtaAdjustmentIntent,
       reason: string,
       actor: "RESTAURANT" | "ADMIN" = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
     ) => {
       // §1: один общий nowIso и для расчёта из intent, и для валидации.
       const action = adjustOrderEtaFromIntent(
@@ -678,6 +747,30 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         reason,
         actor,
         new Date().toISOString(),
+        workspaceRole,
+      );
+      if (action.state !== stateRef.current) {
+        replaceState(action.state);
+      }
+      return action.result;
+    },
+    [replaceState],
+  );
+
+  const reportPreparationProblem = useCallback(
+    (
+      orderId: string,
+      reason: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) => {
+      const action = reportRestaurantPreparationProblem(
+        stateRef.current,
+        orderId,
+        reason,
+        actor,
+        new Date().toISOString(),
+        workspaceRole,
       );
       if (action.state !== stateRef.current) {
         replaceState(action.state);
@@ -693,6 +786,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       code: string,
       paidWith: PickupPaymentMethod,
       actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
     ) => {
       const action = completePickupWithCode(
         stateRef.current,
@@ -701,6 +795,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         paidWith,
         actor,
         new Date().toISOString(),
+        workspaceRole,
       );
       if (action.state !== stateRef.current) {
         replaceState(action.state);
@@ -711,13 +806,19 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const markPickupNoShow = useCallback(
-    (orderId: string, reason: string, actor: OrderActionActor = "RESTAURANT") => {
+    (
+      orderId: string,
+      reason: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) => {
       const action = runPickupNoShow(
         stateRef.current,
         orderId,
         reason,
         actor,
         new Date().toISOString(),
+        workspaceRole,
       );
       if (action.state !== stateRef.current) {
         replaceState(action.state);
@@ -727,23 +828,50 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [replaceState],
   );
 
+  const setRestaurantWorkflow = useCallback(
+    (restaurantId: string, mode: RestaurantOrderWorkflowMode) => {
+      replaceState(
+        setRestaurantWorkflowMode(stateRef.current, restaurantId, mode),
+      );
+    },
+    [replaceState],
+  );
+
   const markOutForDelivery = useCallback(
-    (orderId: string, actor: OrderActionActor = "RESTAURANT") => {
-      replaceState(markOrderOutForDelivery(stateRef.current, orderId, actor));
+    (
+      orderId: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) => {
+      replaceState(
+        markOrderOutForDelivery(stateRef.current, orderId, actor, workspaceRole),
+      );
     },
     [replaceState],
   );
 
   const markArriving = useCallback(
-    (orderId: string, actor: OrderActionActor = "RESTAURANT") => {
-      replaceState(markOrderArriving(stateRef.current, orderId, actor));
+    (
+      orderId: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) => {
+      replaceState(
+        markOrderArriving(stateRef.current, orderId, actor, workspaceRole),
+      );
     },
     [replaceState],
   );
 
   const markDelivered = useCallback(
-    (orderId: string, actor: OrderActionActor = "RESTAURANT") => {
-      replaceState(markOrderDelivered(stateRef.current, orderId, actor));
+    (
+      orderId: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) => {
+      replaceState(
+        markOrderDelivered(stateRef.current, orderId, actor, workspaceRole),
+      );
     },
     [replaceState],
   );
@@ -929,6 +1057,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       simulateOnlinePayment,
       markReady,
       adjustOrderEta,
+      reportPreparationProblem,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
@@ -937,6 +1066,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       markDeliveredByDriver,
       setPreparationMinutes,
       setRestaurantAccepting,
+      setRestaurantWorkflow,
       assignDriver,
       reassignDriver,
       unassignDriver,
@@ -979,6 +1109,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       simulateOnlinePayment,
       markReady,
       adjustOrderEta,
+      reportPreparationProblem,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
@@ -987,6 +1118,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       markDeliveredByDriver,
       setPreparationMinutes,
       setRestaurantAccepting,
+      setRestaurantWorkflow,
       assignDriver,
       reassignDriver,
       unassignDriver,
