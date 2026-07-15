@@ -154,7 +154,7 @@ function DetailContent({ restaurant }: { restaurant: Restaurant }) {
             </dd>
           </div>
           <div className={flowStyles.definitionRow}>
-            <dt>Email</dt>
+            <dt>Электронная почта</dt>
             <dd>
               {restaurant.contactEmail ? (
                 <a href={`mailto:${restaurant.contactEmail}`}>

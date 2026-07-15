@@ -27,7 +27,7 @@ export default function AdminZonesPage() {
       <PageHeading
         eyebrow="Администратор"
         title="Зоны и тарифы"
-        description="Матрица стоимости доставки: зона ресторана → зона клиента. Суммы указаны в USD."
+        description="Матрица стоимости доставки: зона ресторана → зона клиента. Суммы указаны в долларах США."
       />
       <section className={flowStyles.card}>
         <h2>Матрица 4 × 4</h2>

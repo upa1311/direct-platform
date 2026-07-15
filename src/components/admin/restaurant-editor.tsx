@@ -142,7 +142,7 @@ export function RestaurantEditor({
             </div>
             <label className="field-label">Описание<textarea value={draft.description} onChange={(event) => updateDraft("description", event.target.value)} /><small>Новое описание может потребовать модерации Direct.</small></label>
             <div className="field-grid two-columns">
-              <label className="field-label">Email<input value={draft.email} onChange={(event) => updateDraft("email", event.target.value)} /></label>
+              <label className="field-label">Электронная почта<input value={draft.email} onChange={(event) => updateDraft("email", event.target.value)} /></label>
               <label className="field-label">Адрес<input value={draft.address} onChange={(event) => updateDraft("address", event.target.value)} /></label>
             </div>
             <button className="admin-primary-button save-card-button" type="button" onClick={saveDraft} disabled={!hasChanges}><Save size={17} /> Сохранить демо-изменения</button>

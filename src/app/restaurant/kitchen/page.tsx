@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bell, BellRing } from "lucide-react";
+import { Bell, BellRing, TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
+import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
 import {
   EtaAdjustPanel,
   MenuAvailabilitySection,
@@ -135,6 +136,30 @@ function formatElapsed(fromIso: string, nowMs: number): string {
   return `${sec} сек`;
 }
 
+/**
+ * Заметный янтарный блок инструкции к позиции. Показывается только если после
+ * trim у cookingComment есть текст; сам текст выводится после trim, но внутреннее
+ * содержимое пользователя не меняется. Треугольник — «обратите внимание», не
+ * запрет и не ошибка (иконка декоративна, aria-hidden).
+ */
+function CookingCommentBlock({ comment }: { comment: string }) {
+  const trimmed = getVisibleCookingComment(comment);
+  if (!trimmed) return null;
+  return (
+    <div className={kds.itemComment}>
+      <TriangleAlert
+        className={kds.itemCommentIcon}
+        size={18}
+        aria-hidden="true"
+      />
+      <div className={kds.itemCommentBody}>
+        <span className={kds.itemCommentTitle}>Комментарий к приготовлению</span>
+        <span className={kds.itemCommentText}>{trimmed}</span>
+      </div>
+    </div>
+  );
+}
+
 /** Общий блок позиций заказа с заметными комментариями (§6). */
 function KitchenItems({ order }: { order: Order }) {
   return (
@@ -146,11 +171,7 @@ function KitchenItems({ order }: { order: Order }) {
             {item.selectedVariantName ? ` · ${item.selectedVariantName}` : ""} ×{" "}
             {item.quantity}
           </span>
-          {item.cookingComment ? (
-            <span className={kds.itemComment}>
-              Комментарий: {item.cookingComment}
-            </span>
-          ) : null}
+          <CookingCommentBlock comment={item.cookingComment ?? ""} />
         </li>
       ))}
     </ul>

@@ -7,6 +7,7 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import type {
   MenuItem,
   Order,
+  OperationalEventAction,
   OperationalPauseMode,
   Restaurant,
 } from "@/prototype/models";
@@ -15,6 +16,7 @@ import {
   getRestaurantMenu,
   getRestaurantOperationalEvents,
   isMenuItemAvailableAt,
+  orderActorLabels,
 } from "@/prototype/selectors";
 import {
   computeEtaDeltaMinutes,
@@ -73,18 +75,13 @@ const ITEM_DURATIONS: { value: DurationChoice; label: string }[] = [
   { value: "MANUAL", label: "До ручного включения" },
 ];
 
-const EVENT_ACTION_LABELS: Record<string, string> = {
+const EVENT_ACTION_LABELS: Record<OperationalEventAction, string> = {
   RESTAURANT_PAUSED: "Приём приостановлен",
   RESTAURANT_RESUMED: "Приём возобновлён",
   MENU_ITEM_UNAVAILABLE: "Блюдо отключено",
   MENU_ITEM_AVAILABLE: "Блюдо возвращено",
 };
 
-const ACTOR_LABELS: Record<string, string> = {
-  RESTAURANT: "Ресторан",
-  ADMIN: "Администратор Direct",
-  SYSTEM: "Система",
-};
 
 /** Перевод выбора длительности в mode + resumeAt для domain-action. */
 function durationToPause(choice: DurationChoice): {
@@ -819,14 +816,14 @@ export function MenuAvailabilitySection({
                 {formatTimeInZone(event.occurredAt, restaurant.timeZone)}
               </span>
               <span className={styles.eventMain}>
-                <span>{EVENT_ACTION_LABELS[event.action] ?? event.action}</span>
+                <span>{EVENT_ACTION_LABELS[event.action]}</span>
                 {event.menuItemId ? (
                   <span>
                     {menu.find((m) => m.id === event.menuItemId)?.name ?? "Блюдо"}
                   </span>
                 ) : null}
                 <span className={styles.eventActor}>
-                  {ACTOR_LABELS[event.actor] ?? event.actor}
+                  {orderActorLabels[event.actor]}
                 </span>
               </span>
               <span className={styles.eventReason}>{event.reason}</span>

@@ -21,7 +21,9 @@ import {
   formatDateTime,
   formatMoney,
   formatOrderEtaInRestaurantZone,
+  formatSettlementStatus,
   getAvailableDrivers,
+  orderActorLabels,
   getDriverById,
   getOrder,
   getPendingCancellationRequests,
@@ -35,11 +37,6 @@ import {
 import type { CancellationRequest } from "@/prototype/models";
 
 const PREP_MINUTES = [10, 15, 20, 25, 30, 40];
-
-const ETA_ACTOR_LABELS: Record<string, string> = {
-  RESTAURANT: "Ресторан",
-  ADMIN: "Администратор Direct",
-};
 
 /** §11: сводка последней корректировки ожидаемого времени готовности. */
 function EtaAdjustmentSummary({
@@ -80,7 +77,7 @@ function EtaAdjustmentSummary({
         </span>
         <span>{diffLabel}</span>
         <span>Причина: {last.reason}</span>
-        <span>{ETA_ACTOR_LABELS[last.actor] ?? last.actor}</span>
+        <span>{orderActorLabels[last.actor]}</span>
         <span>{formatDateTime(last.occurredAt)}</span>
       </div>
     </div>
@@ -325,7 +322,7 @@ function PickupAdminDetails({
         <dt>Начисление комиссии Direct</dt>
         <dd>
           {settlement
-            ? `${formatMoney(settlement.amountCents)} · ${settlement.status}`
+            ? `${formatMoney(settlement.amountCents)} · ${formatSettlementStatus(settlement.status)}`
             : "—"}
         </dd>
       </div>

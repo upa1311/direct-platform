@@ -32,6 +32,12 @@ import {
 } from "@/prototype/selectors";
 
 const ZONE_IDS: ZoneId[] = ["zone-1", "zone-2", "zone-3", "zone-4"];
+/** §5: часовой пояс — русское название, значение хранится как IANA ID. */
+const RESTAURANT_TIMEZONE_OPTIONS: { value: string; label: string }[] = [
+  { value: "Europe/Chisinau", label: "Кишинёв — Europe/Chisinau" },
+  { value: "America/New_York", label: "Нью-Йорк — America/New_York" },
+  { value: "UTC", label: "Всемирное координированное время — UTC" },
+];
 const STATUSES: Restaurant["status"][] = [
   "DRAFT",
   "PENDING_REVIEW",
@@ -131,7 +137,7 @@ export function ContactFields({
         />
       </label>
       <label className={flowStyles.field}>
-        <span>Рабочий email</span>
+        <span>Рабочая электронная почта</span>
         <input
           type="email"
           value={value.contactEmail}
@@ -454,14 +460,27 @@ export function RestaurantBuilderEditor({
             />
           </label>
           <label className={flowStyles.field}>
-            <span>Часовой пояс (IANA)</span>
-            <input
+            <span>Часовой пояс ресторана</span>
+            <select
               value={form.timeZone}
               onChange={(e) =>
                 setForm((f) => ({ ...f, timeZone: e.target.value }))
               }
-              placeholder="Europe/Chisinau"
-            />
+            >
+              {(RESTAURANT_TIMEZONE_OPTIONS.some(
+                (o) => o.value === form.timeZone,
+              )
+                ? RESTAURANT_TIMEZONE_OPTIONS
+                : [
+                    { value: form.timeZone, label: form.timeZone },
+                    ...RESTAURANT_TIMEZONE_OPTIONS,
+                  ]
+              ).map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
       ) : null}

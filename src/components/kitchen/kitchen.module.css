@@ -669,12 +669,45 @@
   font-weight: 700;
 }
 
+/* Инструкция клиента к позиции — заметное янтарное предупреждение (не ошибка).
+   Grid-компоновка «иконка | текст» надёжно держится на узких экранах. */
 .itemComment {
-  padding: 5px 8px;
-  border-left: 3px solid var(--kds-border-strong);
-  background: var(--kds-surface-subtle);
-  color: var(--kds-text);
-  font-size: 13px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e0a93b;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #fdf4e3;
+  color: #3a2c10;
+}
+
+.itemCommentIcon {
+  margin-top: 1px;
+  color: #a15c07;
+  flex-shrink: 0;
+}
+
+.itemCommentBody {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.itemCommentTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: #7a5510;
+}
+
+.itemCommentText {
+  font-size: 15px;
+  font-weight: 700;
+  color: #3a2c10;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .units {

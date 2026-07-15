@@ -21,6 +21,8 @@ import type {
   PublicationStatus,
   Restaurant,
   SettlementEntry,
+  SettlementStatus,
+  SettlementType,
   WeekdayId,
   ZoneId,
 } from "./models";
@@ -153,11 +155,9 @@ export function clientHistoryEvent(
     ) {
       return { message: "Заказ получен.", hideActor: true };
     }
-    if (
-      event.type === "STATUS" &&
-      event.fromStatus === "READY_FOR_PICKUP" &&
-      event.toStatus === "CANCELED"
-    ) {
+    // §2: ЛЮБАЯ отмена самовывоза (из любого нетерминального статуса)
+    // нейтрализуется — внутренняя причина/actor клиенту не раскрываются.
+    if (event.type === "STATUS" && event.toStatus === "CANCELED") {
       return {
         message:
           order?.pickupNoShowAt != null
@@ -183,6 +183,35 @@ export const publicationStatusLabels: Record<PublicationStatus, string> = {
   HIDDEN: "Скрыт",
   ARCHIVED: "Архив",
 };
+
+/** §3: русские подписи статусов начислений (единый источник для всех экранов). */
+export const settlementStatusLabels: Record<SettlementStatus, string> = {
+  PENDING: "Ожидает расчёта",
+  NETTED: "Учтено во взаиморасчёте",
+  PAID: "Оплачено",
+  WAIVED: "Списано",
+};
+
+/** §3: русские подписи типов начислений. */
+export const settlementTypeLabels: Record<SettlementType, string> = {
+  PICKUP_COMMISSION: "Комиссия за самовывоз",
+  RESTAURANT_DELIVERY_COMMISSION: "Комиссия за доставку ресторана",
+};
+
+/** Подпись статуса начисления; сырой enum пользователю не показываем. */
+export function formatSettlementStatus(status: string): string {
+  return (
+    settlementStatusLabels[status as SettlementStatus] ??
+    "Неизвестный статус расчёта"
+  );
+}
+
+/** Подпись типа начисления; сырой enum пользователю не показываем. */
+export function formatSettlementType(type: string): string {
+  return (
+    settlementTypeLabels[type as SettlementType] ?? "Неизвестный тип начисления"
+  );
+}
 
 /** Безопасный парсинг «12.50» → 1250 центов. Хранилище всегда целые центы. */
 export function parseDollarsToCents(value: string): number {
@@ -1353,15 +1382,18 @@ export interface PickupStats {
   suspiciousAfterReady: number;
 }
 
-function wasCancelledAfterReady(order: Order): boolean {
-  return (
-    order.status === "CANCELED" &&
-    order.deliveryMode === "PICKUP" &&
-    order.history.some(
-      (event) =>
-        event.fromStatus === "READY_FOR_PICKUP" &&
-        event.toStatus === "CANCELED",
-    )
+/**
+ * Отменён из реальной готовности к выдаче (по STATUS-переходу
+ * READY_FOR_PICKUP → CANCELED). Сам по себе НЕ означает невыкуп: обычная
+ * adminCancelOrder тоже даёт такой переход. Настоящий невыкуп — только
+ * pickupNoShowAt !== null.
+ */
+function hasReadyToCanceledTransition(order: Order): boolean {
+  return order.history.some(
+    (event) =>
+      event.type === "STATUS" &&
+      event.fromStatus === "READY_FOR_PICKUP" &&
+      event.toStatus === "CANCELED",
   );
 }
 
@@ -1377,13 +1409,26 @@ export function getPickupStats(
   const issued = pickupOrders.filter(
     (order) => order.status === "PICKED_UP",
   ).length;
-  const noShow = pickupOrders.filter(wasCancelledAfterReady).length;
-  const total = issued + noShow;
+  // §1: настоящий невыкуп — исключительно по структурному признаку.
+  const noShow = pickupOrders.filter(
+    (order) => order.pickupNoShowAt !== null,
+  ).length;
+  // Подозрительные закрытия после готовности: отменены из READY_FOR_PICKUP, но
+  // это НЕ зафиксированный невыкуп (обычная административная отмена).
+  const suspiciousAfterReady = pickupOrders.filter(
+    (order) =>
+      order.status === "CANCELED" &&
+      order.pickupNoShowAt === null &&
+      hasReadyToCanceledTransition(order),
+  ).length;
+  // Процент неявок считаем только относительно выданных + настоящих невыкупов.
+  const denominator = issued + noShow;
   return {
     issued,
     noShow,
-    noShowPercent: total > 0 ? Math.round((noShow / total) * 100) : 0,
-    suspiciousAfterReady: noShow,
+    noShowPercent:
+      denominator > 0 ? Math.round((noShow / denominator) * 100) : 0,
+    suspiciousAfterReady,
   };
 }
 

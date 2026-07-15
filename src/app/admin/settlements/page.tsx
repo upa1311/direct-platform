@@ -10,22 +10,12 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import {
   formatDateTime,
   formatMoney,
+  formatSettlementStatus,
+  formatSettlementType,
   getPickupStats,
   getRestaurantDeliveryCommissionDebtCents,
   getRestaurantPickupDebtCents,
 } from "@/prototype/selectors";
-
-const SETTLEMENT_STATUS_LABELS: Record<string, string> = {
-  PENDING: "Ожидает расчёта",
-  NETTED: "Учтено во взаиморасчёте",
-  PAID: "Оплачено",
-  WAIVED: "Списано",
-};
-
-const SETTLEMENT_TYPE_LABELS: Record<string, string> = {
-  PICKUP_COMMISSION: "Комиссия за самовывоз",
-  RESTAURANT_DELIVERY_COMMISSION: "Комиссия за доставку ресторана",
-};
 
 function SettlementsContent() {
   const { state } = usePrototype();
@@ -131,12 +121,11 @@ function SettlementsContent() {
                     <br />
                     {restaurantName}
                     <br />
-                    {SETTLEMENT_TYPE_LABELS[entry.type] ??
-                      "Комиссия за доставку ресторана"}
+                    {formatSettlementType(entry.type)}
                   </dt>
                   <dd>
                     {formatMoney(entry.amountCents)} ·{" "}
-                    {SETTLEMENT_STATUS_LABELS[entry.status] ?? entry.status}
+                    {formatSettlementStatus(entry.status)}
                     <br />
                     {formatDateTime(entry.createdAt)}
                   </dd>
