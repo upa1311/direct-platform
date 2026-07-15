@@ -1,50 +1,82 @@
 "use client";
 
 /**
- * Оригинальный громкий четырёхимпульсный сигнал новых заказов кухни Direct для
- * ресторанного KDS (§2–§6). Полностью синтезируется через Web Audio API — без
- * аудиофайлов, сторонних библиотек и чужих сэмплов. Из-за политики браузеров
- * AudioContext создаётся только по действию пользователя («колокольчик»).
+ * Мягкий ресторанный KDS-сигнал новых заказов Direct. Полностью синтезируется
+ * через Web Audio API — без аудиофайлов, сторонних библиотек и чужих сэмплов.
+ * Характер: «пик-пик-пик → короткая мелодия → пик-пик-пик» — узнаваемый, но не
+ * пронзительный и не тревожный. Диапазон низкий (500–660 Гц), тембр sine +
+ * тихий triangle, мягкая огибающая без щелчков. Ни одна фирменная мелодия не
+ * копируется. Логика запуска/повтора/защиты от наложения — прежняя.
  *
- * Сигнал — собственная последовательность Direct: два восходящих импульса,
- * короткая пауза, усиленный повтор и финальный двухчастотный аккорд. Ни одна
- * фирменная мелодия/аудиологотип не копируется.
+ * Из-за политики браузеров AudioContext создаётся только по жесту пользователя
+ * (кнопка-колокольчик на экране кухни).
  */
 
 /** localStorage-ключ включённости звука (не в PrototypeState). */
 export const KITCHEN_SOUND_KEY = "direct-kitchen-sound-enabled";
 
-/** Полная слышимая длительность сигнала (§3). */
-export const KITCHEN_ALERT_DURATION_SECONDS = 2.25;
+/** Декларативное описание одной ноты сигнала — чистые данные для синтеза/тестов. */
+export interface KdsTone {
+  /** Частота, Гц. */
+  frequency: number;
+  /** Длительность звучания ноты, мс. */
+  durationMs: number;
+  /** Пауза после ноты до следующей, мс. */
+  gapAfterMs: number;
+  /** Пиковая громкость ноты (0..1]; по умолчанию TONE_PEAK_GAIN. */
+  gain?: number;
+}
 
-/** Один импульс сигнала — чистые данные для синтеза и тестов (§11). */
-export interface KitchenAlertPulse {
-  startSeconds: number;
-  durationSeconds: number;
-  frequenciesHz: readonly number[];
-  waveform: OscillatorType;
-  peakGain: number;
+/** Безопасный потолок частот (§1): без высокочастотного писка. */
+export const KDS_MAX_FREQUENCY_HZ = 850;
+
+/** Волновые формы сигнала (§3): только мягкие sine + тихий triangle. */
+export const KDS_WAVEFORMS: readonly OscillatorType[] = ["sine", "triangle"];
+
+/** Пиковая громкость одиночной ноты по умолчанию (§4). */
+const TONE_PEAK_GAIN = 0.2;
+/** Средняя мелодическая часть немного тише коротких сигналов (§4). */
+const MIDDLE_PEAK_GAIN = 0.17;
+
+/**
+ * Direct KDS chime (§2): 9 нот. Группа 1 — три коротких сигнала (пик-пик-пик),
+ * средняя мелодия «тю-лю-лю», финальная группа — снова три сигнала с тем же
+ * узнаваемым ритмом. Частоты 500–660 Гц (≤ KDS_MAX_FREQUENCY_HZ).
+ */
+export const DIRECT_KDS_CHIME: readonly KdsTone[] = [
+  // Группа 1 — пик-пик-пик.
+  { frequency: 560, durationMs: 120, gapAfterMs: 80 },
+  { frequency: 560, durationMs: 120, gapAfterMs: 80 },
+  { frequency: 620, durationMs: 140, gapAfterMs: 120 },
+  // Средняя мелодия — тю-лю-лю (чуть тише).
+  { frequency: 660, durationMs: 150, gapAfterMs: 55, gain: MIDDLE_PEAK_GAIN },
+  { frequency: 590, durationMs: 150, gapAfterMs: 55, gain: MIDDLE_PEAK_GAIN },
+  { frequency: 500, durationMs: 190, gapAfterMs: 300, gain: MIDDLE_PEAK_GAIN },
+  // Финальная группа — пик-пик-пик (тот же ритм, что и группа 1).
+  { frequency: 560, durationMs: 120, gapAfterMs: 80 },
+  { frequency: 560, durationMs: 120, gapAfterMs: 80 },
+  { frequency: 620, durationMs: 210, gapAfterMs: 0 },
+];
+
+/** Огибающая ноты (§3): мягкая атака и релиз, без щелчков. */
+const ATTACK_SECONDS = 0.015;
+const RELEASE_SECONDS = 0.06;
+
+/** Суммарная длительность мелодии (звучание + релиз последней ноты), сек. */
+export function directKdsChimeDurationSeconds(): number {
+  const totalMs = DIRECT_KDS_CHIME.reduce(
+    (sum, tone) => sum + tone.durationMs + tone.gapAfterMs,
+    0,
+  );
+  return totalMs / 1000 + RELEASE_SECONDS;
 }
 
 /**
- * Рисунок сигнала (§4): 4 импульса, частоты 750–1450 Гц. Финальный импульс —
- * двухчастотный аккорд. Заканчивается на 2.20с (не раньше DURATION − 0.05).
+ * Окно защиты от наложения (§9): пока не истечёт, повторный вызов игнорируется.
+ * Немного больше слышимой длины мелодии, но заметно меньше 20-сек интервала.
  */
-export const KITCHEN_ALERT_PATTERN: readonly KitchenAlertPulse[] = [
-  { startSeconds: 0.0, durationSeconds: 0.38, frequenciesHz: [820], waveform: "triangle", peakGain: 0.9 },
-  { startSeconds: 0.42, durationSeconds: 0.38, frequenciesHz: [980], waveform: "triangle", peakGain: 0.95 },
-  // 0.80–1.15 — короткая пауза (нет импульса).
-  { startSeconds: 1.15, durationSeconds: 0.4, frequenciesHz: [820], waveform: "square", peakGain: 1.0 },
-  { startSeconds: 1.6, durationSeconds: 0.6, frequenciesHz: [1040, 1320], waveform: "triangle", peakGain: 0.9 },
-];
-
-/** Момент окончания последнего импульса (для тестов длительности). */
-export function kitchenAlertPatternEndSeconds(): number {
-  return KITCHEN_ALERT_PATTERN.reduce(
-    (end, pulse) => Math.max(end, pulse.startSeconds + pulse.durationSeconds),
-    0,
-  );
-}
+export const KITCHEN_ALERT_DURATION_SECONDS =
+  Math.round((directKdsChimeDurationSeconds() + 0.15) * 100) / 100;
 
 type AudioContextCtor = typeof AudioContext;
 
@@ -98,15 +130,16 @@ export function disableKitchenSound(): void {
 
 /** Минимальная безопасная амплитуда для экспоненциальных рамп (без нулей). */
 const MIN_GAIN = 0.0001;
-/** Общая громкость (§5): заметно громче прежних 0.12, но без clipping. */
-const MASTER_GAIN = 0.38;
+/** Общий master gain (§4): мягче прежнего (было 0.38). */
+export const KDS_MASTER_GAIN = 0.21;
 
 /**
- * Проигрывает одну полную последовательность сигнала (§8): один вызов —
- * минимум 2 секунды звука. Повторный вызов, пока сигнал ещё играет, ничего не
- * делает (§9) — без хаотичного наложения. Цепь: oscillator → tone gain →
- * master gain → dynamics compressor → destination (§5). Компрессор защищает от
- * clipping; на destination напрямую gain = 1 не подаётся.
+ * Проигрывает одну полную мелодию Direct KDS (§6). Планировщик считает старты
+ * нот от AudioContext.currentTime по декларативному DIRECT_KDS_CHIME — без
+ * разбросанных setTimeout. Каждая нота: sine (основной) + тихий triangle для
+ * читаемости, своя мягкая огибающая. Цепь: osc → tone gain → master gain →
+ * мягкий compressor → destination (§4). Повторный вызов, пока сигнал ещё звучит,
+ * игнорируется (§9) — без наложения.
  */
 export function playKitchenBeep(): void {
   const ctx = audioContext;
@@ -117,46 +150,53 @@ export function playKitchenBeep(): void {
   if (now < alertPlayingUntil) return;
   alertPlayingUntil = now + KITCHEN_ALERT_DURATION_SECONDS;
 
+  // Мягкий компрессор (§4): убирает пики, не допускает clipping.
   const compressor = ctx.createDynamicsCompressor();
   compressor.threshold.value = -18;
-  compressor.knee.value = 20;
-  compressor.ratio.value = 4;
-  compressor.attack.value = 0.003;
-  compressor.release.value = 0.25;
+  compressor.knee.value = 22;
+  compressor.ratio.value = 3;
+  compressor.attack.value = 0.01;
+  compressor.release.value = 0.22;
   compressor.connect(ctx.destination);
 
   const master = ctx.createGain();
-  master.gain.value = MASTER_GAIN;
+  master.gain.value = KDS_MASTER_GAIN;
   master.connect(compressor);
 
-  const layer = (
+  const scheduleTone = (
     frequency: number,
     waveform: OscillatorType,
     peakGain: number,
     start: number,
-    duration: number,
+    durationSeconds: number,
   ) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = waveform;
     osc.frequency.setValueAtTime(frequency, start);
-    // Короткая атака и плавное затухание — без щелчков (§6).
+    // Мягкая огибающая: attack → короткий sustain → release, без щелчков (§3).
+    const releaseStart = start + Math.max(durationSeconds, ATTACK_SECONDS);
     gain.gain.setValueAtTime(MIN_GAIN, start);
-    gain.gain.exponentialRampToValueAtTime(peakGain, start + 0.018);
-    gain.gain.setValueAtTime(peakGain, start + duration * 0.4);
-    gain.gain.exponentialRampToValueAtTime(MIN_GAIN, start + duration);
+    gain.gain.exponentialRampToValueAtTime(peakGain, start + ATTACK_SECONDS);
+    gain.gain.setValueAtTime(peakGain, releaseStart);
+    gain.gain.exponentialRampToValueAtTime(
+      MIN_GAIN,
+      releaseStart + RELEASE_SECONDS,
+    );
     osc.connect(gain);
     gain.connect(master);
     osc.start(start);
-    osc.stop(start + duration + 0.03);
+    osc.stop(releaseStart + RELEASE_SECONDS + 0.02);
   };
 
-  for (const pulse of KITCHEN_ALERT_PATTERN) {
-    const start = now + pulse.startSeconds;
-    for (const frequency of pulse.frequenciesHz) {
-      // Основной слой (triangle/square) + тихий sine-слой для плотности (§4).
-      layer(frequency, pulse.waveform, pulse.peakGain, start, pulse.durationSeconds);
-      layer(frequency, "sine", pulse.peakGain * 0.5, start, pulse.durationSeconds);
-    }
+  let cursorSeconds = 0;
+  for (const tone of DIRECT_KDS_CHIME) {
+    const start = now + cursorSeconds;
+    const durationSeconds = tone.durationMs / 1000;
+    const peak = tone.gain ?? TONE_PEAK_GAIN;
+    // Основной sine + очень тихий triangle для читаемости (§3).
+    scheduleTone(tone.frequency, "sine", peak, start, durationSeconds);
+    scheduleTone(tone.frequency, "triangle", peak * 0.28, start, durationSeconds);
+    cursorSeconds += (tone.durationMs + tone.gapAfterMs) / 1000;
   }
 }

@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { createDefaultState } from "./default-state.ts";
+import {
+  createAlwaysOpenDemoSchedule,
+  createDefaultState,
+  createDefaultWeeklySchedule,
+} from "./default-state.ts";
 import { addCartItem, createOrderFromCart } from "./actions.ts";
 import {
+  formatClock24,
   getAvailablePlatformDeliveryFeeCents,
   getClientRestaurantAvailabilityAt,
   getClientRestaurantScheduleSummary,
@@ -223,4 +228,45 @@ test("15. клиентская подпись не противоречит sche
   const c2 = getClientRestaurantAvailabilityAt(closed, MON_NOON);
   assert.equal(c2.state, "CLOSED_SCHEDULE");
   assert.equal(c2.canAcceptOrders, false);
+});
+
+// --- §6: безопасный дефолт нового ресторана + demo-график ---------------------
+
+test("§6: createDefaultWeeklySchedule — все дни закрыты (безопасно)", () => {
+  const schedule = createDefaultWeeklySchedule();
+  for (const day of Object.values(schedule)) {
+    assert.equal(day.enabled, false);
+  }
+});
+
+test("§6: новый ресторан без настройки графика не принимает заказ", () => {
+  const r = restaurant({ weeklySchedule: createDefaultWeeklySchedule() });
+  assert.equal(getRestaurantAvailabilityStateAt(r, MON_NOON), "CLOSED_SCHEDULE");
+  assert.equal(getClientRestaurantAvailabilityAt(r, MON_NOON).canAcceptOrders, false);
+});
+
+test("§6: createAlwaysOpenDemoSchedule — круглосуточно все дни", () => {
+  const schedule = createAlwaysOpenDemoSchedule();
+  for (const day of Object.values(schedule)) {
+    assert.equal(day.enabled, true);
+    assert.equal(day.openTime, "00:00");
+    assert.equal(day.closeTime, "23:59");
+  }
+});
+
+// --- §4: единый 24-часовой формат -------------------------------------------
+
+test("§4: formatClock24 — ведущий ноль, 24 часа, без AM/PM", () => {
+  // UTC, чтобы час совпадал с ISO.
+  assert.equal(formatClock24("2021-06-01T07:38:00Z", "UTC"), "07:38");
+  assert.equal(formatClock24("2021-06-01T19:38:00Z", "UTC"), "19:38");
+  assert.equal(formatClock24("2021-06-01T00:05:00Z", "UTC"), "00:05");
+  const noon = formatClock24("2021-06-01T12:00:00Z", "UTC");
+  assert.equal(noon, "12:00");
+  for (const iso of ["2021-06-01T07:38:00Z", "2021-06-01T19:38:00Z", "2021-06-01T00:05:00Z"]) {
+    const out = formatClock24(iso, "UTC");
+    assert.ok(!/AM|PM|дп|пп/i.test(out), `нет AM/PM: ${out}`);
+    assert.ok(!out.startsWith("24:"), `нет 24:00: ${out}`);
+    assert.match(out, /^\d{2}:\d{2}$/);
+  }
 });

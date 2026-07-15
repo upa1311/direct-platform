@@ -251,6 +251,22 @@ export function formatDateTime(value: string): string {
   }).format(date);
 }
 
+/**
+ * §4: единый 24-часовой форматтер времени «HH:MM» в часовом поясе. Всегда с
+ * ведущим нулём и без AM/PM/24:00 (hourCycle h23). Единственный источник формата
+ * часов для всех пользовательских мест (пауза, открытие, ETA кухни/клиента).
+ */
+export function formatClock24(iso: string, timeZone?: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    ...(timeZone ? { timeZone } : {}),
+  }).format(date);
+}
+
 /** Винительный падеж: «добавьте 1 пиццу / 2 пиццы / 5 пицц». */
 export function pluralizePizza(count: number): string {
   const lastTwo = count % 100;
@@ -376,12 +392,11 @@ export function getRestaurantResumeHint(
   if (!isOperationalPauseActiveAt(pause, nowMs) || !pause?.resumeAt) {
     return null;
   }
-  const time = new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: restaurant.timeZone || "Europe/Chisinau",
-  }).format(new Date(pause.resumeAt));
-  return `Приём заказов возобновится примерно в ${time}.`;
+  const time = formatClock24(
+    pause.resumeAt,
+    restaurant.timeZone || "Europe/Chisinau",
+  );
+  return `Приём возобновится примерно в ${time}`;
 }
 
 /** Базовая конфигурация ресторана достаточна для приёма заказов вообще. */
@@ -1048,12 +1063,7 @@ export function formatExpectedReady(
   if (!expectedReadyAt) {
     return "Ожидаемая готовность: не задана";
   }
-  const time = new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone,
-  }).format(new Date(expectedReadyAt));
-  return `Ожидаемая готовность: ${time}`;
+  return `Ожидаемая готовность: ${formatClock24(expectedReadyAt, timeZone)}`;
 }
 
 /**
@@ -1217,11 +1227,7 @@ export function formatOrderEtaClock(
   const timeZone =
     state.restaurants.find((r) => r.id === order.restaurant.id)?.timeZone ??
     "Europe/Chisinau";
-  return new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone,
-  }).format(new Date(order.expectedReadyAt));
+  return formatClock24(order.expectedReadyAt, timeZone);
 }
 
 /**
@@ -1242,6 +1248,7 @@ export function formatOrderEtaInRestaurantZone(
     month: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    hourCycle: "h23",
     timeZone,
   }).format(new Date(iso));
 }
@@ -1818,11 +1825,7 @@ export function formatNextOpeningHint(
       Date.UTC(today.year, today.month - 1, today.day)) /
       86_400_000,
   );
-  const time = new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone,
-  }).format(new Date(openMs));
+  const time = formatClock24(new Date(openMs).toISOString(), timeZone);
   let dayPhrase: string;
   if (dayDiff <= 0) dayPhrase = "сегодня";
   else if (dayDiff === 1) dayPhrase = "завтра";

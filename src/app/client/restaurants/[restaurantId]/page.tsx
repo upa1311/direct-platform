@@ -160,16 +160,8 @@ export default function ClientRestaurantPage() {
         ) : null}
       </div>
 
-      {nowMs > 0 && !availability.canAcceptOrders ? (
-        <div className={flowStyles.warningNotice} role="status">
-          {availability.state === "OPERATIONAL_PAUSE"
-            ? "Ресторан временно не принимает новые заказы."
-            : availability.state === "CLOSED_SCHEDULE"
-              ? "Ресторан сейчас закрыт. Меню можно просмотреть."
-              : "Ресторан сейчас не принимает заказы."}
-          {availability.detailLabel ? <> {availability.detailLabel}</> : null}
-        </div>
-      ) : null}
+      {/* §1/§2: статус доступности показывает единый бейдж в ClientRestaurantSchedule
+          выше — отдельная персиковая плашка удалена, чтобы не дублировать. */}
 
       <div className={flowStyles.buttonRow} id="restaurant-menu">
         <h2>Меню</h2>

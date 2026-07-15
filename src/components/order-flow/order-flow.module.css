@@ -1587,6 +1587,23 @@
   background: #b3bab4;
 }
 
+/* §1: вторичная подсказка доступности (возобновление/открытие) — спокойная
+   строка без плашки, фона и рамки. */
+.restaurantAvailabilityNote {
+  width: fit-content;
+  max-width: 680px;
+  margin: 2px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #59625c;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 /* §11: название позиции — обычный вес, цена — вправо и без переноса. */
 .orderItemName {
   min-width: 0;

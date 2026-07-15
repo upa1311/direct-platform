@@ -188,15 +188,14 @@ export default function ClientCartPage() {
         </p>
       ) : null}
 
+      {/* §1/§2: статус доступности показывает единый бейдж в
+          ClientRestaurantSchedule (заголовок оформления) — большая плашка
+          удалена. Компактная причина недоступности оформления — у кнопки. */}
       {nowMs > 0 && availability && !availability.canAcceptOrders ? (
-        <div className={flowStyles.warningNotice} role="status">
-          {availability.state === "OPERATIONAL_PAUSE"
-            ? "Ресторан временно не принимает новые заказы. Попробуйте позже или выберите другой ресторан."
-            : availability.state === "CLOSED_SCHEDULE"
-              ? "Ресторан сейчас закрыт. Оформить заказ можно в рабочие часы."
-              : "Ресторан сейчас не принимает заказы. Выберите другой ресторан."}
+        <p className={flowStyles.restaurantAvailabilityNote} role="status">
+          Оформление временно недоступно.
           {availability.detailLabel ? <> {availability.detailLabel}</> : null}
-        </div>
+        </p>
       ) : null}
       {hasUnavailableItem ? (
         <div className={flowStyles.warningNotice} role="alert">

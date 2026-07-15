@@ -41,7 +41,7 @@ export function RestaurantAvailabilityBadge({
         <span>{availability.shortLabel}</span>
       </span>
       {showDetail && availability.detailLabel ? (
-        <span className={styles.deliveryConditions}>
+        <span className={styles.restaurantAvailabilityNote}>
           {availability.detailLabel}
         </span>
       ) : null}

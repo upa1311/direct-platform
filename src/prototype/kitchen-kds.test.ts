@@ -42,12 +42,12 @@ test("§16.1: подсказка возобновления использует
   // Кишинёв (июль UTC+3): 12:30Z → 15:30.
   assert.equal(
     getRestaurantResumeHint(pausedRestaurant("Europe/Chisinau", pause), now),
-    "Приём заказов возобновится примерно в 15:30.",
+    "Приём возобновится примерно в 15:30",
   );
   // UTC: 12:30.
   assert.equal(
     getRestaurantResumeHint(pausedRestaurant("UTC", pause), now),
-    "Приём заказов возобновится примерно в 12:30.",
+    "Приём возобновится примерно в 12:30",
   );
 });
 

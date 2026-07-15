@@ -17,12 +17,23 @@ const INITIAL_TIMESTAMP = "2026-07-12T00:00:00.000Z";
 export const TEST_RESTAURANT_ID = "restaurant-1";
 
 /**
- * Безопасный стандартный график: все дни круглосуточно (00:00–23:59). Новый или
- * не настроенный ресторан по умолчанию открыт всегда; администратор задаёт
- * реальные часы вручную. Это делает демо-рестораны стабильно доступными и не
- * создаёт противоречия «принимает заказы / закрыто по графику» на seed-данных.
+ * Безопасный график нового/ненастроенного ресторана (§6): все дни ЗАКРЫТЫ до
+ * ручной настройки. Так новый ресторан не начнёт случайно принимать ночные
+ * заказы, пока администратор не задал реальные часы. НЕ круглосуточно.
  */
 export function createDefaultWeeklySchedule(): WeeklySchedule {
+  return WEEKDAY_ORDER.reduce((schedule, day) => {
+    schedule[day] = { enabled: false, openTime: "", closeTime: "" };
+    return schedule;
+  }, {} as WeeklySchedule);
+}
+
+/**
+ * Круглосуточный график (00:00–23:59 все семь дней). Используется ЯВНО только для
+ * seed/demo-ресторанов 1–3, чтобы демо стабильно принимало заказы. Не является
+ * дефолтом нового ресторана.
+ */
+export function createAlwaysOpenDemoSchedule(): WeeklySchedule {
   return WEEKDAY_ORDER.reduce((schedule, day) => {
     schedule[day] = { enabled: true, openTime: "00:00", closeTime: "23:59" };
     return schedule;
@@ -141,6 +152,8 @@ const defaultRestaurants: Restaurant[] = [
       contactPhone: "+373 777 10001",
       contactEmail: "rest1@example.md",
       internalAdminNote: "Звонить управляющему после 10:00.",
+      // Демо-ресторан 1–3 (§6): круглосуточный график явно, не через дефолт.
+      weeklySchedule: createAlwaysOpenDemoSchedule(),
     }),
   },
   {
@@ -169,6 +182,7 @@ const defaultRestaurants: Restaurant[] = [
       contactPhone: "+373 777 20002",
       contactEmail: "rest2@example.md",
       contactMessenger: "Telegram @rest2",
+      weeklySchedule: createAlwaysOpenDemoSchedule(),
     }),
   },
   {
@@ -210,7 +224,7 @@ const defaultRestaurants: Restaurant[] = [
       emergencyPhone: "+373 777 90003",
       internalAdminNote:
         "По выплатам связываться только с бухгалтером.",
-      weeklySchedule: createDefaultWeeklySchedule(),
+      weeklySchedule: createAlwaysOpenDemoSchedule(),
     }),
   },
   {

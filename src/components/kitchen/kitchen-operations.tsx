@@ -12,6 +12,7 @@ import type {
   Restaurant,
 } from "@/prototype/models";
 import {
+  formatClock24,
   getKitchenAcceptanceState,
   getRestaurantMenu,
   getRestaurantOperationalEvents,
@@ -101,11 +102,7 @@ function durationToPause(choice: DurationChoice): {
 
 function formatTimeInZone(iso: string | null, timeZone: string): string {
   if (!iso) return "—";
-  return new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: timeZone || "Europe/Chisinau",
-  }).format(new Date(iso));
+  return formatClock24(iso, timeZone || "Europe/Chisinau");
 }
 
 /** Живой остаток времени паузы, слова с корректным склонением. */

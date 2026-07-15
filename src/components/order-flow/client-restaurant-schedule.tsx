@@ -5,10 +5,10 @@ import { Clock } from "lucide-react";
 import type { Restaurant } from "@/prototype/models";
 import { WEEKDAY_LABELS, WEEKDAY_ORDER } from "@/prototype/models";
 import {
-  getClientRestaurantAvailabilityAt,
   getClientRestaurantScheduleSummary,
   getScheduleLabel,
 } from "@/prototype/selectors";
+import { RestaurantAvailabilityBadge } from "./restaurant-availability-badge";
 import styles from "./order-flow.module.css";
 
 /**
@@ -33,45 +33,26 @@ export function ClientRestaurantSchedule({
   const summary = ready
     ? getClientRestaurantScheduleSummary(restaurant, new Date(nowMs))
     : null;
-  const availability = ready
-    ? getClientRestaurantAvailabilityAt(restaurant, nowMs)
-    : null;
   // Активный день подсвечивается в полном графике: при ночном интервале это
   // может быть вчерашний день (тот, чей интервал сейчас продолжается).
   const activeDayId = summary?.activeScheduleWeekdayId ?? null;
 
-  // §5: статус берётся из ЕДИНОГО availability — «Сейчас открыто» показывается
-  // только когда заказ реально можно отправить. Пауза/админ-отключение
-  // переопределяют график; ночной интервал использует спец-текст summary.
-  let statusText = "Сегодня: —";
-  if (summary && availability) {
-    if (
-      availability.state === "ACCEPTING" ||
-      availability.state === "CLOSED_SCHEDULE"
-    ) {
-      statusText = summary.statusText;
-    } else if (availability.state === "OPERATIONAL_PAUSE") {
-      statusText = `Сегодня: ${summary.todayScheduleLabel} · Временно не принимает заказы`;
-    } else if (availability.state === "ADMIN_DISABLED") {
-      statusText = `Сегодня: ${summary.todayScheduleLabel} · Сейчас не принимает заказы`;
-    } else {
-      statusText = "Заказы недоступны";
-    }
-  }
-  const openTone = availability?.state === "ACCEPTING";
+  // §2: строка графика показывает ТОЛЬКО рабочие часы. Фактическую возможность
+  // заказа (открыто/пауза/закрыто) + вторичную подсказку показывает единый
+  // RestaurantAvailabilityBadge — статус не дублируется.
+  const hoursText = summary
+    ? `Сегодня: ${summary.todayScheduleLabel}`
+    : "Сегодня: —";
 
   return (
     <div className={styles.scheduleInfo}>
       <p className={styles.scheduleToday}>
         <Clock aria-hidden="true" className={styles.scheduleIcon} size={15} />
-        <span>
-          <span
-            className={openTone ? styles.scheduleOpen : styles.scheduleClosed}
-          >
-            {statusText}
-          </span>
-        </span>
+        <span>{hoursText}</span>
       </p>
+      {ready ? (
+        <RestaurantAvailabilityBadge restaurant={restaurant} nowMs={nowMs} />
+      ) : null}
       {showFullSchedule ? (
         <details className={styles.scheduleDetails}>
           <summary>График работы</summary>

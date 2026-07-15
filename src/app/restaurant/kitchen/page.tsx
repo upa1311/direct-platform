@@ -26,6 +26,7 @@ import type {
   PickupPaymentMethod,
 } from "@/prototype/models";
 import {
+  formatClock24,
   formatKitchenCountdown,
   formatMoney,
   getAudibleKitchenReviewOrders,
@@ -116,14 +117,10 @@ function totalUnits(order: Order): number {
   return order.items.reduce((sum, item) => sum + item.quantity, 0);
 }
 
-/** Часы HH:MM ожидаемой готовности в часовом поясе ресторана. */
+/** Часы HH:MM ожидаемой готовности в часовом поясе ресторана (§4). */
 function etaClock(iso: string | null, timeZone: string): string {
   if (!iso) return "не задана";
-  return new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: timeZone || "Europe/Chisinau",
-  }).format(new Date(iso));
+  return formatClock24(iso, timeZone || "Europe/Chisinau");
 }
 
 /** Сколько времени прошло с момента `fromIso`. */
@@ -360,12 +357,12 @@ function PreparingCard({
       ) : null}
       <KitchenItems order={order} />
       <p className={kds.units}>Всего единиц: {totalUnits(order)}</p>
+      <p className={kds.units}>
+        Ожидаемая готовность: к {etaClock(order.expectedReadyAt, timeZone)}
+      </p>
       <div className={kds.metaLine}>
         Первоначальная оценка: {order.preparationMinutes ?? "—"} мин
       </div>
-      <p className={kds.units}>
-        Текущая ожидаемая готовность: {etaClock(order.expectedReadyAt, timeZone)}
-      </p>
       {lastEta ? (
         <div className={kds.metaLine}>
           <span className={kds.badge}>Время обновлено</span> {lastEta.reason}

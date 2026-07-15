@@ -12,8 +12,8 @@ import {
   type WeeklySchedule,
 } from "./models";
 import {
+  createAlwaysOpenDemoSchedule,
   createDefaultState,
-  createDefaultWeeklySchedule,
   createEmptyCart,
 } from "./default-state";
 import { migrateFulfillmentChoice } from "./pricing-engine";
@@ -396,13 +396,15 @@ function normalizeDaySchedule(value: unknown): DaySchedule {
 }
 
 /**
- * Нормализация недельного графика. Отсутствующий график заменяется безопасным
- * стандартным (09:00–22:00 все дни); присутствующие дни сохраняются, недостающие
- * дозаполняются стандартом. Существующие рестораны при этом не удаляются.
+ * Нормализация недельного графика. Legacy-ресторан БЕЗ графика работал всегда
+ * (часов ещё не было) — миграция сохраняет доступность, задавая круглосуточный
+ * график, а не новый безопасный «закрыто по умолчанию» (§6). Уже настроенные
+ * часы не перезаписываются: присутствующие дни сохраняются, отсутствующие
+ * дозаполняются рабочим стандартом. Существующие рестораны не удаляются.
  */
 function normalizeWeeklySchedule(value: unknown): WeeklySchedule {
   if (!isRecord(value)) {
-    return createDefaultWeeklySchedule();
+    return createAlwaysOpenDemoSchedule();
   }
   return WEEKDAY_ORDER.reduce((schedule, day) => {
     schedule[day] =
