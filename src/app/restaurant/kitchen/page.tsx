@@ -207,7 +207,13 @@ function KitchenCardHead({
  * Этап 6/8: инлайновая панель «Не можем приготовить». Кухня сообщает оператору
  * о проблеме — статус, оплата и финансы НЕ меняются, заказ не отменяется.
  */
-function PreparationProblemPanel({ order }: { order: Order }) {
+function PreparationProblemPanel({
+  order,
+  isSplit,
+}: {
+  order: Order;
+  isSplit: boolean;
+}) {
   const { reportPreparationProblem } = usePrototype();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -249,7 +255,9 @@ function PreparationProblemPanel({ order }: { order: Order }) {
         </button>
         {sent ? (
           <p className={kds.units} role="status">
-            Сообщение о проблеме отправлено оператору.
+            {isSplit
+              ? "Сообщение о проблеме отправлено оператору."
+              : "Проблема приготовления сохранена."}
           </p>
         ) : null}
       </>
@@ -289,7 +297,9 @@ function PreparationProblemPanel({ order }: { order: Order }) {
         </label>
       ) : null}
       <p className={kds.pickupAdminHint}>
-        Заказ не отменяется: оператор увидит сообщение и решит, что делать.
+        {isSplit
+          ? "Заказ не отменяется: оператор увидит сообщение и решит, что делать."
+          : "Заказ не отменяется автоматически. Выберите дальнейшее действие в общем экране."}
       </p>
       {error ? (
         <p className={kds.pickupError} role="alert">
@@ -310,7 +320,7 @@ function PreparationProblemPanel({ order }: { order: Order }) {
           disabled={!effectiveReason.trim()}
           onClick={doReport}
         >
-          Сообщить оператору
+          {isSplit ? "Сообщить оператору" : "Зафиксировать проблему"}
         </button>
       </div>
     </div>
@@ -386,7 +396,7 @@ function NewOrderCard({
             {/* Этап 8: в SPLIT кухня не отклоняет заказ (это отмена — зона
                 оператора), а сообщает о проблеме приготовления. */}
             {isSplit ? (
-              <PreparationProblemPanel order={order} />
+              <PreparationProblemPanel order={order} isSplit={isSplit} />
             ) : (
               <button
                 className={`${kds.btn} ${kds.btnRedOutline}`}
@@ -451,10 +461,12 @@ function PreparingCard({
   order,
   nowMs,
   timeZone,
+  isSplit,
 }: {
   order: Order;
   nowMs: number;
   timeZone: string;
+  isSplit: boolean;
 }) {
   const { state, markReady } = usePrototype();
   const restaurant = getRestaurant(state, order.restaurant.id);
@@ -542,7 +554,7 @@ function PreparingCard({
         </p>
       ) : null}
       {/* Этап 6: кухня может сообщить о проблеме и во время приготовления. */}
-      <PreparationProblemPanel order={order} />
+      <PreparationProblemPanel order={order} isSplit={isSplit} />
     </article>
   );
 }
@@ -1088,6 +1100,7 @@ export default function RestaurantKitchenPage() {
                     order={order}
                     nowMs={nowMs}
                     timeZone={restaurant?.timeZone ?? "Europe/Chisinau"}
+                    isSplit={isSplit}
                     key={order.id}
                   />
                 ))

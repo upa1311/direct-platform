@@ -34,10 +34,12 @@ import {
 
 const ZONE_IDS: ZoneId[] = ["zone-1", "zone-2", "zone-3", "zone-4"];
 /** §5: часовой пояс — русское название, значение хранится как IANA ID. */
+// Исправление 5: пользователю показываются только русские подписи; IANA ID
+// остаётся техническим value.
 const RESTAURANT_TIMEZONE_OPTIONS: { value: string; label: string }[] = [
-  { value: "Europe/Chisinau", label: "Кишинёв — Europe/Chisinau" },
-  { value: "America/New_York", label: "Нью-Йорк — America/New_York" },
-  { value: "UTC", label: "Всемирное координированное время — UTC" },
+  { value: "Europe/Chisinau", label: "Кишинёв" },
+  { value: "America/New_York", label: "Нью-Йорк" },
+  { value: "UTC", label: "Всемирное координированное время" },
 ];
 const STATUSES: Restaurant["status"][] = [
   "DRAFT",
@@ -475,7 +477,7 @@ export function RestaurantBuilderEditor({
               )
                 ? RESTAURANT_TIMEZONE_OPTIONS
                 : [
-                    { value: form.timeZone, label: form.timeZone },
+                    { value: form.timeZone, label: "Другой часовой пояс" },
                     ...RESTAURANT_TIMEZONE_OPTIONS,
                   ]
               ).map((option) => (

@@ -2247,15 +2247,16 @@ export function markPickupNoShow(
     return fail("Заказ не найден или не является самовывозом.");
   }
   // Этап 4: невыкуп — управление отменой; действие оператора/общего экрана.
-  if (
-    !checkRestaurantWorkspace(
-      state,
-      order,
-      actor,
-      "MANAGE_CANCELLATION",
-      workspaceRole,
-    ).allowed
-  ) {
+  // Исправление 3: сохраняем результат guard, чтобы событие получило роль
+  // (для ADMIN guard.role остаётся undefined — ресторанная роль не ставится).
+  const noShowGuard = checkRestaurantWorkspace(
+    state,
+    order,
+    actor,
+    "MANAGE_CANCELLATION",
+    workspaceRole,
+  );
+  if (!noShowGuard.allowed) {
     return fail("Недостаточно прав для отметки невыкупа.");
   }
   if (order.status !== "READY_FOR_PICKUP") {
@@ -2309,6 +2310,7 @@ export function markPickupNoShow(
         fromStatus: "READY_FOR_PICKUP",
         toStatus: "CANCELED",
         message: `${noShowPrefix}Клиент не пришёл за заказом. Причина: ${normalizedReason}`,
+        restaurantWorkspaceRole: noShowGuard.role,
       },
     ],
   };
@@ -2491,6 +2493,11 @@ function resolvePauseResumeAt(
   resumeAt: string | null,
   nowMs: number,
 ): { resumeAt: string | null } | { error: string } {
+  // Исправление 6: runtime-данные (старый localStorage, ручной вызов, JS) могут
+  // принести неизвестный режим — не трактуем его молча как UNTIL_NEXT_OPEN.
+  if (mode !== "UNTIL_TIME" && mode !== "UNTIL_NEXT_OPEN" && mode !== "MANUAL") {
+    return { error: "Неизвестный режим паузы." };
+  }
   if (mode === "MANUAL") {
     return { resumeAt: null };
   }

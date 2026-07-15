@@ -160,7 +160,7 @@ test("12. OPERATIONAL_PAUSE блокирует создание заказа", (
             ...r,
             orderPause: {
               reason: "перегрузка",
-              mode: "UNTIL_MANUAL",
+              mode: "MANUAL",
               startedAt: "2026-07-12T00:00:00.000Z",
               resumeAt: null,
             } as unknown as OperationalPause,

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
@@ -40,6 +41,15 @@ const NO_SHOW_REASONS = [
   "Другая причина",
 ] as const;
 
+/** Исправление 1: причины отклонения нового заказа оператором. */
+const OPERATOR_REJECT_REASONS = [
+  "Нет нужных позиций",
+  "Ресторан не может выполнить заказ",
+  "Заказ невозможно доставить",
+  "Ресторан скоро закрывается",
+  "Другая причина",
+] as const;
+
 /** Минут до targetIso (0 — если наступило); null — нет данных/часов. */
 function minutesUntil(targetIso: string | null, nowMs: number): number | null {
   if (!targetIso || nowMs === 0) return null;
@@ -70,6 +80,105 @@ function OperatorOrderDetails({ order }: { order: Order }) {
         Сумма: {formatMoney(order.financials.customerTotalCents)}
       </div>
     </>
+  );
+}
+
+/**
+ * Исправление 1: отклонение нового заказа оператором (RESTAURANT_REVIEW).
+ * Оператор не принимает заказ и не задаёт время — только штатный отказ через
+ * существующий rejectRestaurantOrder с ролью OPERATOR. Кухня в SPLIT кнопку
+ * отклонения не получает (у неё «Не можем приготовить»).
+ */
+function OperatorRejectPanel({ order }: { order: Order }) {
+  const { rejectOrder } = usePrototype();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [customReason, setCustomReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const isOther = reason === "Другая причина";
+  const effectiveReason = isOther ? customReason : reason;
+
+  const doReject = () => {
+    if (!effectiveReason.trim()) {
+      setError("Укажите причину отклонения.");
+      return;
+    }
+    rejectOrder(order.id, effectiveReason, "RESTAURANT", "OPERATOR");
+    setError(null);
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button
+        className={`${kds.btn} ${kds.btnRedOutline}`}
+        type="button"
+        onClick={() => {
+          setOpen(true);
+          setError(null);
+        }}
+      >
+        Отклонить заказ
+      </button>
+    );
+  }
+
+  return (
+    <div className={kds.dialog} role="group" aria-label="Отклонение заказа">
+      <h4 className={kds.dialogTitle}>Причина отклонения</h4>
+      <fieldset className={kds.reasonList}>
+        {OPERATOR_REJECT_REASONS.map((r) => (
+          <label className={kds.reasonOption} key={r}>
+            <input
+              type="radio"
+              name={`op-reject-${order.id}`}
+              checked={reason === r}
+              onChange={() => {
+                setReason(r);
+                setError(null);
+              }}
+            />
+            <span>{r}</span>
+          </label>
+        ))}
+      </fieldset>
+      {isOther ? (
+        <label className={kds.field}>
+          <span>Ваша причина</span>
+          <textarea
+            value={customReason}
+            onChange={(event) => {
+              setCustomReason(event.target.value);
+              setError(null);
+            }}
+            placeholder="Опишите причину"
+          />
+        </label>
+      ) : null}
+      {error ? (
+        <p className={kds.pickupError} role="alert">
+          {error}
+        </p>
+      ) : null}
+      <div className={kds.btnRowEnd}>
+        <button
+          className={`${kds.btn} ${kds.btnOutline}`}
+          type="button"
+          onClick={() => setOpen(false)}
+        >
+          Не отклонять
+        </button>
+        <button
+          className={`${kds.btn} ${kds.btnRedOutline}`}
+          type="button"
+          disabled={!effectiveReason.trim()}
+          onClick={doReject}
+        >
+          Подтвердить отклонение
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -372,6 +481,9 @@ function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
       ) : null}
       <OperatorOrderDetails order={order} />
       <PreparationProblemNotice order={order} />
+      {order.status === "RESTAURANT_REVIEW" ? (
+        <OperatorRejectPanel order={order} />
+      ) : null}
       {order.status === "READY_FOR_PICKUP" ? (
         <OperatorPickupHandoff order={order} nowMs={nowMs} />
       ) : (
@@ -392,6 +504,7 @@ const ACTIVE_OPERATOR_STATUSES: readonly Order["status"][] = [
 ];
 
 export default function RestaurantOperatorPage() {
+  const router = useRouter();
   const { state, isHydrated } = usePrototype();
   const {
     selectedRestaurantId,
@@ -401,6 +514,25 @@ export default function RestaurantOperatorPage() {
   const nowMs = useNowMs();
 
   const restaurant = getRestaurant(state, selectedRestaurantId);
+  // Исправление 7: в COMBINED существует только один рабочий экран заказов —
+  // прямой URL оператора переводится на него. В SPLIT экран остаётся доступен.
+  const isCombined =
+    isHydrated && restaurant?.orderWorkflowMode !== "SPLIT_OPERATOR_KITCHEN";
+  useEffect(() => {
+    if (isCombined) {
+      router.replace("/restaurant/kitchen");
+    }
+  }, [isCombined, router]);
+
+  // До гидратации и при redirect не показываем операторский board даже коротко.
+  if (!isHydrated || isCombined) {
+    return (
+      <div className={kds.screen}>
+        <div className={kds.empty}>Загружаем заказы…</div>
+      </div>
+    );
+  }
+
   const orders = state.orders.filter(
     (order) =>
       order.restaurant.id === selectedRestaurantId &&

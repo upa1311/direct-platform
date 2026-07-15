@@ -25,8 +25,13 @@ import {
 } from "./actions.ts";
 import {
   clientHistoryEvent,
+  getPickupNoShowEligibleAtIso,
   getRestaurantAvailabilityStateAt,
+  getRestaurantTimeZoneLabel,
+  restaurantTimeZoneLabels,
+  workflowModeLabels,
 } from "./selectors.ts";
+import { normalizePrototypeState } from "./prototype-store.ts";
 import type { Order, PrototypeState } from "./models.ts";
 
 const NOW = "2026-07-14T12:00:00.000Z";
@@ -275,12 +280,12 @@ test("SPLIT: ONLINE lifecycle сохраняет AWAITING_PAYMENT (оплата 
 test("SPLIT: пауза ресторана — кухня может, оператор нет", () => {
   const { state } = splitPickupState();
   const operator = pauseRestaurantOrders(
-    state, "restaurant-2", "Перегружены", "UNTIL_MANUAL", null, "RESTAURANT", "OPERATOR",
+    state, "restaurant-2", "Перегружены", "MANUAL", null, "RESTAURANT", "OPERATOR",
   );
   assert.equal(operator.result.ok, false);
   assert.equal(operator.state, state);
   const kitchen = pauseRestaurantOrders(
-    state, "restaurant-2", "Перегружены", "UNTIL_MANUAL", null, "RESTAURANT", "KITCHEN",
+    state, "restaurant-2", "Перегружены", "MANUAL", null, "RESTAURANT", "KITCHEN",
   );
   assert.equal(kitchen.result.ok, true);
   assert.equal(
@@ -292,12 +297,12 @@ test("SPLIT: пауза ресторана — кухня может, опера
 test("SPLIT: доступность меню — кухня может, оператор нет", () => {
   const { state } = splitPickupState();
   const operator = setMenuItemOperationallyUnavailable(
-    state, "restaurant-2", "restaurant-2-item-1", "Закончился", "UNTIL_MANUAL", null,
+    state, "restaurant-2", "restaurant-2-item-1", "Закончился", "MANUAL", null,
     "RESTAURANT", "OPERATOR",
   );
   assert.equal(operator.result.ok, false);
   const kitchen = setMenuItemOperationallyUnavailable(
-    state, "restaurant-2", "restaurant-2-item-1", "Закончился", "UNTIL_MANUAL", null,
+    state, "restaurant-2", "restaurant-2-item-1", "Закончился", "MANUAL", null,
     "RESTAURANT", "KITCHEN",
   );
   assert.equal(kitchen.result.ok, true);
@@ -328,4 +333,171 @@ test("availability ресторана не зависит от workflow mode", (
     getRestaurantAvailabilityStateAt(combined, at),
     getRestaurantAvailabilityStateAt(split, at),
   );
+});
+
+
+// --- Исправительный проход (аудит): отклонение оператором ---------------------
+
+test("Исправление 1: оператор отклоняет новый заказ, событие с ролью OPERATOR", () => {
+  const { state, orderId } = splitPickupState();
+  const before = getOrder(state, orderId).history.length;
+  const next = rejectRestaurantOrder(state, orderId, "Нет нужных позиций", "RESTAURANT", "OPERATOR");
+  const order = getOrder(next, orderId);
+  assert.equal(order.status, "CANCELED");
+  // Ровно одно новое событие.
+  assert.equal(order.history.length, before + 1);
+  assert.equal(order.history.at(-1)?.restaurantWorkspaceRole, "OPERATOR");
+  // Повторное отклонение не создаёт второе событие.
+  const again = rejectRestaurantOrder(next, orderId, "Ещё раз", "RESTAURANT", "OPERATOR");
+  assert.equal(getOrder(again, orderId).history.length, before + 1);
+});
+
+test("Исправление 1: кухня в SPLIT не может отклонить", () => {
+  const { state, orderId } = splitPickupState();
+  const next = rejectRestaurantOrder(state, orderId, "Нет блюда", "RESTAURANT", "KITCHEN");
+  assert.equal(next, state);
+  assert.equal(getOrder(next, orderId).status, "RESTAURANT_REVIEW");
+});
+
+// --- Исправление 2: клиентская нейтрализация PREPARATION_PROBLEM -------------
+
+test("Исправление 2: клиент видит нейтральный текст, оператор — исходный", () => {
+  const { state, orderId } = splitPickupState();
+  const reported = reportRestaurantPreparationProblem(
+    state, orderId, "Закончился ингредиент", "RESTAURANT", NOW, "KITCHEN",
+  );
+  const order = getOrder(reported.state, orderId);
+  const ev = order.history.find((e) => e.type === "PREPARATION_PROBLEM")!;
+  // Исходное событие сохраняет внутренний текст (для оператора/администратора).
+  assert.ok(ev.message.includes("Кухня сообщила о проблеме: Закончился ингредиент"));
+  assert.equal(ev.restaurantWorkspaceRole, "KITCHEN");
+  // Клиентское представление нейтрально.
+  const view = clientHistoryEvent(ev, order, true);
+  assert.equal(view.message, "Ресторан сообщил о проблеме с выполнением заказа.");
+  assert.equal(view.hideActor, true);
+  assert.ok(!view.message.includes("Кухня"));
+  assert.ok(!view.message.includes("Закончился"));
+  assert.ok(!view.message.includes("KITCHEN"));
+  // Событие не мутировано.
+  assert.ok(ev.message.includes("Закончился ингредиент"));
+});
+
+// --- Исправление 3: роль в событии невыкупа -----------------------------------
+
+function readyForNoShow(): { state: PrototypeState; orderId: string; at: string } {
+  const { state, orderId } = splitPickupState();
+  let s = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "KITCHEN");
+  s = markOrderReady(s, orderId, "RESTAURANT", "KITCHEN");
+  const at = getPickupNoShowEligibleAtIso(getOrder(s, orderId))!;
+  return { state: s, orderId, at };
+}
+
+test("Исправление 3: невыкуп оператором — событие с ролью OPERATOR", () => {
+  const { state, orderId, at } = readyForNoShow();
+  const res = markPickupNoShow(state, orderId, "Не пришёл", "RESTAURANT", at, "OPERATOR");
+  assert.equal(res.result.ok, true);
+  const ev = getOrder(res.state, orderId).history.at(-1);
+  assert.equal(ev?.restaurantWorkspaceRole, "OPERATOR");
+  // Повторный вызов не создаёт дубликат.
+  const len = getOrder(res.state, orderId).history.length;
+  const again = markPickupNoShow(res.state, orderId, "Ещё", "RESTAURANT", at, "OPERATOR");
+  assert.equal(again.result.ok, false);
+  assert.equal(getOrder(again.state, orderId).history.length, len);
+});
+
+test("Исправление 3: COMBINED-невыкуп получает роль COMBINED", () => {
+  // Ресторан-2 остаётся COMBINED (без перевода в split).
+  let s = createDefaultState();
+  s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
+  s = setCartFulfillmentChoice(s, "PICKUP");
+  const created = createOrderFromCart(s);
+  const orderId = created.result.orderId as string;
+  s = acceptRestaurantOrder(created.state, orderId, 20);
+  s = markOrderReady(s, orderId);
+  const at = getPickupNoShowEligibleAtIso(getOrder(s, orderId))!;
+  const res = markPickupNoShow(s, orderId, "Не пришёл", "RESTAURANT", at);
+  assert.equal(res.result.ok, true);
+  assert.equal(getOrder(res.state, orderId).history.at(-1)?.restaurantWorkspaceRole, "COMBINED");
+});
+
+test("Исправление 3: ADMIN-невыкуп не получает ресторанную роль", () => {
+  const { state, orderId, at } = readyForNoShow();
+  const res = markPickupNoShow(state, orderId, "Не пришёл", "ADMIN", at);
+  assert.equal(res.result.ok, true);
+  assert.equal(getOrder(res.state, orderId).history.at(-1)?.restaurantWorkspaceRole, undefined);
+});
+
+// --- Исправление 6: MANUAL и неизвестный режим паузы ---------------------------
+
+test("Исправление 6: MANUAL создаёт паузу без resumeAt, проходит normalizer", () => {
+  const { state } = splitPickupState();
+  const res = pauseRestaurantOrders(
+    state, "restaurant-2", "Перегружены", "MANUAL", null, "RESTAURANT", "KITCHEN",
+  );
+  assert.equal(res.result.ok, true);
+  const r = res.state.restaurants.find((x) => x.id === "restaurant-2")!;
+  assert.equal(r.orderPause?.mode, "MANUAL");
+  assert.equal(r.orderPause?.resumeAt, null);
+  const normalized = normalizePrototypeState(res.state);
+  assert.equal(
+    normalized.restaurants.find((x) => x.id === "restaurant-2")?.orderPause?.mode,
+    "MANUAL",
+  );
+});
+
+test("Исправление 6: неизвестный режим паузы блокируется без мутации", () => {
+  const { state } = splitPickupState();
+  const res = pauseRestaurantOrders(
+    state, "restaurant-2", "Перегружены",
+    "UNTIL_MAGIC" as unknown as Parameters<typeof pauseRestaurantOrders>[3],
+    null, "RESTAURANT", "KITCHEN",
+  );
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Неизвестный режим паузы.");
+  assert.equal(res.state, state);
+});
+
+// --- Исправление 8: ETA в COMBINED + эффективная роль -------------------------
+
+test("Исправление 8: COMBINED меняет ETA, роль в audit — COMBINED", () => {
+  let s = createDefaultState();
+  s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
+  s = setCartFulfillmentChoice(s, "PICKUP");
+  const created = createOrderFromCart(s);
+  const orderId = created.result.orderId as string;
+  s = acceptRestaurantOrder(created.state, orderId, 20);
+  // Вызов «как с кухни»: в COMBINED резолвится в COMBINED.
+  const res = adjustOrderEtaFromIntent(
+    s, orderId, { kind: "DELAY", minutes: 10 }, "Загружены",
+    "RESTAURANT", new Date().toISOString(), "KITCHEN",
+  );
+  assert.equal(res.result.ok, true);
+  const order = getOrder(res.state, orderId);
+  assert.equal(order.etaAdjustments.at(-1)?.restaurantWorkspaceRole, "COMBINED");
+  assert.equal(order.history.at(-1)?.restaurantWorkspaceRole, "COMBINED");
+});
+
+// --- Исправление 5/9: русские подписи ------------------------------------------
+
+test("Исправление 5: русские подписи часовых поясов без IANA ID", () => {
+  assert.equal(getRestaurantTimeZoneLabel("Europe/Chisinau"), "Кишинёв");
+  assert.equal(getRestaurantTimeZoneLabel("America/New_York"), "Нью-Йорк");
+  assert.equal(
+    getRestaurantTimeZoneLabel("UTC"),
+    "Всемирное координированное время",
+  );
+  // Неизвестный ID — безопасный русский fallback, не сырой ID.
+  assert.equal(getRestaurantTimeZoneLabel("Asia/Tokyo"), "Другой часовой пояс");
+  for (const label of Object.values(restaurantTimeZoneLabels)) {
+    assert.ok(!label.includes("/"), label);
+    assert.ok(!/[A-Za-z]/.test(label), label);
+  }
+});
+
+test("Исправление 9: подписи режимов работы на русском без enum", () => {
+  for (const label of Object.values(workflowModeLabels)) {
+    assert.ok(/[А-Яа-яЁё]/.test(label), label);
+    assert.ok(!label.includes("COMBINED"));
+    assert.ok(!label.includes("SPLIT"));
+  }
 });

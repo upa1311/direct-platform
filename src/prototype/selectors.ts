@@ -141,6 +141,15 @@ export function clientHistoryEvent(
       hideActor: true,
     };
   }
+  // Исправление 2: внутреннее сообщение кухни («Кухня сообщила о проблеме: …»)
+  // клиенту не показывается — только нейтральный текст без роли и причины.
+  // Исходное событие не мутируется: оператор и администратор видят оригинал.
+  if (event.type === "PREPARATION_PROBLEM") {
+    return {
+      message: "Ресторан сообщил о проблеме с выполнением заказа.",
+      hideActor: true,
+    };
+  }
   if (clientSafe && order?.deliveryMode === "PICKUP") {
     if (
       event.type === "PAYMENT" &&
@@ -190,6 +199,21 @@ export const workflowModeLabels: Record<RestaurantOrderWorkflowMode, string> = {
   COMBINED: "Один общий экран",
   SPLIT_OPERATOR_KITCHEN: "Оператор и кухня отдельно",
 };
+
+/**
+ * Исправление 5: русские подписи часовых поясов. IANA ID остаётся в данных и
+ * <option value>, но пользователю показывается только русское название.
+ */
+export const restaurantTimeZoneLabels: Record<string, string> = {
+  "Europe/Chisinau": "Кишинёв",
+  "America/New_York": "Нью-Йорк",
+  UTC: "Всемирное координированное время",
+};
+
+/** Русская подпись пояса; для неизвестного ID — безопасный русский fallback. */
+export function getRestaurantTimeZoneLabel(timeZone: string): string {
+  return restaurantTimeZoneLabels[timeZone] ?? "Другой часовой пояс";
+}
 
 /** §3: русские подписи статусов начислений (единый источник для всех экранов). */
 export const settlementStatusLabels: Record<SettlementStatus, string> = {

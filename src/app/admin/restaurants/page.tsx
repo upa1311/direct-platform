@@ -11,6 +11,7 @@ import {
   getPickupPaymentSummary,
   getRestaurantActiveOrderCount,
   getRestaurantLocalNow,
+  getRestaurantTimeZoneLabel,
   getRestaurantTotalDebtCents,
   getScheduleLabel,
   getZoneName,
@@ -97,7 +98,7 @@ function RestaurantOperationalCard({
             </div>
             <div className={flowStyles.definitionRow}>
               <dt>Часовой пояс</dt>
-              <dd>{restaurant.timeZone}</dd>
+              <dd>{getRestaurantTimeZoneLabel(restaurant.timeZone)}</dd>
             </div>
             <div className={flowStyles.definitionRow}>
               <dt>Организация работы</dt>
