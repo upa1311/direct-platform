@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { createDefaultState } from "./default-state.ts";
 import {
   acceptRestaurantOrder,
+  acceptRestaurantOrderWithResult,
   addCartItem,
   adjustOrderEtaFromIntent,
   completePickupWithCode,
@@ -97,6 +98,72 @@ test("SPLIT: событие приёма несёт роль KITCHEN", () => {
   const next = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "KITCHEN");
   const ev = getOrder(next, orderId).history.at(-1);
   assert.equal(ev?.restaurantWorkspaceRole, "KITCHEN");
+});
+
+test("Приём pickup: prep/expectedReadyAt/оплата/финансы выставлены корректно", () => {
+  const { state, orderId } = splitPickupState();
+  const before = getOrder(state, orderId);
+  const finBefore = JSON.stringify(before.financials);
+  const acceptedAtMs = Date.now();
+  const res = acceptRestaurantOrderWithResult(
+    state, orderId, 20, "RESTAURANT", "KITCHEN",
+  );
+  assert.equal(res.result.ok, true);
+  const order = getOrder(res.state, orderId);
+  assert.equal(order.status, "PREPARING");
+  // Выбранное время сохранено, ожидаемая готовность ≈ now + 20 минут.
+  assert.equal(order.preparationMinutes, 20);
+  assert.ok(order.expectedReadyAt);
+  const deltaMin =
+    (Date.parse(order.expectedReadyAt as string) - acceptedAtMs) / 60_000;
+  assert.ok(deltaMin > 19 && deltaMin < 21, `deltaMin=${deltaMin}`);
+  // Оплата при получении сохраняется, финансовый снимок не пересчитан.
+  assert.equal(order.paymentStatus, "DUE_AT_PICKUP");
+  assert.equal(order.financials.deliveryFeeCents, 0);
+  assert.equal(JSON.stringify(order.financials), finBefore);
+  assert.equal(res.state.settlements.length, 0);
+  assert.equal(order.pickupCodeUsed, false);
+  assert.equal(order.assignedDriverId, null);
+  // Один Order, ревизия выросла ровно на один, одно новое событие.
+  assert.equal(res.state.orders.filter((o) => o.id === orderId).length, 1);
+  assert.equal(res.state.revision, state.revision + 1);
+  assert.equal(order.history.length, before.history.length + 1);
+});
+
+test("Повторное принятие уже принятого заказа — ошибка без события и ревизии", () => {
+  const { state, orderId } = splitPickupState();
+  const first = acceptRestaurantOrderWithResult(
+    state, orderId, 20, "RESTAURANT", "KITCHEN",
+  );
+  assert.equal(first.result.ok, true);
+  const historyAfterFirst = getOrder(first.state, orderId).history.length;
+
+  const second = acceptRestaurantOrderWithResult(
+    first.state, orderId, 25, "RESTAURANT", "KITCHEN",
+  );
+  assert.equal(second.result.ok, false);
+  assert.equal(second.result.error, "Заказ уже обработан. Обновите данные.");
+  // Исходный state тем же объектом: ни события, ни роста revision,
+  // preparationMinutes не перезаписан вторым значением.
+  assert.equal(second.state, first.state);
+  const order = getOrder(second.state, orderId);
+  assert.equal(order.history.length, historyAfterFirst);
+  assert.equal(order.preparationMinutes, 20);
+  assert.equal(second.state.revision, first.state.revision);
+});
+
+test("COMBINED: событие приёма несёт роль COMBINED", () => {
+  let s = createDefaultState();
+  s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
+  s = setCartFulfillmentChoice(s, "PICKUP");
+  const created = createOrderFromCart(s);
+  const next = acceptRestaurantOrder(created.state, created.result.orderId, 20);
+  const ev = getOrder(next, created.result.orderId).history.at(-1);
+  assert.equal(ev?.restaurantWorkspaceRole, "COMBINED");
+  assert.equal(ev?.actor, "RESTAURANT");
+  assert.equal(ev?.type, "STATUS");
+  assert.equal(ev?.fromStatus, "RESTAURANT_REVIEW");
+  assert.equal(ev?.toStatus, "PREPARING");
 });
 
 // --- Готовность и ETA -------------------------------------------------------
