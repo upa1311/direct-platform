@@ -206,6 +206,21 @@
   gap: 8px;
 }
 
+/* Вторичное действие «Изменить время» — отдельной строкой над основной
+   кнопкой готовности; компактное, по содержимому, слева. Вертикальный интервал
+   до кнопки готовности даёт grid-gap карточки (8px), отдельный margin не нужен. */
+.changeTimeRow {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.changeTimeButton {
+  width: fit-content;
+  min-height: 34px;
+  padding: 6px 11px;
+  font-size: 13px;
+}
+
 .btnRowEnd {
   display: flex;
   flex-wrap: wrap;
@@ -308,6 +323,24 @@
 .field textarea {
   min-height: 60px;
   resize: vertical;
+}
+
+/* Компактное поле времени приготовления: не растягивается на всю карточку,
+   стоит слева. На узком экране занимает всю доступную ширину. */
+.preparationField {
+  width: min(220px, 100%);
+  justify-self: start;
+}
+
+.preparationField select {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .preparationField {
+    width: 100%;
+  }
 }
 
 .panelHint {

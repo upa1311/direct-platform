@@ -414,7 +414,7 @@ function NewOrderCard({
 
       {!rejectOpen ? (
         <div className={kds.panel}>
-          <label className={kds.field}>
+          <label className={`${kds.field} ${kds.preparationField}`}>
             <span>Время приготовления</span>
             <select
               value={prep}
@@ -576,6 +576,18 @@ function PreparingCard({
       >
         {countdown.overdue ? countdown.text : `До готовности: ${countdown.text}`}
       </div>
+      <div className={kds.changeTimeRow}>
+        <button
+          className={`${kds.btn} ${kds.btnOutline} ${kds.changeTimeButton}`}
+          type="button"
+          onClick={() => {
+            setEtaOpen((v) => !v);
+            setEtaConfirm(false);
+          }}
+        >
+          Изменить время
+        </button>
+      </div>
       <div className={kds.btnRow}>
         <button
           className={`${kds.btn} ${kds.btnGreen}`}
@@ -586,16 +598,6 @@ function PreparingCard({
           }
         >
           {readyPending ? "Сохраняем…" : readyLabel}
-        </button>
-        <button
-          className={`${kds.btn} ${kds.btnOutline}`}
-          type="button"
-          onClick={() => {
-            setEtaOpen((v) => !v);
-            setEtaConfirm(false);
-          }}
-        >
-          Изменить время
         </button>
       </div>
       {readyError ? (
@@ -780,26 +782,34 @@ function KitchenPickupHandoff({
   nowMs: number;
 }) {
   const { completePickup } = usePrototype();
+  // Pending и защита от двойного нажатия — через общий thunk-guard; локального
+  // error-state больше нет, единственный источник ошибки — mutationError.
+  const { error: mutationError, pending, run, clearError } = useMutationGuard();
   const methods = order.pickupPaymentMethodsSnapshot;
   const single = methods.length === 1 ? methods[0] : null;
   const [paidWith, setPaidWith] = useState<PickupPaymentMethod | null>(single);
   const [code, setCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
 
   const codeValid = /^\d{4}$/.test(code.trim());
   const canConfirm = codeValid && paidWith !== null;
 
   const doConfirm = async () => {
-    if (!paidWith) {
-      setError("Выберите способ оплаты.");
-      return;
-    }
-    const res = await completePickup(order.id, code, paidWith, "RESTAURANT", "KITCHEN");
-    if (!res.ok) {
-      setError(res.error ?? "Не удалось подтвердить выдачу.");
-      return;
-    }
-    setError(null);
+    // Кнопка disabled при !canConfirm — здесь только сужение типа paidWith.
+    if (!paidWith) return;
+    // Thunk: операция НЕ стартует до входа в guard, второй клик в том же tick
+    // не запускает вторую выдачу. Доменный результат приводится к MutationAck
+    // (успешная выдача всегда меняет state). При успехе карточка исчезнет из
+    // раздела готовых через подтверждённый общий state — вручную ничего не чистим.
+    await run(async () => {
+      const res = await completePickup(
+        order.id,
+        code,
+        paidWith,
+        "RESTAURANT",
+        "KITCHEN",
+      );
+      return { ok: res.ok, error: res.error, changed: res.ok };
+    });
   };
 
   return (
@@ -819,9 +829,10 @@ function KitchenPickupHandoff({
                 name={`kds-pay-${order.id}`}
                 value={method}
                 checked={paidWith === method}
+                disabled={pending}
                 onChange={() => {
                   setPaidWith(method);
-                  setError(null);
+                  clearError();
                 }}
               />
               <span>{pickupPaymentMethodLabels[method]}</span>
@@ -838,27 +849,28 @@ function KitchenPickupHandoff({
           maxLength={4}
           value={code}
           placeholder="4 цифры"
+          disabled={pending}
           onChange={(event) => {
             setCode(event.target.value.replace(/\D/g, "").slice(0, 4));
-            setError(null);
+            clearError();
           }}
         />
       </label>
       <p className={kds.pickupInstruction}>
         Попросите клиента назвать четырёхзначный код.
       </p>
-      {error ? (
+      {mutationError ? (
         <p className={kds.pickupError} role="alert">
-          {error}
+          {mutationError}
         </p>
       ) : null}
       <button
         className={`${kds.btn} ${kds.btnGreen}`}
         type="button"
-        disabled={!canConfirm}
+        disabled={!canConfirm || pending}
         onClick={doConfirm}
       >
-        Подтвердить оплату и выдать
+        {pending ? "Подтверждаем…" : "Подтвердить оплату и выдать"}
       </button>
       <p className={kds.pickupAdminHint}>
         Нет кода клиента? Обратитесь к администратору Direct.
