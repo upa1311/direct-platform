@@ -66,7 +66,7 @@ function RestaurantOperationalCard({
         `Приостановить приём новых заказов рестораном «${restaurant.name}»? Существующие заказы продолжат обрабатываться.`,
       )
     ) {
-      void runAccepting(setRestaurantAccepting(restaurant.id, false));
+      void runAccepting(() => setRestaurantAccepting(restaurant.id, false));
     }
   };
 
@@ -302,7 +302,7 @@ function RestaurantOperationalCard({
             type="button"
             disabled={acceptingPending}
             onClick={() =>
-              void runAccepting(setRestaurantAccepting(restaurant.id, true))
+              void runAccepting(() => setRestaurantAccepting(restaurant.id, true))
             }
           >
             {acceptingPending ? "Сохраняем…" : "Возобновить приём заказов"}

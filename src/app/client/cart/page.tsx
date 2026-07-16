@@ -44,16 +44,16 @@ export default function ClientCartPage() {
   const { error: cartMutationError, run: runCartMutation } = useMutationGuard();
   const setItemQuantity = (
     ...args: Parameters<typeof setItemQuantityAck>
-  ) => runCartMutation(setItemQuantityAck(...args));
+  ) => runCartMutation(() => setItemQuantityAck(...args));
   const setItemComment = (...args: Parameters<typeof setItemCommentAck>) =>
-    runCartMutation(setItemCommentAck(...args));
+    runCartMutation(() => setItemCommentAck(...args));
   const setFulfillmentChoice = (
     ...args: Parameters<typeof setFulfillmentChoiceAck>
-  ) => runCartMutation(setFulfillmentChoiceAck(...args));
+  ) => runCartMutation(() => setFulfillmentChoiceAck(...args));
   const updateAddress = (...args: Parameters<typeof updateAddressAck>) =>
-    runCartMutation(updateAddressAck(...args));
+    runCartMutation(() => updateAddressAck(...args));
   const updateCustomer = (...args: Parameters<typeof updateCustomerAck>) =>
-    runCartMutation(updateCustomerAck(...args));
+    runCartMutation(() => updateCustomerAck(...args));
   const nowMs = useNowMs();
   const [submitError, setSubmitError] = useState("");
   const [addressError, setAddressError] = useState("");

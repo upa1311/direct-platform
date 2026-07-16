@@ -34,7 +34,7 @@ export default function ClientRestaurantPage() {
   const { error: cartMutationError, run: runCartMutation } = useMutationGuard();
   const setItemQuantity = (
     ...args: Parameters<typeof setItemQuantityAck>
-  ) => runCartMutation(setItemQuantityAck(...args));
+  ) => runCartMutation(() => setItemQuantityAck(...args));
   const { isAddressConfirmed, confirmAddress } = useClientAddressConfirmation();
   const { notifyItemAdded } = useClientCartUi();
   const [feedback, setFeedback] = useState("");

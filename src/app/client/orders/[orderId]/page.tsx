@@ -233,7 +233,9 @@ export default function ClientOrderPage() {
                 className={flowStyles.primaryButton}
                 type="button"
                 disabled={paymentPending}
-                onClick={() => void runPayment(simulateOnlinePayment(order.id))}
+                onClick={() =>
+                  void runPayment(() => simulateOnlinePayment(order.id))
+                }
               >
                 {paymentPending
                   ? "Подтверждаем…"

@@ -95,7 +95,9 @@ export default function RestaurantSettingsPage() {
                 checked={active}
                 disabled={pending}
                 onChange={() =>
-                  void run(setRestaurantWorkflow(restaurant.id, option.mode))
+                  void run(() =>
+                    setRestaurantWorkflow(restaurant.id, option.mode),
+                  )
                 }
               />
               <span className={styles.modeBody}>

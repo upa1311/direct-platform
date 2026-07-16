@@ -581,7 +581,7 @@ function PreparingCard({
           type="button"
           disabled={readyPending}
           onClick={() =>
-            void runReady(markReady(order.id, "RESTAURANT", "KITCHEN"))
+            void runReady(() => markReady(order.id, "RESTAURANT", "KITCHEN"))
           }
         >
           {readyPending ? "Сохраняем…" : readyLabel}

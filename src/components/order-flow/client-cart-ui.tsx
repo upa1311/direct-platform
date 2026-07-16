@@ -49,7 +49,7 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
   const { error: cartMutationError, run: runCartMutation } = useMutationGuard();
   const setItemQuantity = (
     ...args: Parameters<typeof setItemQuantityAck>
-  ) => runCartMutation(setItemQuantityAck(...args));
+  ) => runCartMutation(() => setItemQuantityAck(...args));
   const [isOpen, setIsOpen] = useState(false);
   const [badgePulse, setBadgePulse] = useState(false);
   const [flyStyle, setFlyStyle] = useState<FlyStyle | null>(null);

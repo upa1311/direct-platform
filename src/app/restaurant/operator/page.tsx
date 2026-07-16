@@ -424,7 +424,9 @@ function OperatorHandoffActions({ order }: { order: Order }) {
             type="button"
             disabled={pending}
             onClick={() =>
-              void run(markOutForDelivery(order.id, "RESTAURANT", "OPERATOR"))
+              void run(() =>
+                markOutForDelivery(order.id, "RESTAURANT", "OPERATOR"),
+              )
             }
           >
             {pending ? "Сохраняем…" : "Курьер выехал"}
@@ -441,7 +443,7 @@ function OperatorHandoffActions({ order }: { order: Order }) {
             type="button"
             disabled={pending}
             onClick={() =>
-              void run(markArriving(order.id, "RESTAURANT", "OPERATOR"))
+              void run(() => markArriving(order.id, "RESTAURANT", "OPERATOR"))
             }
           >
             {pending ? "Сохраняем…" : "Курьер скоро будет"}
@@ -458,7 +460,7 @@ function OperatorHandoffActions({ order }: { order: Order }) {
             type="button"
             disabled={pending}
             onClick={() =>
-              void run(markDelivered(order.id, "RESTAURANT", "OPERATOR"))
+              void run(() => markDelivered(order.id, "RESTAURANT", "OPERATOR"))
             }
           >
             {pending ? "Сохраняем…" : "Заказ доставлен"}

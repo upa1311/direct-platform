@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 
 import { OrderHistory } from "@/components/order-flow/order-history";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
@@ -452,25 +452,31 @@ function OrderActions({ order }: { order: Order }) {
   // inline-формой причины (без fire-and-forget и unhandled Promise).
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Этап 8 (восстановление): synchronous ref-guard — React state не защищает
+  // от двух событий в одном tick; вторая операция даже не стартует.
+  const actionPendingRef = useRef(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
 
   const doAccept = async () => {
-    if (actionPending) return;
+    if (actionPendingRef.current) return;
+    actionPendingRef.current = true;
     setActionPending(true);
     try {
       const res = await acceptOrder(order.id, prep, "ADMIN");
       setActionError(res.ok ? null : (res.error ?? "Не удалось принять заказ."));
     } finally {
+      actionPendingRef.current = false;
       setActionPending(false);
     }
   };
   const doReject = async () => {
-    if (actionPending) return;
+    if (actionPendingRef.current) return;
     if (!rejectReason.trim()) {
       setActionError("Укажите причину отклонения.");
       return;
     }
+    actionPendingRef.current = true;
     setActionPending(true);
     try {
       const res = await rejectOrder(order.id, rejectReason, "ADMIN");
@@ -483,6 +489,7 @@ function OrderActions({ order }: { order: Order }) {
       setRejectOpen(false);
       setRejectReason("");
     } finally {
+      actionPendingRef.current = false;
       setActionPending(false);
     }
   };
@@ -492,17 +499,26 @@ function OrderActions({ order }: { order: Order }) {
     const res = await cancelOrderByAdmin(order.id, reason);
     if (!res.ok) window.alert(res.error ?? "Не удалось отменить заказ.");
   };
-  // Исправление 7: lifecycle-кнопки админа — await с pending и ошибкой,
-  // не fire-and-forget; ложный успех невозможен (ok приходит из commit).
-  const doLifecycle = async (ack: Promise<MutationAck>) => {
-    if (actionPending) return;
+  // Исправление 7 + Этап 8 (восстановление): lifecycle-кнопки админа
+  // принимают thunk — операция НЕ запускается до проверки pending, и два
+  // события одного tick не стартуют одновременно (ref-guard).
+  const doLifecycle = async (operation: () => Promise<MutationAck>) => {
+    if (actionPendingRef.current) {
+      return;
+    }
+    actionPendingRef.current = true;
     setActionPending(true);
     try {
-      const res = await ack;
+      const result = await operation();
       setActionError(
-        res.ok ? null : (res.error ?? "Не удалось выполнить действие."),
+        result.ok ? null : (result.error ?? "Не удалось выполнить действие."),
+      );
+    } catch {
+      setActionError(
+        "Не удалось выполнить действие. Обновите страницу и повторите.",
       );
     } finally {
+      actionPendingRef.current = false;
       setActionPending(false);
     }
   };
@@ -606,7 +622,7 @@ function OrderActions({ order }: { order: Order }) {
               onChange={(e) => {
                 const m = Number(e.target.value);
                 setPrep(m);
-                void doLifecycle(setPreparationMinutes(order.id, m));
+                void doLifecycle(() => setPreparationMinutes(order.id, m));
               }}
             >
               {PREP_MINUTES.map((m) => (
@@ -620,7 +636,9 @@ function OrderActions({ order }: { order: Order }) {
             className={flowStyles.primaryButton}
             type="button"
             disabled={actionPending}
-            onClick={() => void doLifecycle(markReady(order.id, "ADMIN"))}
+            onClick={() =>
+              void doLifecycle(() => markReady(order.id, "ADMIN"))
+            }
           >
             Отметить готовым
           </button>
@@ -638,7 +656,7 @@ function OrderActions({ order }: { order: Order }) {
           type="button"
           disabled={actionPending}
           onClick={() =>
-            void doLifecycle(markOutForDelivery(order.id, "ADMIN"))
+            void doLifecycle(() => markOutForDelivery(order.id, "ADMIN"))
           }
         >
           Курьер выехал
@@ -649,7 +667,9 @@ function OrderActions({ order }: { order: Order }) {
           className={flowStyles.primaryButton}
           type="button"
           disabled={actionPending}
-          onClick={() => void doLifecycle(markArriving(order.id, "ADMIN"))}
+          onClick={() =>
+            void doLifecycle(() => markArriving(order.id, "ADMIN"))
+          }
         >
           Курьер скоро будет
         </button>
@@ -659,7 +679,9 @@ function OrderActions({ order }: { order: Order }) {
           className={flowStyles.primaryButton}
           type="button"
           disabled={actionPending}
-          onClick={() => void doLifecycle(markDelivered(order.id, "ADMIN"))}
+          onClick={() =>
+            void doLifecycle(() => markDelivered(order.id, "ADMIN"))
+          }
         >
           Заказ доставлен, наличные получены
         </button>
@@ -676,7 +698,7 @@ function OrderActions({ order }: { order: Order }) {
           type="button"
           disabled={actionPending}
           onClick={() =>
-            void doLifecycle(markOutForDelivery(order.id, "ADMIN"))
+            void doLifecycle(() => markOutForDelivery(order.id, "ADMIN"))
           }
         >
           Водитель выехал
@@ -687,7 +709,9 @@ function OrderActions({ order }: { order: Order }) {
           className={flowStyles.primaryButton}
           type="button"
           disabled={actionPending}
-          onClick={() => void doLifecycle(markArriving(order.id, "ADMIN"))}
+          onClick={() =>
+            void doLifecycle(() => markArriving(order.id, "ADMIN"))
+          }
         >
           Водитель скоро будет
         </button>
@@ -698,7 +722,9 @@ function OrderActions({ order }: { order: Order }) {
           className={flowStyles.primaryButton}
           type="button"
           disabled={actionPending}
-          onClick={() => void doLifecycle(markDeliveredByDriver(order.id))}
+          onClick={() =>
+            void doLifecycle(() => markDeliveredByDriver(order.id))
+          }
         >
           Отметить доставленным
         </button>

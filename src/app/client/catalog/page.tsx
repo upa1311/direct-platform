@@ -33,10 +33,10 @@ export default function ClientCatalogPage() {
   // молча — общий баннер; значения рисуются из подтверждённого state.
   const { error: cartMutationError, run: runCartMutation } = useMutationGuard();
   const updateAddress = (...args: Parameters<typeof updateAddressAck>) =>
-    runCartMutation(updateAddressAck(...args));
+    runCartMutation(() => updateAddressAck(...args));
   const setFulfillmentChoice = (
     ...args: Parameters<typeof setFulfillmentChoiceAck>
-  ) => runCartMutation(setFulfillmentChoiceAck(...args));
+  ) => runCartMutation(() => setFulfillmentChoiceAck(...args));
   const {
     isAddressConfirmed,
     confirmAddress,

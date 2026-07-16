@@ -84,6 +84,12 @@ import {
   type UpdateRestaurantResult,
 } from "./actions";
 import type { EtaAdjustmentIntent } from "./order-eta";
+import {
+  closePrototypeChannel,
+  createPrototypeSourceId,
+  getPrototypeLockManager,
+  openPrototypeChannel,
+} from "./browser-adapters";
 import { createDefaultState } from "./default-state";
 import type {
   DeliveryAddress,
@@ -410,9 +416,10 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
         }
       };
 
-      const locks =
-        typeof navigator !== "undefined" ? navigator.locks : undefined;
-      if (locks?.request) {
+      // Этап 4.3: доступ к LockManager защищён; недоступный Web Locks не роняет
+      // страницу — критическая мутация возвращает fail-closed ошибку ниже.
+      const locks = getPrototypeLockManager();
+      if (locks) {
         try {
           return await locks.request(
             PROTOTYPE_MUTATION_LOCK_NAME,
@@ -505,7 +512,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    sourceIdRef.current = crypto.randomUUID();
+    // Этап 4.1: crypto.randomUUID отсутствует в небезопасном контексте (LAN-IP)
+    // и не должен ронять гидратацию — безопасный helper с fallback.
+    sourceIdRef.current = createPrototypeSourceId();
     // Нетронутый initial default: пока stateRef указывает на него, при legacy-
     // миграции приоритет отдаётся legacy-данным (Исправление 1.1, шаг 3).
     const initialLocalState = stateRef.current;
@@ -517,8 +526,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    if ("BroadcastChannel" in window) {
-      const channel = new BroadcastChannel(PROTOTYPE_CHANNEL_NAME);
+    // Этап 4.2: конструктор BroadcastChannel тоже может бросить — без канала
+    // приложение продолжает открываться, синхронизация идёт через `storage`
+    // (без retry и без blank page); полной cross-tab синхронизацией это не
+    // считается — критические мутации по-прежнему защищает Web Lock.
+    const channel = openPrototypeChannel(PROTOTYPE_CHANNEL_NAME);
+    if (channel) {
       channel.onmessage = (event: MessageEvent<PrototypeChannelMessage>) => {
         const message = event.data;
         if (
@@ -584,9 +597,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     };
 
     const bootstrap = async () => {
-      const locks =
-        typeof navigator !== "undefined" ? navigator.locks : undefined;
-      if (locks?.request) {
+      // Этап 4.3: защищённый доступ к LockManager (см. browser-adapters).
+      const locks = getPrototypeLockManager();
+      if (locks) {
         try {
           // Тот же общий lock, что и у мутаций: bootstrap не гоняется ни с
           // мутациями других вкладок, ни с их bootstrap-миграцией.
@@ -608,7 +621,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     return () => {
       isActive = false;
       window.removeEventListener("storage", handleStorage);
-      channelRef.current?.close();
+      closePrototypeChannel(channelRef.current);
       channelRef.current = null;
     };
   }, [replaceState]);

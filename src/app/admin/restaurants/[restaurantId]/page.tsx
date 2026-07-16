@@ -54,7 +54,7 @@ function DetailContent({ restaurant }: { restaurant: Restaurant }) {
         `Приостановить приём заказов рестораном «${restaurant.name}»?`,
       )
     ) {
-      void runAccepting(setRestaurantAccepting(restaurant.id, false));
+      void runAccepting(() => setRestaurantAccepting(restaurant.id, false));
     }
   };
 
@@ -98,7 +98,7 @@ function DetailContent({ restaurant }: { restaurant: Restaurant }) {
             type="button"
             disabled={acceptingPending}
             onClick={() =>
-              void runAccepting(setRestaurantAccepting(restaurant.id, true))
+              void runAccepting(() => setRestaurantAccepting(restaurant.id, true))
             }
           >
             {acceptingPending ? "Сохраняем…" : "Возобновить заказы"}
