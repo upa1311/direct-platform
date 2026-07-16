@@ -844,6 +844,14 @@
 
 .catalogHeadingRow .field { min-width: 220px; }
 
+/* Блок «Сортировка» — компактная фиксированная ширина, а не растяжение по
+   всей ширине заголовка (перебивает min-width: 220px выше). */
+.catalogHeadingRow .field.catalogSortField {
+  width: 200px;
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* Компактный блок «Сортировка» в каталоге: небольшой элемент управления,
    а не крупная карточка. Составные селекторы перебивают общие правила
    `.field select`/`.field > span`, идущие ниже по файлу. Логика сортировки
@@ -857,6 +865,7 @@
 }
 
 .field.catalogSortField select {
+  width: 100%;
   min-height: 40px;
   padding: 7px 10px;
   border-radius: 8px;
@@ -2035,6 +2044,14 @@ p.pickupReceivedLine {
   }
 
   .catalogHeadingRow .field {
+    min-width: 0;
+  }
+
+  /* На узком экране колонка растягивает поля на всю ширину (align-items:
+     stretch) — блок сортировки остаётся компактным у левого края. */
+  .catalogHeadingRow .field.catalogSortField {
+    align-self: flex-start;
+    width: min(180px, 100%);
     min-width: 0;
   }
 
