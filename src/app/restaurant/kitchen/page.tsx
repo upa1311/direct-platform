@@ -19,6 +19,7 @@ import {
   playKitchenBeep,
 } from "@/components/workspaces/kitchen-sound";
 import { usePrototype } from "@/prototype/prototype-provider";
+import type { MutationAck } from "@/prototype/prototype-store";
 import {
   PREPARATION_PROBLEM_REASONS,
   RESTAURANT_RESPONSE_TIMEOUT_MS,
@@ -695,8 +696,25 @@ function minutesUntil(targetIso: string | null, nowMs: number): number | null {
  * Никаких prompt/alert/confirm/модалок. Ошибка домена не закрывает панель и не
  * стирает причину; ложный success не показывается.
  */
-function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) {
-  const { markPickupNoShow } = usePrototype();
+function KitchenPickupNoShow({
+  order,
+  nowMs,
+  pending,
+  isRunning,
+  error,
+  onConfirmNoShow,
+  onClearError,
+}: {
+  order: Order;
+  nowMs: number;
+  /** Идёт любая pickup-операция (выдача или невыкуп) — контролы блокируются. */
+  pending: boolean;
+  /** Идёт именно невыкуп — только тогда кнопка показывает «Закрываем…». */
+  isRunning: boolean;
+  error: string | null;
+  onConfirmNoShow: (reason: string) => Promise<MutationAck>;
+  onClearError: () => void;
+}) {
   const eligibleAtIso = getPickupNoShowEligibleAtIso(order);
   const nowIso = nowMs > 0 ? new Date(nowMs).toISOString() : null;
   const eligible = nowIso ? isPickupNoShowEligibleAt(order, nowIso) : false;
@@ -705,24 +723,17 @@ function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) 
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
-  const [error, setError] = useState<string | null>(null);
 
   const isOther = reason === PICKUP_NO_SHOW_OTHER;
   const effectiveReason = isOther ? customReason : reason;
   const canConfirm = effectiveReason.trim().length > 0;
 
   const doConfirm = async () => {
-    if (!canConfirm) {
-      setError("Укажите причину невыкупа.");
-      return;
-    }
-    const res = await markPickupNoShow(order.id, effectiveReason, "RESTAURANT", "KITCHEN");
-    if (!res.ok) {
-      // Панель остаётся открытой, причина сохраняется, ошибка рядом.
-      setError(res.error ?? "Не удалось закрыть как невыкуп.");
-      return;
-    }
-    setError(null);
+    // Кнопка disabled без причины — защитный ранний выход. Невыкуп запускается
+    // общим guard родителя: при ошибке панель остаётся открытой с причиной,
+    // при успехе карточка уходит через подтверждённый общий state.
+    if (!canConfirm) return;
+    await onConfirmNoShow(effectiveReason);
   };
 
   if (!open) {
@@ -730,10 +741,10 @@ function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) 
       <button
         className={`${kds.btn} ${kds.btnRedOutline}`}
         type="button"
-        disabled={!eligible}
+        disabled={!eligible || pending}
         onClick={() => {
           setOpen(true);
-          setError(null);
+          onClearError();
         }}
       >
         {eligible
@@ -755,9 +766,10 @@ function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) 
               type="radio"
               name={`no-show-${order.id}`}
               checked={reason === r}
+              disabled={pending}
               onChange={() => {
                 setReason(r);
-                setError(null);
+                onClearError();
               }}
             />
             <span>{r}</span>
@@ -770,9 +782,10 @@ function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) 
           <textarea
             maxLength={300}
             value={customReason}
+            disabled={pending}
             onChange={(event) => {
               setCustomReason(event.target.value);
-              setError(null);
+              onClearError();
             }}
             placeholder="Опишите причину"
           />
@@ -790,9 +803,10 @@ function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) 
         <button
           className={`${kds.btn} ${kds.btnOutline}`}
           type="button"
+          disabled={pending}
           onClick={() => {
             setOpen(false);
-            setError(null);
+            onClearError();
           }}
         >
           Отмена
@@ -800,10 +814,10 @@ function KitchenPickupNoShow({ order, nowMs }: { order: Order; nowMs: number }) 
         <button
           className={`${kds.btn} ${kds.btnRedOutline}`}
           type="button"
-          disabled={!canConfirm}
+          disabled={!canConfirm || pending}
           onClick={doConfirm}
         >
-          Закрыть как невыкуп
+          {isRunning ? "Закрываем…" : "Закрыть как невыкуп"}
         </button>
       </div>
     </div>
@@ -824,10 +838,20 @@ function KitchenPickupHandoff({
   order: Order;
   nowMs: number;
 }) {
-  const { completePickup } = usePrototype();
-  // Pending и защита от двойного нажатия — через общий thunk-guard; локального
-  // error-state больше нет, единственный источник ошибки — mutationError.
-  const { error: mutationError, pending, run, clearError } = useMutationGuard();
+  const { completePickup, markPickupNoShow } = usePrototype();
+  // Выдача и невыкуп — два взаимоисключающих ФИНАЛЬНЫХ решения по одному заказу,
+  // поэтому оба идут через ОДИН общий guard: его синхронный pending-флаг не даёт
+  // второму действию стартовать (в том числе «Выдать → Невыкуп» в одном tick).
+  // pickupActionKind нужен ТОЛЬКО для UI: текст pending и адресация ошибки.
+  const {
+    error: pickupActionError,
+    pending: pickupActionPending,
+    run: runPickupAction,
+    clearError: clearPickupActionError,
+  } = useMutationGuard();
+  const [pickupActionKind, setPickupActionKind] = useState<
+    "HANDOFF" | "NO_SHOW" | null
+  >(null);
   const methods = order.pickupPaymentMethodsSnapshot;
   const single = methods.length === 1 ? methods[0] : null;
   const [paidWith, setPaidWith] = useState<PickupPaymentMethod | null>(single);
@@ -835,6 +859,10 @@ function KitchenPickupHandoff({
 
   const codeValid = /^\d{4}$/.test(code.trim());
   const canConfirm = codeValid && paidWith !== null;
+  // Одна общая ошибка показывается только около того действия, что упало.
+  const handoffError =
+    pickupActionKind === "HANDOFF" ? pickupActionError : null;
+  const noShowError = pickupActionKind === "NO_SHOW" ? pickupActionError : null;
 
   const doConfirm = async () => {
     // Кнопка disabled при !canConfirm — здесь только сужение типа paidWith.
@@ -843,7 +871,8 @@ function KitchenPickupHandoff({
     // не запускает вторую выдачу. Доменный результат приводится к MutationAck
     // (успешная выдача всегда меняет state). При успехе карточка исчезнет из
     // раздела готовых через подтверждённый общий state — вручную ничего не чистим.
-    await run(async () => {
+    await runPickupAction(async () => {
+      setPickupActionKind("HANDOFF");
       const res = await completePickup(
         order.id,
         code,
@@ -854,6 +883,19 @@ function KitchenPickupHandoff({
       return { ok: res.ok, error: res.error, changed: res.ok };
     });
   };
+
+  // Невыкуп проходит через ТОТ ЖЕ guard; собственного guard у панели нет.
+  const runNoShow = (reason: string) =>
+    runPickupAction(async () => {
+      setPickupActionKind("NO_SHOW");
+      const res = await markPickupNoShow(
+        order.id,
+        reason,
+        "RESTAURANT",
+        "KITCHEN",
+      );
+      return { ok: res.ok, error: res.error, changed: res.ok };
+    });
 
   return (
     <div className={kds.pickupHandoff}>
@@ -872,10 +914,10 @@ function KitchenPickupHandoff({
                 name={`kds-pay-${order.id}`}
                 value={method}
                 checked={paidWith === method}
-                disabled={pending}
+                disabled={pickupActionPending}
                 onChange={() => {
                   setPaidWith(method);
-                  clearError();
+                  clearPickupActionError();
                 }}
               />
               <span>{pickupPaymentMethodLabels[method]}</span>
@@ -892,33 +934,43 @@ function KitchenPickupHandoff({
           maxLength={4}
           value={code}
           placeholder="4 цифры"
-          disabled={pending}
+          disabled={pickupActionPending}
           onChange={(event) => {
             setCode(event.target.value.replace(/\D/g, "").slice(0, 4));
-            clearError();
+            clearPickupActionError();
           }}
         />
       </label>
       <p className={kds.pickupInstruction}>
         Попросите клиента назвать четырёхзначный код.
       </p>
-      {mutationError ? (
+      {handoffError ? (
         <p className={kds.pickupError} role="alert">
-          {mutationError}
+          {handoffError}
         </p>
       ) : null}
       <button
         className={`${kds.btn} ${kds.btnGreen}`}
         type="button"
-        disabled={!canConfirm || pending}
+        disabled={!canConfirm || pickupActionPending}
         onClick={doConfirm}
       >
-        {pending ? "Подтверждаем…" : "Подтвердить оплату и выдать"}
+        {pickupActionPending && pickupActionKind === "HANDOFF"
+          ? "Подтверждаем…"
+          : "Подтвердить оплату и выдать"}
       </button>
       <p className={kds.pickupAdminHint}>
         Нет кода клиента? Обратитесь к администратору Direct.
       </p>
-      <KitchenPickupNoShow order={order} nowMs={nowMs} />
+      <KitchenPickupNoShow
+        order={order}
+        nowMs={nowMs}
+        pending={pickupActionPending}
+        isRunning={pickupActionPending && pickupActionKind === "NO_SHOW"}
+        error={noShowError}
+        onConfirmNoShow={runNoShow}
+        onClearError={clearPickupActionError}
+      />
     </div>
   );
 }

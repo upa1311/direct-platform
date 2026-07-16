@@ -438,6 +438,19 @@ test("невыкуп: noShowPickupCount +1", () => {
   assert.equal(res.state.customer.noShowPickupCount, before + 1);
 });
 
+test("невыкуп: financial snapshot не меняется, ревизия +1", () => {
+  const { state, orderId } = makeReadyPickup();
+  const before = getOrder(state, orderId);
+  const finBefore = JSON.stringify(before.financials);
+  const res = markPickupNoShow(state, orderId, "Не пришёл", "RESTAURANT", eligibleAtFor(state, orderId));
+  assert.equal(res.result.ok, true);
+  const order = getOrder(res.state, orderId);
+  assert.equal(JSON.stringify(order.financials), finBefore);
+  assert.equal(res.state.revision, state.revision + 1);
+  assert.equal(order.assignedDriverId, null);
+  assert.equal(res.state.orders.filter((o) => o.id === orderId).length, 1);
+});
+
 test("невыкуп: ровно одно STATUS-событие и cancellationReason", () => {
   const { state, orderId } = makeReadyPickup();
   const before = getOrder(state, orderId).history.length;
