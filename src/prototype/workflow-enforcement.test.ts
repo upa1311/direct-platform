@@ -299,6 +299,34 @@ test("SPLIT: кухня сообщает о проблеме, статус не 
   assert.equal(ev?.restaurantWorkspaceRole, "KITCHEN");
 });
 
+test("SPLIT: проблема приготовления — ревизия +1, одно событие, settlement и ETA не тронуты", () => {
+  const { state, orderId } = splitPickupState();
+  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "KITCHEN");
+  const before = getOrder(prepared, orderId);
+  const historyBefore = before.history.length;
+
+  const res = reportRestaurantPreparationProblem(
+    prepared, orderId, "Закончился ингредиент", "RESTAURANT", NOW, "KITCHEN",
+  );
+  assert.equal(res.result.ok, true);
+  const after = getOrder(res.state, orderId);
+  // Ровно одно новое событие проблемы; статус и время готовности не меняются.
+  assert.equal(after.history.length, historyBefore + 1);
+  assert.equal(
+    after.history.filter((e) => e.type === "PREPARATION_PROBLEM").length,
+    1,
+  );
+  assert.equal(after.status, "PREPARING");
+  assert.equal(after.preparationMinutes, before.preparationMinutes);
+  assert.equal(after.expectedReadyAt, before.expectedReadyAt);
+  assert.equal(after.paidAt, before.paidAt);
+  assert.equal(after.pickupCode, before.pickupCode);
+  // Ревизия выросла ровно на один; settlements не создавались.
+  assert.equal(res.state.revision, prepared.revision + 1);
+  assert.equal(res.state.settlements.length, prepared.settlements.length);
+  assert.equal(res.state.settlements.length, 0);
+});
+
 test("SPLIT: оператор не сообщает о проблеме приготовления", () => {
   const { state, orderId } = splitPickupState();
   const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "KITCHEN");

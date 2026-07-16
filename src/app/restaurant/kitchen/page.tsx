@@ -217,29 +217,35 @@ function PreparationProblemPanel({
   isSplit: boolean;
 }) {
   const { reportPreparationProblem } = usePrototype();
+  // Pending и защита от двойного нажатия — через общий thunk-guard; локального
+  // error-state больше нет, единственный источник ошибки — mutationError.
+  const { error: mutationError, pending, run, clearError } = useMutationGuard();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
 
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
 
   const doReport = async () => {
-    const res = await reportPreparationProblem(
-      order.id,
-      effectiveReason,
-      "RESTAURANT",
-      "KITCHEN",
-    );
-    if (!res.ok) {
-      setError(res.error ?? "Не удалось отправить сообщение.");
-      return;
+    // Thunk: операция НЕ стартует до входа в guard, второй клик в том же tick
+    // не запускает вторую отправку. Доменный результат приводится к MutationAck.
+    const res = await run(async () => {
+      const r = await reportPreparationProblem(
+        order.id,
+        effectiveReason,
+        "RESTAURANT",
+        "KITCHEN",
+      );
+      return { ok: r.ok, error: r.error, changed: r.ok };
+    });
+    // Панель закрывается и показывает спокойное подтверждение только при успехе;
+    // при ошибке остаётся открытой с сохранённой причиной и одной ошибкой.
+    if (res.ok) {
+      setSent(true);
+      setOpen(false);
     }
-    setError(null);
-    setSent(true);
-    setOpen(false);
   };
 
   if (!open) {
@@ -276,9 +282,10 @@ function PreparationProblemPanel({
               type="radio"
               name={`problem-${order.id}`}
               checked={reason === r}
+              disabled={pending}
               onChange={() => {
                 setReason(r);
-                setError(null);
+                clearError();
               }}
             />
             <span>{r}</span>
@@ -290,9 +297,10 @@ function PreparationProblemPanel({
           <span>Ваша причина</span>
           <textarea
             value={customReason}
+            disabled={pending}
             onChange={(event) => {
               setCustomReason(event.target.value);
-              setError(null);
+              clearError();
             }}
             placeholder="Опишите проблему"
           />
@@ -303,15 +311,16 @@ function PreparationProblemPanel({
           ? "Заказ не отменяется: оператор увидит сообщение и решит, что делать."
           : "Заказ не отменяется автоматически. Выберите дальнейшее действие в общем экране."}
       </p>
-      {error ? (
+      {mutationError ? (
         <p className={kds.pickupError} role="alert">
-          {error}
+          {mutationError}
         </p>
       ) : null}
       <div className={kds.btnRowEnd}>
         <button
           className={`${kds.btn} ${kds.btnOutline}`}
           type="button"
+          disabled={pending}
           onClick={() => setOpen(false)}
         >
           Отмена
@@ -319,10 +328,14 @@ function PreparationProblemPanel({
         <button
           className={`${kds.btn} ${kds.btnRedOutline}`}
           type="button"
-          disabled={!effectiveReason.trim()}
+          disabled={!effectiveReason.trim() || pending}
           onClick={doReport}
         >
-          {isSplit ? "Сообщить оператору" : "Зафиксировать проблему"}
+          {pending
+            ? "Отправляем…"
+            : isSplit
+              ? "Сообщить оператору"
+              : "Зафиксировать проблему"}
         </button>
       </div>
     </div>
