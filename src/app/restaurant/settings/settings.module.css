@@ -25,6 +25,14 @@
   line-height: 1.5;
 }
 
+.errorText {
+  margin: 0;
+  color: #b3401f;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
 .restaurantRow {
   display: flex;
   align-items: center;

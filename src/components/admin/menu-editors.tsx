@@ -3,6 +3,10 @@
 import { useState } from "react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import {
+  feedbackFromAck,
+  type MutationFeedback,
+} from "@/components/util/mutation-feedback";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type { MenuItem, Promotion } from "@/prototype/models";
 import { formatMoney, parseDollarsToCents } from "@/prototype/selectors";
@@ -21,31 +25,49 @@ function MenuItemSizeEditor({ menuItem }: { menuItem: MenuItem }) {
   const [defaultLarge, setDefaultLarge] = useState(
     menuItem.variants?.find((v) => v.isDefault)?.id === "size-large",
   );
-  const [saved, setSaved] = useState(false);
+  // Исправление 5.2: «Сохранено» — только после подтверждённого commit;
+  // при ошибке показывается русская ошибка, введённые значения сохраняются.
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<MutationFeedback | null>(null);
 
-  const save = () => {
-    if (!enabled) {
-      void setMenuItemVariants(menuItem.id, null);
-    } else {
-      void setMenuItemVariants(menuItem.id, [
-        {
-          id: "size-standard",
-          name: "Стандартная",
-          priceDeltaCents: 0,
-          available: true,
-          isDefault: !defaultLarge,
-        },
-        {
-          id: "size-large",
-          name: "Большая",
-          priceDeltaCents: parseDollarsToCents(surcharge),
-          available: largeAvailable,
-          isDefault: defaultLarge,
-        },
-      ]);
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    setFeedback(null);
+    try {
+      const result = await setMenuItemVariants(
+        menuItem.id,
+        enabled
+          ? [
+              {
+                id: "size-standard",
+                name: "Стандартная",
+                priceDeltaCents: 0,
+                available: true,
+                isDefault: !defaultLarge,
+              },
+              {
+                id: "size-large",
+                name: "Большая",
+                priceDeltaCents: parseDollarsToCents(surcharge),
+                available: largeAvailable,
+                isDefault: defaultLarge,
+              },
+            ]
+          : null,
+      );
+      setFeedback(
+        feedbackFromAck(
+          {
+            ...result,
+            error: result.error ?? "Не удалось сохранить размеры.",
+          },
+          "Сохранено",
+        ),
+      );
+    } finally {
+      setSaving(false);
     }
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1500);
   };
 
   return (
@@ -95,13 +117,20 @@ function MenuItemSizeEditor({ menuItem }: { menuItem: MenuItem }) {
         <button
           className={flowStyles.secondaryButton}
           type="button"
-          onClick={save}
+          disabled={saving}
+          onClick={() => void save()}
         >
-          Сохранить размеры
+          {saving ? "Сохраняем…" : "Сохранить размеры"}
         </button>
-        <span className={flowStyles.feedback} aria-live="polite">
-          {saved ? "Сохранено" : ""}
-        </span>
+        {feedback?.kind === "error" ? (
+          <span className={flowStyles.errorText} role="alert">
+            {feedback.text}
+          </span>
+        ) : (
+          <span className={flowStyles.feedback} aria-live="polite">
+            {saving ? "" : (feedback?.text ?? "")}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -123,20 +152,52 @@ function PromotionEditor({
     repeat: promotion.repeat,
     eligible: new Set(promotion.eligibleMenuItemIds),
   });
-  const [saved, setSaved] = useState(false);
+  // Исправление 5.3: success — только после commit; при ошибке форма и данные
+  // сохраняются, показывается русская ошибка.
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<MutationFeedback | null>(null);
+  // Toggle без ложного optimistic-состояния: чекбокс всегда отражает
+  // подтверждённый общий state; на время Promise он блокируется.
+  const [togglePending, setTogglePending] = useState(false);
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
-  const save = () => {
-    void savePromotion({
-      ...promotion,
-      title: form.title,
-      displayText: form.displayText,
-      buyQuantity: Number.parseInt(form.buyQuantity, 10) || 3,
-      freeQuantity: Number.parseInt(form.freeQuantity, 10) || 1,
-      repeat: form.repeat,
-      eligibleMenuItemIds: [...form.eligible],
-    });
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1500);
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    setFeedback(null);
+    try {
+      const result = await savePromotion({
+        ...promotion,
+        title: form.title,
+        displayText: form.displayText,
+        buyQuantity: Number.parseInt(form.buyQuantity, 10) || 3,
+        freeQuantity: Number.parseInt(form.freeQuantity, 10) || 1,
+        repeat: form.repeat,
+        eligibleMenuItemIds: [...form.eligible],
+      });
+      setFeedback(
+        feedbackFromAck(
+          { ...result, error: result.error ?? "Не удалось сохранить акцию." },
+          "Сохранено",
+        ),
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggle = async (enabled: boolean) => {
+    if (togglePending) return;
+    setTogglePending(true);
+    setToggleError(null);
+    try {
+      const result = await togglePromotion(promotion.id, enabled);
+      if (!result.ok) {
+        setToggleError(result.error ?? "Не удалось изменить акцию.");
+      }
+    } finally {
+      setTogglePending(false);
+    }
   };
 
   return (
@@ -147,11 +208,17 @@ function PromotionEditor({
           <input
             type="checkbox"
             checked={promotion.enabled}
-            onChange={(e) => void togglePromotion(promotion.id, e.target.checked)}
+            disabled={togglePending}
+            onChange={(e) => void toggle(e.target.checked)}
           />
           <span>{promotion.enabled ? "Включена" : "Выключена"}</span>
         </label>
       </div>
+      {toggleError ? (
+        <p className={flowStyles.errorText} role="alert">
+          {toggleError}
+        </p>
+      ) : null}
       <div className={flowStyles.fieldGrid}>
         <label className={`${flowStyles.field} ${flowStyles.fieldFull}`}>
           <span>Название для клиента</span>
@@ -170,7 +237,7 @@ function PromotionEditor({
           />
         </label>
         <label className={flowStyles.field}>
-          <span>Купить (N)</span>
+          <span>Количество для покупки</span>
           <input
             value={form.buyQuantity}
             onChange={(e) =>
@@ -179,7 +246,7 @@ function PromotionEditor({
           />
         </label>
         <label className={flowStyles.field}>
-          <span>Бесплатно (M)</span>
+          <span>Количество бесплатно</span>
           <input
             value={form.freeQuantity}
             onChange={(e) =>
@@ -220,13 +287,20 @@ function PromotionEditor({
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={save}
+          disabled={saving}
+          onClick={() => void save()}
         >
-          Сохранить акцию
+          {saving ? "Сохраняем…" : "Сохранить акцию"}
         </button>
-        <span className={flowStyles.feedback} aria-live="polite">
-          {saved ? "Сохранено" : ""}
-        </span>
+        {feedback?.kind === "error" ? (
+          <span className={flowStyles.errorText} role="alert">
+            {feedback.text}
+          </span>
+        ) : (
+          <span className={flowStyles.feedback} aria-live="polite">
+            {saving ? "" : (feedback?.text ?? "")}
+          </span>
+        )}
       </div>
     </article>
   );
@@ -287,7 +361,10 @@ export function MenuOverviewSection({
 /** Раздел «Акции» конструктора: акции одного ресторана + создание. */
 export function PromotionsSection({ restaurantId }: { restaurantId: string }) {
   const { state, savePromotion } = usePrototype();
-  const [created, setCreated] = useState("");
+  // Исправление 5.3: «Акция создана» — только после подтверждённого commit.
+  const [creating, setCreating] = useState(false);
+  const [createFeedback, setCreateFeedback] =
+    useState<MutationFeedback | null>(null);
   const promotions = state.promotions.filter(
     (promotion) => promotion.restaurantId === restaurantId,
   );
@@ -295,24 +372,36 @@ export function PromotionsSection({ restaurantId }: { restaurantId: string }) {
     (item) => item.restaurantId === restaurantId,
   );
 
-  const create = () => {
-    const eligible = items.map((item) => item.id);
-    const id = `promo-${restaurantId}-${state.promotions.length + 1}`;
-    void savePromotion({
-      id,
-      restaurantId,
-      title: "Каждая 4-я пицца — бесплатно",
-      enabled: false,
-      type: "BUY_N_GET_M_CHEAPEST_FREE",
-      buyQuantity: 3,
-      freeQuantity: 1,
-      repeat: true,
-      eligibleMenuItemIds: eligible,
-      displayText: "Каждая 4-я пицца — бесплатно",
-      createdAt: "",
-      updatedAt: "",
-    });
-    setCreated("Акция создана (выключена). Настройте ниже.");
+  const create = async () => {
+    if (creating) return;
+    setCreating(true);
+    setCreateFeedback(null);
+    try {
+      const eligible = items.map((item) => item.id);
+      const id = `promo-${restaurantId}-${state.promotions.length + 1}`;
+      const result = await savePromotion({
+        id,
+        restaurantId,
+        title: "Каждая 4-я пицца — бесплатно",
+        enabled: false,
+        type: "BUY_N_GET_M_CHEAPEST_FREE",
+        buyQuantity: 3,
+        freeQuantity: 1,
+        repeat: true,
+        eligibleMenuItemIds: eligible,
+        displayText: "Каждая 4-я пицца — бесплатно",
+        createdAt: "",
+        updatedAt: "",
+      });
+      setCreateFeedback(
+        feedbackFromAck(
+          { ...result, error: result.error ?? "Не удалось создать акцию." },
+          "Акция создана (выключена). Настройте ниже.",
+        ),
+      );
+    } finally {
+      setCreating(false);
+    }
   };
 
   return (
@@ -321,13 +410,20 @@ export function PromotionsSection({ restaurantId }: { restaurantId: string }) {
         <button
           className={flowStyles.secondaryButton}
           type="button"
-          onClick={create}
+          disabled={creating}
+          onClick={() => void create()}
         >
-          Создать акцию
+          {creating ? "Создаём…" : "Создать акцию"}
         </button>
-        <span className={flowStyles.feedback} aria-live="polite">
-          {created}
-        </span>
+        {createFeedback?.kind === "error" ? (
+          <span className={flowStyles.errorText} role="alert">
+            {createFeedback.text}
+          </span>
+        ) : (
+          <span className={flowStyles.feedback} aria-live="polite">
+            {creating ? "" : (createFeedback?.text ?? "")}
+          </span>
+        )}
       </div>
       {promotions.length === 0 ? (
         <div className={flowStyles.emptyState}>Акций пока нет.</div>

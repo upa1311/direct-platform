@@ -10,6 +10,7 @@ import {
   MenuAvailabilitySection,
   RestaurantPauseControl,
 } from "@/components/kitchen/kitchen-operations";
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import {
   disableKitchenSound,
@@ -520,6 +521,13 @@ function PreparingCard({
   isSplit: boolean;
 }) {
   const { state, markReady } = usePrototype();
+  // Исправление 7: готовность — await с pending и русской ошибкой (гонка двух
+  // экранов, устаревший статус, отказ хранилища не проходят молча).
+  const {
+    error: readyError,
+    pending: readyPending,
+    run: runReady,
+  } = useMutationGuard();
   const restaurant = getRestaurant(state, order.restaurant.id);
   const countdown = formatKitchenCountdown(order.expectedReadyAt, nowMs);
   const request = getCancellationRequestForOrder(state, order.id);
@@ -571,9 +579,12 @@ function PreparingCard({
         <button
           className={`${kds.btn} ${kds.btnGreen}`}
           type="button"
-          onClick={() => void markReady(order.id, "RESTAURANT", "KITCHEN")}
+          disabled={readyPending}
+          onClick={() =>
+            void runReady(markReady(order.id, "RESTAURANT", "KITCHEN"))
+          }
         >
-          {readyLabel}
+          {readyPending ? "Сохраняем…" : readyLabel}
         </button>
         <button
           className={`${kds.btn} ${kds.btnOutline}`}
@@ -586,6 +597,11 @@ function PreparingCard({
           Изменить время
         </button>
       </div>
+      {readyError ? (
+        <p className={kds.pickupError} role="alert">
+          {readyError}
+        </p>
+      ) : null}
       {etaOpen && restaurant ? (
         <EtaAdjustPanel
           order={order}

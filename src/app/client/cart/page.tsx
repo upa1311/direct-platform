@@ -8,6 +8,7 @@ import { Gift } from "lucide-react";
 import { REPEAT_NOTICE_KEY } from "@/components/order-flow/client-order-actions";
 import { ClientRestaurantSchedule } from "@/components/order-flow/client-restaurant-schedule";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -30,13 +31,29 @@ export default function ClientCartPage() {
   const router = useRouter();
   const {
     state,
-    setItemQuantity,
-    setItemComment,
-    setFulfillmentChoice,
-    updateAddress,
-    updateCustomer,
+    setItemQuantity: setItemQuantityAck,
+    setItemComment: setItemCommentAck,
+    setFulfillmentChoice: setFulfillmentChoiceAck,
+    updateAddress: updateAddressAck,
+    updateCustomer: updateCustomerAck,
     createOrder,
   } = usePrototype();
+  // Исправление 5.7: общий баннер ошибок мутаций корзины. Значения на странице
+  // рисуются из подтверждённого общего state; при ошибке сохранения клиент
+  // видит русскую ошибку, а не «сохранённое» значение.
+  const { error: cartMutationError, run: runCartMutation } = useMutationGuard();
+  const setItemQuantity = (
+    ...args: Parameters<typeof setItemQuantityAck>
+  ) => runCartMutation(setItemQuantityAck(...args));
+  const setItemComment = (...args: Parameters<typeof setItemCommentAck>) =>
+    runCartMutation(setItemCommentAck(...args));
+  const setFulfillmentChoice = (
+    ...args: Parameters<typeof setFulfillmentChoiceAck>
+  ) => runCartMutation(setFulfillmentChoiceAck(...args));
+  const updateAddress = (...args: Parameters<typeof updateAddressAck>) =>
+    runCartMutation(updateAddressAck(...args));
+  const updateCustomer = (...args: Parameters<typeof updateCustomerAck>) =>
+    runCartMutation(updateCustomerAck(...args));
   const nowMs = useNowMs();
   const [submitError, setSubmitError] = useState("");
   const [addressError, setAddressError] = useState("");
@@ -203,6 +220,11 @@ export default function ClientCartPage() {
         <div className={flowStyles.warningNotice} role="alert">
           Некоторые блюда больше недоступны. Удалите их из корзины или выберите
           замену.
+        </div>
+      ) : null}
+      {cartMutationError ? (
+        <div className={flowStyles.warningNotice} role="alert">
+          {cartMutationError}
         </div>
       ) : null}
 

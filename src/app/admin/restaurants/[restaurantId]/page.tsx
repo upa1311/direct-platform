@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -25,6 +26,12 @@ import {
 
 function DetailContent({ restaurant }: { restaurant: Restaurant }) {
   const { state, isHydrated, setRestaurantAccepting } = usePrototype();
+  // Исправление 5.6: приём заказов — await с pending и русской ошибкой.
+  const {
+    error: acceptingError,
+    pending: acceptingPending,
+    run: runAccepting,
+  } = useMutationGuard();
   // §8: собственные настройки доставки действуют только у своего курьера.
   const settings =
     restaurant.deliveryProvider === "RESTAURANT"
@@ -47,7 +54,7 @@ function DetailContent({ restaurant }: { restaurant: Restaurant }) {
         `Приостановить приём заказов рестораном «${restaurant.name}»?`,
       )
     ) {
-      void setRestaurantAccepting(restaurant.id, false);
+      void runAccepting(setRestaurantAccepting(restaurant.id, false));
     }
   };
 
@@ -80,17 +87,21 @@ function DetailContent({ restaurant }: { restaurant: Restaurant }) {
           <button
             className={flowStyles.dangerButton}
             type="button"
+            disabled={acceptingPending}
             onClick={handlePause}
           >
-            Приостановить заказы
+            {acceptingPending ? "Сохраняем…" : "Приостановить заказы"}
           </button>
         ) : (
           <button
             className={flowStyles.secondaryButton}
             type="button"
-            onClick={() => void setRestaurantAccepting(restaurant.id, true)}
+            disabled={acceptingPending}
+            onClick={() =>
+              void runAccepting(setRestaurantAccepting(restaurant.id, true))
+            }
           >
-            Возобновить заказы
+            {acceptingPending ? "Сохраняем…" : "Возобновить заказы"}
           </button>
         )}
         <Link
@@ -100,6 +111,11 @@ function DetailContent({ restaurant }: { restaurant: Restaurant }) {
           Редактировать в конструкторе
         </Link>
       </div>
+      {acceptingError ? (
+        <p className={flowStyles.errorText} role="alert">
+          {acceptingError}
+        </p>
+      ) : null}
 
       <section className={flowStyles.card}>
         <h2>Сводка</h2>

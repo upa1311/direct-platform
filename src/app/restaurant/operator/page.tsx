@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type {
@@ -405,42 +406,68 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
 function OperatorHandoffActions({ order }: { order: Order }) {
   const { state, markOutForDelivery, markArriving, markDelivered } =
     usePrototype();
+  // Исправление 7: handoff-переходы — await с pending и русской ошибкой
+  // (устаревшая вкладка/гонка не выглядит успешной).
+  const { error, pending, run } = useMutationGuard();
 
   if (order.deliveryMode === "RESTAURANT_DELIVERY") {
+    const errorNote = error ? (
+      <p className={kds.pickupError} role="alert">
+        {error}
+      </p>
+    ) : null;
     if (order.status === "READY") {
       return (
-        <button
-          className={`${kds.btn} ${kds.btnGreen}`}
-          type="button"
-          onClick={() => void markOutForDelivery(order.id, "RESTAURANT", "OPERATOR")}
-        >
-          Курьер выехал
-        </button>
+        <>
+          <button
+            className={`${kds.btn} ${kds.btnGreen}`}
+            type="button"
+            disabled={pending}
+            onClick={() =>
+              void run(markOutForDelivery(order.id, "RESTAURANT", "OPERATOR"))
+            }
+          >
+            {pending ? "Сохраняем…" : "Курьер выехал"}
+          </button>
+          {errorNote}
+        </>
       );
     }
     if (order.status === "OUT_FOR_DELIVERY") {
       return (
-        <button
-          className={`${kds.btn} ${kds.btnDark}`}
-          type="button"
-          onClick={() => void markArriving(order.id, "RESTAURANT", "OPERATOR")}
-        >
-          Курьер скоро будет
-        </button>
+        <>
+          <button
+            className={`${kds.btn} ${kds.btnDark}`}
+            type="button"
+            disabled={pending}
+            onClick={() =>
+              void run(markArriving(order.id, "RESTAURANT", "OPERATOR"))
+            }
+          >
+            {pending ? "Сохраняем…" : "Курьер скоро будет"}
+          </button>
+          {errorNote}
+        </>
       );
     }
     if (order.status === "ARRIVING") {
       return (
-        <button
-          className={`${kds.btn} ${kds.btnGreen}`}
-          type="button"
-          onClick={() => void markDelivered(order.id, "RESTAURANT", "OPERATOR")}
-        >
-          Заказ доставлен
-        </button>
+        <>
+          <button
+            className={`${kds.btn} ${kds.btnGreen}`}
+            type="button"
+            disabled={pending}
+            onClick={() =>
+              void run(markDelivered(order.id, "RESTAURANT", "OPERATOR"))
+            }
+          >
+            {pending ? "Сохраняем…" : "Заказ доставлен"}
+          </button>
+          {errorNote}
+        </>
       );
     }
-    return null;
+    return errorNote;
   }
 
   if (order.deliveryMode === "PLATFORM_DRIVER" && order.status === "READY") {

@@ -22,8 +22,10 @@ function getTariffSignature(tariffs: TariffMatrix): string {
 interface TariffEditorProps {
   tariffs: TariffMatrix;
   zones: Zone[];
-  onSave: (tariffs: TariffMatrix) => void;
-  onRestore: () => void;
+  /** Возвращает true только после подтверждённого сохранения (Исправление 5.1). */
+  onSave: (tariffs: TariffMatrix) => Promise<boolean>;
+  onRestore: () => Promise<boolean>;
+  disabled?: boolean;
 }
 
 export function TariffEditor({
@@ -31,6 +33,7 @@ export function TariffEditor({
   zones,
   onSave,
   onRestore,
+  disabled = false,
 }: TariffEditorProps) {
   const [draft, setDraft] = useState<TariffMatrix>(() =>
     cloneTariffs(tariffs),
@@ -87,18 +90,27 @@ export function TariffEditor({
     }));
   };
 
-  const handleSave = () => {
-    setAcceptedSignature(draftSignature);
+  const handleSave = async () => {
+    // Исправление 5.1: черновик принимается ТОЛЬКО после успешного commit;
+    // при ошибке введённые значения сохраняются и остаются «несохранёнными».
+    const savedSignature = draftSignature;
+    const ok = await onSave(cloneTariffs(draft));
+    if (!ok) {
+      return;
+    }
+    setAcceptedSignature(savedSignature);
     setExternalTariffs(null);
-    onSave(cloneTariffs(draft));
   };
 
-  const handleRestore = () => {
+  const handleRestore = async () => {
+    const ok = await onRestore();
+    if (!ok) {
+      return;
+    }
     const defaultTariffs = createDefaultTariffs();
     setDraft(defaultTariffs);
     setAcceptedSignature(getTariffSignature(defaultTariffs));
     setExternalTariffs(null);
-    onRestore();
   };
 
   const keepDraft = () => {
@@ -195,14 +207,16 @@ export function TariffEditor({
         <button
           className={styles.primaryButton}
           type="button"
-          onClick={handleSave}
+          disabled={disabled}
+          onClick={() => void handleSave()}
         >
-          Сохранить тарифы
+          {disabled ? "Сохраняем…" : "Сохранить тарифы"}
         </button>
         <button
           className={styles.secondaryButton}
           type="button"
-          onClick={handleRestore}
+          disabled={disabled}
+          onClick={() => void handleRestore()}
         >
           Восстановить начальные значения
         </button>

@@ -15,6 +15,7 @@ import {
 } from "react";
 import { Minus, Plus, ShoppingCart, Trash2, X } from "lucide-react";
 
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   calculateCartPricing,
@@ -42,7 +43,13 @@ interface FlyStyle extends CSSProperties {
 const ClientCartUiContext = createContext<ClientCartUiValue | null>(null);
 
 export function ClientCartUiProvider({ children }: { children: ReactNode }) {
-  const { state, setItemQuantity } = usePrototype();
+  const { state, setItemQuantity: setItemQuantityAck } = usePrototype();
+  // Исправление 5.7: изменение количества в мини-корзине — с русской ошибкой;
+  // количество на экране всегда из подтверждённого общего state.
+  const { error: cartMutationError, run: runCartMutation } = useMutationGuard();
+  const setItemQuantity = (
+    ...args: Parameters<typeof setItemQuantityAck>
+  ) => runCartMutation(setItemQuantityAck(...args));
   const [isOpen, setIsOpen] = useState(false);
   const [badgePulse, setBadgePulse] = useState(false);
   const [flyStyle, setFlyStyle] = useState<FlyStyle | null>(null);
@@ -168,6 +175,11 @@ export function ClientCartUiProvider({ children }: { children: ReactNode }) {
                     </article>
                   ))}
                 </div>
+                {cartMutationError ? (
+                  <p className={styles.errorText} role="alert">
+                    {cartMutationError}
+                  </p>
+                ) : null}
                 <dl className={styles.drawerSummary}>
                   <div><dt>Еда</dt><dd>{formatMoney(pricing.foodSubtotalBeforeDiscountsCents)}</dd></div>
                   {pricing.appliedPromotion ? (

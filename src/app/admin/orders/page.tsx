@@ -6,7 +6,10 @@ import { Suspense, useMemo, useState } from "react";
 import { OrderHistory } from "@/components/order-flow/order-history";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
-import { usePrototype } from "@/prototype/prototype-provider";
+import {
+  usePrototype,
+  type MutationAck,
+} from "@/prototype/prototype-provider";
 import { getSafeAdminStatusCorrections } from "@/prototype/actions";
 import type {
   DeliveryMode,
@@ -489,6 +492,20 @@ function OrderActions({ order }: { order: Order }) {
     const res = await cancelOrderByAdmin(order.id, reason);
     if (!res.ok) window.alert(res.error ?? "Не удалось отменить заказ.");
   };
+  // Исправление 7: lifecycle-кнопки админа — await с pending и ошибкой,
+  // не fire-and-forget; ложный успех невозможен (ok приходит из commit).
+  const doLifecycle = async (ack: Promise<MutationAck>) => {
+    if (actionPending) return;
+    setActionPending(true);
+    try {
+      const res = await ack;
+      setActionError(
+        res.ok ? null : (res.error ?? "Не удалось выполнить действие."),
+      );
+    } finally {
+      setActionPending(false);
+    }
+  };
 
   const isRestaurantDelivery = order.deliveryMode === "RESTAURANT_DELIVERY";
   const isPlatform = order.deliveryMode === "PLATFORM_DRIVER";
@@ -585,10 +602,11 @@ function OrderActions({ order }: { order: Order }) {
             <span>Изменить время, мин</span>
             <select
               value={prep}
+              disabled={actionPending}
               onChange={(e) => {
                 const m = Number(e.target.value);
                 setPrep(m);
-                void setPreparationMinutes(order.id, m);
+                void doLifecycle(setPreparationMinutes(order.id, m));
               }}
             >
               {PREP_MINUTES.map((m) => (
@@ -601,7 +619,8 @@ function OrderActions({ order }: { order: Order }) {
           <button
             className={flowStyles.primaryButton}
             type="button"
-            onClick={() => void markReady(order.id, "ADMIN")}
+            disabled={actionPending}
+            onClick={() => void doLifecycle(markReady(order.id, "ADMIN"))}
           >
             Отметить готовым
           </button>
@@ -617,7 +636,10 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => void markOutForDelivery(order.id, "ADMIN")}
+          disabled={actionPending}
+          onClick={() =>
+            void doLifecycle(markOutForDelivery(order.id, "ADMIN"))
+          }
         >
           Курьер выехал
         </button>
@@ -626,7 +648,8 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => void markArriving(order.id, "ADMIN")}
+          disabled={actionPending}
+          onClick={() => void doLifecycle(markArriving(order.id, "ADMIN"))}
         >
           Курьер скоро будет
         </button>
@@ -635,7 +658,8 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => void markDelivered(order.id, "ADMIN")}
+          disabled={actionPending}
+          onClick={() => void doLifecycle(markDelivered(order.id, "ADMIN"))}
         >
           Заказ доставлен, наличные получены
         </button>
@@ -650,7 +674,10 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => void markOutForDelivery(order.id, "ADMIN")}
+          disabled={actionPending}
+          onClick={() =>
+            void doLifecycle(markOutForDelivery(order.id, "ADMIN"))
+          }
         >
           Водитель выехал
         </button>
@@ -659,7 +686,8 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => void markArriving(order.id, "ADMIN")}
+          disabled={actionPending}
+          onClick={() => void doLifecycle(markArriving(order.id, "ADMIN"))}
         >
           Водитель скоро будет
         </button>
@@ -669,10 +697,17 @@ function OrderActions({ order }: { order: Order }) {
         <button
           className={flowStyles.primaryButton}
           type="button"
-          onClick={() => void markDeliveredByDriver(order.id)}
+          disabled={actionPending}
+          onClick={() => void doLifecycle(markDeliveredByDriver(order.id))}
         >
           Отметить доставленным
         </button>
+      ) : null}
+
+      {order.status !== "RESTAURANT_REVIEW" && actionError ? (
+        <p className={flowStyles.errorText} role="alert">
+          {actionError}
+        </p>
       ) : null}
 
       <div className={flowStyles.buttonRow}>

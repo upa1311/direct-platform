@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { ClientOrderActions } from "@/components/order-flow/client-order-actions";
 import { OrderHistory } from "@/components/order-flow/order-history";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type { Order } from "@/prototype/models";
@@ -94,6 +95,13 @@ function ClientPickupBlock({ order }: { order: Order }) {
 export default function ClientOrderPage() {
   const params = useParams<{ orderId: string }>();
   const { state, isHydrated, simulateOnlinePayment } = usePrototype();
+  // Исправление 7: подтверждение оплаты — await с pending и русской ошибкой
+  // (повторная оплата из устаревшей вкладки не выглядит успешной).
+  const {
+    error: paymentError,
+    pending: paymentPending,
+    run: runPayment,
+  } = useMutationGuard();
   const order = getOrder(state, params.orderId);
 
   if (!isHydrated) {
@@ -224,10 +232,18 @@ export default function ClientOrderPage() {
               <button
                 className={flowStyles.primaryButton}
                 type="button"
-                onClick={() => void simulateOnlinePayment(order.id)}
+                disabled={paymentPending}
+                onClick={() => void runPayment(simulateOnlinePayment(order.id))}
               >
-                Имитировать успешную онлайн-оплату
+                {paymentPending
+                  ? "Подтверждаем…"
+                  : "Имитировать успешную онлайн-оплату"}
               </button>
+              {paymentError ? (
+                <p className={flowStyles.errorText} role="alert">
+                  {paymentError}
+                </p>
+              ) : null}
               <p>
                 Это демонстрационное подтверждение. Банк не подключён, деньги
                 не списываются.

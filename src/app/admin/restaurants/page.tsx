@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type { Restaurant } from "@/prototype/models";
@@ -26,6 +27,13 @@ function RestaurantOperationalCard({
   restaurant: Restaurant;
 }) {
   const { state, isHydrated, setRestaurantAccepting } = usePrototype();
+  // Исправление 5.6: приём заказов — await с pending и русской ошибкой;
+  // fail-closed отказ не игнорируется молча.
+  const {
+    error: acceptingError,
+    pending: acceptingPending,
+    run: runAccepting,
+  } = useMutationGuard();
   const isRestaurantCourier = restaurant.deliveryProvider === "RESTAURANT";
   // §8: deliveryProvider — источник истины. Собственные настройки доставки
   // действуют только у ресторана со своим курьером.
@@ -58,7 +66,7 @@ function RestaurantOperationalCard({
         `Приостановить приём новых заказов рестораном «${restaurant.name}»? Существующие заказы продолжат обрабатываться.`,
       )
     ) {
-      void setRestaurantAccepting(restaurant.id, false);
+      void runAccepting(setRestaurantAccepting(restaurant.id, false));
     }
   };
 
@@ -283,17 +291,21 @@ function RestaurantOperationalCard({
           <button
             className={flowStyles.dangerButton}
             type="button"
+            disabled={acceptingPending}
             onClick={handlePause}
           >
-            Приостановить приём заказов
+            {acceptingPending ? "Сохраняем…" : "Приостановить приём заказов"}
           </button>
         ) : (
           <button
             className={flowStyles.secondaryButton}
             type="button"
-            onClick={() => void setRestaurantAccepting(restaurant.id, true)}
+            disabled={acceptingPending}
+            onClick={() =>
+              void runAccepting(setRestaurantAccepting(restaurant.id, true))
+            }
           >
-            Возобновить приём заказов
+            {acceptingPending ? "Сохраняем…" : "Возобновить приём заказов"}
           </button>
         )}
         <Link
@@ -309,6 +321,11 @@ function RestaurantOperationalCard({
           Подробнее →
         </Link>
       </div>
+      {acceptingError ? (
+        <p className={flowStyles.errorText} role="alert">
+          {acceptingError}
+        </p>
+      ) : null}
     </article>
   );
 }

@@ -10,6 +10,7 @@ import {
 } from "@/components/order-flow/client-address-confirmation";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { RestaurantAvailabilityBadge } from "@/components/order-flow/restaurant-availability-badge";
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -23,7 +24,19 @@ import {
 import { shouldAutoConfirmAddress } from "@/prototype/pricing-engine";
 
 export default function ClientCatalogPage() {
-  const { state, updateAddress, setFulfillmentChoice } = usePrototype();
+  const {
+    state,
+    updateAddress: updateAddressAck,
+    setFulfillmentChoice: setFulfillmentChoiceAck,
+  } = usePrototype();
+  // Исправление 5.7: ошибки сохранения адреса/способа получения не проходят
+  // молча — общий баннер; значения рисуются из подтверждённого state.
+  const { error: cartMutationError, run: runCartMutation } = useMutationGuard();
+  const updateAddress = (...args: Parameters<typeof updateAddressAck>) =>
+    runCartMutation(updateAddressAck(...args));
+  const setFulfillmentChoice = (
+    ...args: Parameters<typeof setFulfillmentChoiceAck>
+  ) => runCartMutation(setFulfillmentChoiceAck(...args));
   const {
     isAddressConfirmed,
     confirmAddress,
@@ -83,6 +96,11 @@ export default function ClientCatalogPage() {
 
   return (
     <>
+      {cartMutationError ? (
+        <div className={flowStyles.warningNotice} role="alert">
+          {cartMutationError}
+        </div>
+      ) : null}
       <section
         id="fulfillment-method"
         className={`${flowStyles.card} ${flowStyles.catalogFulfillment}`}

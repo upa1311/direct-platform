@@ -16,7 +16,6 @@ import {
   addCartItem,
   adjustOrderEtaFromIntent,
   adminCancelOrder,
-  adminSetPreparationMinutes,
   approveCancellationRequest,
   assignDriverToOrder,
   cancelOrderByClient,
@@ -33,14 +32,17 @@ import {
   resumeExpiredOperationalPauses,
   resumeRestaurantOrders,
   setMenuItemOperationallyUnavailable,
-  markOrderArriving,
-  markOrderDelivered,
-  markOrderDeliveredByDriver,
-  markOrderOutForDelivery,
-  markOrderReady,
+  adminSetPreparationMinutesWithResult,
+  markOrderArrivingWithResult,
+  markOrderDeliveredByDriverWithResult,
+  markOrderDeliveredWithResult,
+  markOrderOutForDeliveryWithResult,
+  markOrderReadyWithResult,
   markPickupNoShow as runPickupNoShow,
   reportRestaurantPreparationProblem,
-  setRestaurantWorkflowMode,
+  setRestaurantWorkflowModeWithResult,
+  simulateSuccessfulOnlinePaymentWithResult,
+  setRestaurantAcceptingOrdersWithResult,
   reassignDriverForOrder,
   rejectCancellationRequest,
   rejectRestaurantOrderWithResult,
@@ -54,8 +56,6 @@ import {
   setCartItemQuantity,
   setCartPaymentMethod,
   setPromotionEnabled,
-  setRestaurantAcceptingOrders,
-  simulateSuccessfulOnlinePayment,
   unassignDriverFromOrder,
   updateCartAddress,
   updateCustomerProfile,
@@ -63,6 +63,7 @@ import {
   updateRestaurant,
   upsertPromotion,
   type AcceptRestaurantOrderResult,
+  type ActionResult,
   type AddCartItemResult,
   type AdjustOrderEtaResult,
   type AdminActionResult,
@@ -73,6 +74,7 @@ import {
   type CreateRestaurantResult,
   type OperationalActionResult,
   type OrderActionActor,
+  type OrderTransitionResult,
   type PickupNoShowResult,
   type PreparationProblemResult,
   type RejectRestaurantOrderResult,
@@ -101,28 +103,29 @@ import type {
 import {
   isNewerState,
   isPrototypeState,
-  LEGACY_V2_PROTOTYPE_STORAGE_KEY,
-  LEGACY_V3_PROTOTYPE_STORAGE_KEY,
-  LEGACY_V4_PROTOTYPE_STORAGE_KEY,
-  LEGACY_V5_PROTOTYPE_STORAGE_KEY,
-  LEGACY_V6_PROTOTYPE_STORAGE_KEY,
   normalizePrototypeState,
-  parseLegacyStoredState,
   parseStoredState,
   PROTOTYPE_CHANNEL_NAME,
   PROTOTYPE_SAVE_FAILED_ERROR,
   PROTOTYPE_STORAGE_KEY,
   SAFE_TAB_SYNC_UNAVAILABLE_ERROR,
   executeSerializedPrototypeMutation,
+  readLegacyPrototypeState,
+  resolveBootstrapState,
+  safeReadStoredState,
+  type MutationAck,
 } from "./prototype-store";
 
 /** Общее имя Web Lock для сериализации мутаций заказа между вкладками. */
 const PROTOTYPE_MUTATION_LOCK_NAME = "direct-prototype-state-v7-mutation";
 
-/** Результат сериализованной state-only мутации (Исправление 2.2). */
-export type MutationAck = Promise<{ ok: boolean; error: string | null }>;
+/** Исправление 2: подтверждение сериализованной мутации (см. prototype-store). */
+export type { MutationAck } from "./prototype-store";
 
-interface PrototypeContextValue {
+/** Promise-подтверждение мутации в API провайдера. */
+type MutationAckPromise = Promise<MutationAck>;
+
+export interface PrototypeContextValue {
   state: PrototypeState;
   isHydrated: boolean;
   addItem: (
@@ -134,18 +137,18 @@ interface PrototypeContextValue {
     menuItemId: string,
     variantId: string | null,
     quantity: number,
-  ) => MutationAck;
+  ) => MutationAckPromise;
   setItemComment: (
     menuItemId: string,
     variantId: string | null,
     comment: string,
-  ) => MutationAck;
-  updateAddress: (patch: Partial<Omit<DeliveryAddress, "zoneId">>) => MutationAck;
+  ) => MutationAckPromise;
+  updateAddress: (patch: Partial<Omit<DeliveryAddress, "zoneId">>) => MutationAckPromise;
   updateCustomer: (
     patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>,
-  ) => MutationAck;
-  setPaymentMethod: (paymentMethod: PaymentMethod) => MutationAck;
-  setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => MutationAck;
+  ) => MutationAckPromise;
+  setPaymentMethod: (paymentMethod: PaymentMethod) => MutationAckPromise;
+  setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => MutationAckPromise;
   createOrder: () => Promise<CreateOrderResult>;
   repeatOrder: (orderId: string) => Promise<RepeatOrderResult>;
   cancelClientOrder: (
@@ -213,12 +216,12 @@ interface PrototypeContextValue {
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
   ) => Promise<RejectRestaurantOrderResult>;
-  simulateOnlinePayment: (orderId: string) => MutationAck;
+  simulateOnlinePayment: (orderId: string) => MutationAckPromise;
   markReady: (
     orderId: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => MutationAck;
+  ) => MutationAckPromise;
   adjustOrderEta: (
     orderId: string,
     intent: EtaAdjustmentIntent,
@@ -248,28 +251,28 @@ interface PrototypeContextValue {
   setRestaurantWorkflow: (
     restaurantId: string,
     mode: RestaurantOrderWorkflowMode,
-  ) => MutationAck;
+  ) => MutationAckPromise;
   markOutForDelivery: (
     orderId: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => MutationAck;
+  ) => MutationAckPromise;
   markArriving: (
     orderId: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => MutationAck;
+  ) => MutationAckPromise;
   markDelivered: (
     orderId: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
-  ) => MutationAck;
-  markDeliveredByDriver: (orderId: string) => MutationAck;
-  setPreparationMinutes: (orderId: string, minutes: number) => MutationAck;
+  ) => MutationAckPromise;
+  markDeliveredByDriver: (orderId: string) => MutationAckPromise;
+  setPreparationMinutes: (orderId: string, minutes: number) => MutationAckPromise;
   setRestaurantAccepting: (
     restaurantId: string,
     accepting: boolean,
-  ) => MutationAck;
+  ) => MutationAckPromise;
   assignDriver: (
     orderId: string,
     driverId: string,
@@ -297,8 +300,8 @@ interface PrototypeContextValue {
     reason: string,
     paidWith: PickupPaymentMethod,
   ) => Promise<AdminActionResult>;
-  saveTariffMatrix: (tariffs: TariffMatrix) => MutationAck;
-  restoreTariffs: () => MutationAck;
+  saveTariffMatrix: (tariffs: TariffMatrix) => MutationAckPromise;
+  restoreTariffs: () => MutationAckPromise;
   createRestaurantEntry: (
     input: RestaurantFormInput,
   ) => Promise<CreateRestaurantResult>;
@@ -309,10 +312,13 @@ interface PrototypeContextValue {
   setMenuItemVariants: (
     menuItemId: string,
     variants: MenuItemVariant[] | null,
-  ) => void;
-  savePromotion: (promotion: Promotion) => void;
-  togglePromotion: (promotionId: string, enabled: boolean) => void;
-  resetPrototype: () => void;
+  ) => MutationAckPromise;
+  savePromotion: (promotion: Promotion) => MutationAckPromise;
+  togglePromotion: (
+    promotionId: string,
+    enabled: boolean,
+  ) => MutationAckPromise;
+  resetPrototype: () => MutationAckPromise;
 }
 
 interface PrototypeChannelMessage {
@@ -363,7 +369,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
    * production-backend заменит это серверной транзакцией и optimistic
    * concurrency по ревизии.
    */
-  const runSerializedActionMutation = useCallback(
+  const runSerializedMutationCore = useCallback(
     async <T,>({
       mutation,
       infrastructureFailure,
@@ -374,11 +380,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       ) => { state: PrototypeState; result: T };
       infrastructureFailure: (error: string) => T;
       critical?: boolean;
-    }): Promise<T> => {
-      const execute = (): T => {
-        const stored = parseStoredState(
-          window.localStorage.getItem(PROTOTYPE_STORAGE_KEY),
-        );
+    }): Promise<{ result: T; committed: boolean }> => {
+      const execute = (): { result: T; committed: boolean } => {
+        // Исправление 1.2: чтение хранилища не должно бросать (SecurityError и
+        // пр.) — при недоступном чтении мутация работает от локального base, а
+        // недоступная ЗАПИСЬ честно завершит транзакцию инфраструктурной ошибкой.
+        const stored = safeReadStoredState(PROTOTYPE_STORAGE_KEY);
         try {
           const outcome = executeSerializedPrototypeMutation({
             localState: stateRef.current,
@@ -392,11 +399,14 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             stateRef.current = outcome.nextState;
             setState(outcome.nextState);
           }
-          return outcome.result;
+          return { result: outcome.result, committed: outcome.committed };
         } catch {
           // localStorage.setItem бросил: state не подтверждён — не принимаем его
           // и не объявляем успех.
-          return infrastructureFailure(PROTOTYPE_SAVE_FAILED_ERROR);
+          return {
+            result: infrastructureFailure(PROTOTYPE_SAVE_FAILED_ERROR),
+            committed: false,
+          };
         }
       };
 
@@ -409,64 +419,96 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             async () => execute(),
           );
         } catch {
-          return infrastructureFailure(PROTOTYPE_SAVE_FAILED_ERROR);
+          return {
+            result: infrastructureFailure(PROTOTYPE_SAVE_FAILED_ERROR),
+            committed: false,
+          };
         }
       }
       if (critical) {
         // Исправление 7: без Web Locks конкурентную запись честно блокируем.
-        return infrastructureFailure(SAFE_TAB_SYNC_UNAVAILABLE_ERROR);
+        return {
+          result: infrastructureFailure(SAFE_TAB_SYNC_UNAVAILABLE_ERROR),
+          committed: false,
+        };
       }
       return execute();
     },
     [broadcastState, persistState],
   );
 
+  const runSerializedActionMutation = useCallback(
+    async <T,>(options: {
+      mutation: (
+        baseState: PrototypeState,
+      ) => { state: PrototypeState; result: T };
+      infrastructureFailure: (error: string) => T;
+      critical?: boolean;
+    }): Promise<T> => (await runSerializedMutationCore(options)).result,
+    [runSerializedMutationCore],
+  );
+
   /**
    * Исправление 2.2: обёртка для legacy-функций вида (state) => PrototypeState.
-   * No-op не увеличивает revision и ничего не записывает.
+   * Ack строится ПОСЛЕ транзакции из фактического outcome.committed: успешное
+   * изменение → changed:true; допустимый идемпотентный no-op → ok:true,
+   * changed:false; инфраструктурная ошибка → ok:false + русская ошибка.
    */
   const runSerializedStateMutation = useCallback(
-    ({
+    async ({
       mutation,
       critical = true,
     }: {
       mutation: (baseState: PrototypeState) => PrototypeState;
       critical?: boolean;
-    }): Promise<{ ok: boolean; error: string | null }> =>
-      runSerializedActionMutation<{ ok: boolean; error: string | null }>({
+    }): Promise<MutationAck> => {
+      const outcome = await runSerializedMutationCore<string | null>({
         mutation: (baseState) => ({
           state: mutation(baseState),
-          result: { ok: true, error: null },
+          result: null,
         }),
+        infrastructureFailure: (error) => error,
+        critical,
+      });
+      return outcome.result !== null
+        ? { ok: false, error: outcome.result, changed: false }
+        : { ok: true, error: null, changed: outcome.committed };
+    },
+    [runSerializedMutationCore],
+  );
+
+  /**
+   * Исправление 3: обёртка для result-based lifecycle-функций. Доменная ошибка
+   * (в т.ч. no-op в неправильном статусе) → ok:false + русская ошибка; успех →
+   * changed из фактического outcome.committed.
+   */
+  const runSerializedResultMutation = useCallback(
+    async ({
+      mutation,
+      critical = true,
+    }: {
+      mutation: (baseState: PrototypeState) => ActionResult<OrderTransitionResult>;
+      critical?: boolean;
+    }): Promise<MutationAck> => {
+      const outcome = await runSerializedMutationCore<OrderTransitionResult>({
+        mutation,
         infrastructureFailure: (error) => ({ ok: false, error }),
         critical,
-      }),
-    [runSerializedActionMutation],
+      });
+      return {
+        ok: outcome.result.ok,
+        error: outcome.result.error,
+        changed: outcome.committed,
+      };
+    },
+    [runSerializedMutationCore],
   );
 
   useEffect(() => {
     sourceIdRef.current = crypto.randomUUID();
-
-    const storedV7State = parseStoredState(
-      window.localStorage.getItem(PROTOTYPE_STORAGE_KEY),
-    );
-    const storedState =
-      storedV7State ??
-      parseLegacyStoredState(
-        window.localStorage.getItem(LEGACY_V6_PROTOTYPE_STORAGE_KEY),
-      ) ??
-      parseLegacyStoredState(
-        window.localStorage.getItem(LEGACY_V5_PROTOTYPE_STORAGE_KEY),
-      ) ??
-      parseLegacyStoredState(
-        window.localStorage.getItem(LEGACY_V4_PROTOTYPE_STORAGE_KEY),
-      ) ??
-      parseLegacyStoredState(
-        window.localStorage.getItem(LEGACY_V3_PROTOTYPE_STORAGE_KEY),
-      ) ??
-      parseLegacyStoredState(
-        window.localStorage.getItem(LEGACY_V2_PROTOTYPE_STORAGE_KEY),
-      );
+    // Нетронутый initial default: пока stateRef указывает на него, при legacy-
+    // миграции приоритет отдаётся legacy-данным (Исправление 1.1, шаг 3).
+    const initialLocalState = stateRef.current;
     let isActive = true;
 
     const handleIncomingState = (incomingState: PrototypeState) => {
@@ -500,28 +542,68 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     };
 
     window.addEventListener("storage", handleStorage);
-    queueMicrotask(() => {
+
+    /**
+     * Исправление 1: bootstrap выполняется синхронным блоком с ПОВТОРНЫМ чтением
+     * хранилища непосредственно перед решением (никаких snapshot'ов, сделанных
+     * до lock/microtask). Существующий v7 никогда не перезаписывается legacy-
+     * состоянием; входящий более свежий state (storage/BroadcastChannel) не
+     * откатывается. Ошибки чтения/записи не роняют гидратацию.
+     */
+    const runBootstrap = () => {
       if (!isActive) {
         return;
       }
-      if (storedState) {
-        replaceState(storedState);
-        // Исправление 4: одноразовый bootstrap миграции. Если v7-ключа не было,
-        // а состояние пришло из legacy-версии — сохраняем его как v7 один раз.
-        // Более свежий уже существующий v7 state НЕ перезаписывается.
-        if (!storedV7State) {
-          try {
-            window.localStorage.setItem(
-              PROTOTYPE_STORAGE_KEY,
-              JSON.stringify(storedState),
-            );
-          } catch {
-            // Гидратация не должна падать из-за недоступного хранилища.
-          }
+      const freshV7State = safeReadStoredState(PROTOTYPE_STORAGE_KEY);
+      const legacyState = freshV7State ? null : readLegacyPrototypeState();
+      const resolution = resolveBootstrapState({
+        freshV7State,
+        legacyState,
+        localState: stateRef.current,
+        localIsInitial: stateRef.current === initialLocalState,
+      });
+      if (resolution.shouldPersist) {
+        try {
+          // Запись только при отсутствии v7 (проверено в этом же синхронном
+          // блоке); legacy принимается локально ТОЛЬКО после успешной записи.
+          window.localStorage.setItem(
+            PROTOTYPE_STORAGE_KEY,
+            JSON.stringify(resolution.state),
+          );
+        } catch {
+          // Хранилище недоступно: не принимаем незаписанный legacy state;
+          // гидратация продолжается на текущем локальном состоянии.
+          setIsHydrated(true);
+          return;
         }
       }
+      if (resolution.state !== stateRef.current) {
+        replaceState(resolution.state);
+      }
       setIsHydrated(true);
-    });
+    };
+
+    const bootstrap = async () => {
+      const locks =
+        typeof navigator !== "undefined" ? navigator.locks : undefined;
+      if (locks?.request) {
+        try {
+          // Тот же общий lock, что и у мутаций: bootstrap не гоняется ни с
+          // мутациями других вкладок, ни с их bootstrap-миграцией.
+          await locks.request(PROTOTYPE_MUTATION_LOCK_NAME, async () =>
+            runBootstrap(),
+          );
+          return;
+        } catch {
+          // Падение самого Web Locks API — ниже безопасный путь без lock.
+        }
+      }
+      // Без Web Locks: runBootstrap перечитывает v7 в том же синхронном блоке,
+      // где принимает решение о записи, — слепой записи legacy нет, появившийся
+      // v7 используется, spin-lock не применяется.
+      runBootstrap();
+    };
+    void bootstrap();
 
     return () => {
       isActive = false;
@@ -577,8 +659,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       runSerializedActionMutation({
         mutation: (baseState) =>
           addCartItem(baseState, menuItemId, variantId, replaceRestaurant),
-        // Инфраструктурный сбой отображается как недоступность позиции.
-        infrastructureFailure: () => "NOT_AVAILABLE" as const,
+        // Исправление 6: инфраструктурный сбой НЕ маскируется под недоступное
+        // блюдо — клиент получает честный статус (нет Web Locks / ошибка записи).
+        infrastructureFailure: (error) =>
+          error === SAFE_TAB_SYNC_UNAVAILABLE_ERROR
+            ? ("SYNC_UNAVAILABLE" as const)
+            : ("SAVE_FAILED" as const),
       }),
     [runSerializedActionMutation],
   );
@@ -873,11 +959,11 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
   const simulateOnlinePayment = useCallback(
     (orderId: string) =>
-      runSerializedStateMutation({
+      runSerializedResultMutation({
         mutation: (baseState) =>
-          simulateSuccessfulOnlinePayment(baseState, orderId),
+          simulateSuccessfulOnlinePaymentWithResult(baseState, orderId),
       }),
-    [runSerializedStateMutation],
+    [runSerializedResultMutation],
   );
 
   const markReady = useCallback(
@@ -886,11 +972,11 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) =>
-      runSerializedStateMutation({
+      runSerializedResultMutation({
         mutation: (baseState) =>
-          markOrderReady(baseState, orderId, actor, workspaceRole),
+          markOrderReadyWithResult(baseState, orderId, actor, workspaceRole),
       }),
-    [runSerializedStateMutation],
+    [runSerializedResultMutation],
   );
 
   const adjustOrderEta = useCallback(
@@ -1009,11 +1095,11 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
 
   const setRestaurantWorkflow = useCallback(
     (restaurantId: string, mode: RestaurantOrderWorkflowMode) =>
-      runSerializedStateMutation({
+      runSerializedResultMutation({
         mutation: (baseState) =>
-          setRestaurantWorkflowMode(baseState, restaurantId, mode),
+          setRestaurantWorkflowModeWithResult(baseState, restaurantId, mode),
       }),
-    [runSerializedStateMutation],
+    [runSerializedResultMutation],
   );
 
   const markOutForDelivery = useCallback(
@@ -1022,11 +1108,16 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) =>
-      runSerializedStateMutation({
+      runSerializedResultMutation({
         mutation: (baseState) =>
-          markOrderOutForDelivery(baseState, orderId, actor, workspaceRole),
+          markOrderOutForDeliveryWithResult(
+            baseState,
+            orderId,
+            actor,
+            workspaceRole,
+          ),
       }),
-    [runSerializedStateMutation],
+    [runSerializedResultMutation],
   );
 
   const markArriving = useCallback(
@@ -1035,11 +1126,11 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) =>
-      runSerializedStateMutation({
+      runSerializedResultMutation({
         mutation: (baseState) =>
-          markOrderArriving(baseState, orderId, actor, workspaceRole),
+          markOrderArrivingWithResult(baseState, orderId, actor, workspaceRole),
       }),
-    [runSerializedStateMutation],
+    [runSerializedResultMutation],
   );
 
   const markDelivered = useCallback(
@@ -1048,37 +1139,47 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
     ) =>
-      runSerializedStateMutation({
+      runSerializedResultMutation({
         mutation: (baseState) =>
-          markOrderDelivered(baseState, orderId, actor, workspaceRole),
+          markOrderDeliveredWithResult(
+            baseState,
+            orderId,
+            actor,
+            workspaceRole,
+          ),
       }),
-    [runSerializedStateMutation],
+    [runSerializedResultMutation],
   );
 
   const markDeliveredByDriver = useCallback(
     (orderId: string) =>
-      runSerializedStateMutation({
-        mutation: (baseState) => markOrderDeliveredByDriver(baseState, orderId),
+      runSerializedResultMutation({
+        mutation: (baseState) =>
+          markOrderDeliveredByDriverWithResult(baseState, orderId),
       }),
-    [runSerializedStateMutation],
+    [runSerializedResultMutation],
   );
 
   const setPreparationMinutes = useCallback(
     (orderId: string, minutes: number) =>
-      runSerializedStateMutation({
+      runSerializedResultMutation({
         mutation: (baseState) =>
-          adminSetPreparationMinutes(baseState, orderId, minutes),
+          adminSetPreparationMinutesWithResult(baseState, orderId, minutes),
       }),
-    [runSerializedStateMutation],
+    [runSerializedResultMutation],
   );
 
   const setRestaurantAccepting = useCallback(
     (restaurantId: string, accepting: boolean) =>
-      runSerializedStateMutation({
+      runSerializedResultMutation({
         mutation: (baseState) =>
-          setRestaurantAcceptingOrders(baseState, restaurantId, accepting),
+          setRestaurantAcceptingOrdersWithResult(
+            baseState,
+            restaurantId,
+            accepting,
+          ),
       }),
-    [runSerializedStateMutation],
+    [runSerializedResultMutation],
   );
 
   const runAdminOrderAction = useCallback(

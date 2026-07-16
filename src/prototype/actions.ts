@@ -82,11 +82,20 @@ export interface ActionResult<T> {
   result: T;
 }
 
+/**
+ * Исправление 6: разные причины отказа не сливаются в один статус.
+ * Доменные: NOT_AVAILABLE (блюдо), RESTAURANT_UNAVAILABLE (ресторан),
+ * RESTAURANT_CONFLICT (в корзине другой ресторан). Инфраструктурные:
+ * SYNC_UNAVAILABLE (нет Web Locks) и SAVE_FAILED (ошибка записи хранилища) —
+ * клиент получает честную инфраструктурную ошибку, а не «блюдо недоступно».
+ */
 export type AddCartItemResult =
   | "ADDED"
   | "RESTAURANT_CONFLICT"
   | "RESTAURANT_UNAVAILABLE"
-  | "NOT_AVAILABLE";
+  | "NOT_AVAILABLE"
+  | "SYNC_UNAVAILABLE"
+  | "SAVE_FAILED";
 
 export interface CreateOrderResult {
   orderId: string | null;
@@ -704,6 +713,40 @@ function checkRestaurantWorkspaceForRestaurant(
     workspaceRole,
     action,
   });
+}
+
+/** Исправление 3: результат критического lifecycle-перехода заказа. */
+export interface OrderTransitionResult {
+  ok: boolean;
+  error: string | null;
+}
+
+/**
+ * Порядок статусов вдоль жизненного цикла заказа — только для классификации
+ * ошибки неправильного статуса («ещё не готов» против «уже обработан»).
+ * READY/READY_FOR_PICKUP и DELIVERED/PICKED_UP — параллельные ветки одного шага.
+ */
+const ORDER_STATUS_PROGRESS: Record<OrderStatus, number> = {
+  RESTAURANT_REVIEW: 0,
+  AWAITING_PAYMENT: 1,
+  PREPARING: 2,
+  READY: 3,
+  READY_FOR_PICKUP: 3,
+  OUT_FOR_DELIVERY: 4,
+  ARRIVING: 5,
+  DELIVERED: 6,
+  PICKED_UP: 6,
+  CANCELED: 7,
+};
+
+/** Русская ошибка неправильного статуса относительно ожидаемого перехода. */
+function wrongStatusError(
+  actual: OrderStatus,
+  expected: OrderStatus,
+): string {
+  return ORDER_STATUS_PROGRESS[actual] < ORDER_STATUS_PROGRESS[expected]
+    ? "Заказ ещё не готов к этому переходу."
+    : "Заказ уже обработан. Обновите данные.";
 }
 
 export interface AcceptRestaurantOrderResult {
@@ -1493,79 +1536,103 @@ export function repeatOrderToCart(
   };
 }
 
+/**
+ * Исправление 3: result-based подтверждение тестовой онлайн-оплаты. Все проверки
+ * до мутации; при ошибке возвращается исходный state тем же объектом (revision,
+ * history, financial snapshot, settlement не меняются).
+ */
+export function simulateSuccessfulOnlinePaymentWithResult(
+  state: PrototypeState,
+  orderId: string,
+): ActionResult<OrderTransitionResult> {
+  const fail = (error: string): ActionResult<OrderTransitionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  const order = state.orders.find((o) => o.id === orderId);
+  if (!order) return fail("Заказ не найден.");
+  if (order.paymentMethod !== "ONLINE") {
+    return fail("Заказ не оплачивается онлайн.");
+  }
+  if (order.paymentStatus === "PAID") {
+    return fail("Оплата уже подтверждена.");
+  }
+  if (order.status !== "AWAITING_PAYMENT") {
+    return fail(wrongStatusError(order.status, "AWAITING_PAYMENT"));
+  }
+
+  const now = new Date().toISOString();
+  const preparationMinutes = order.preparationMinutes ?? 25;
+  const expectedReadyAt = new Date(
+    new Date(now).getTime() + preparationMinutes * 60_000,
+  ).toISOString();
+  const nextHistoryNumber = order.history.length + 1;
+
+  const nextState = replaceOrder(
+    state,
+    orderId,
+    (current) => ({
+      ...current,
+      paymentStatus: "PAID",
+      paidAt: now,
+      status: "PREPARING",
+      expectedReadyAt,
+      updatedAt: now,
+      history: [
+        ...current.history,
+        {
+          id: `${current.id}-history-${nextHistoryNumber}`,
+          occurredAt: now,
+          actor: "SYSTEM",
+          type: "PAYMENT",
+          fromStatus: "AWAITING_PAYMENT",
+          toStatus: "AWAITING_PAYMENT",
+          message: "Тестовая онлайн-оплата успешно подтверждена.",
+        },
+        {
+          id: `${current.id}-history-${nextHistoryNumber + 1}`,
+          occurredAt: now,
+          actor: "SYSTEM",
+          type: "STATUS",
+          fromStatus: "AWAITING_PAYMENT",
+          toStatus: "PREPARING",
+          message: "Заказ передан ресторану в приготовление.",
+        },
+      ],
+    }),
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
 export function simulateSuccessfulOnlinePayment(
   state: PrototypeState,
   orderId: string,
 ): PrototypeState {
-  const now = new Date().toISOString();
-
-  return replaceOrder(
-    state,
-    orderId,
-    (order) => {
-      if (
-        order.status !== "AWAITING_PAYMENT" ||
-        order.paymentMethod !== "ONLINE" ||
-        order.paymentStatus === "PAID"
-      ) {
-        return order;
-      }
-
-      const preparationMinutes = order.preparationMinutes ?? 25;
-      const expectedReadyAt = new Date(
-        new Date(now).getTime() + preparationMinutes * 60_000,
-      ).toISOString();
-      const nextHistoryNumber = order.history.length + 1;
-
-      return {
-        ...order,
-        paymentStatus: "PAID",
-        paidAt: now,
-        status: "PREPARING",
-        expectedReadyAt,
-        updatedAt: now,
-        history: [
-          ...order.history,
-          {
-            id: `${order.id}-history-${nextHistoryNumber}`,
-            occurredAt: now,
-            actor: "SYSTEM",
-            type: "PAYMENT",
-            fromStatus: "AWAITING_PAYMENT",
-            toStatus: "AWAITING_PAYMENT",
-            message: "Тестовая онлайн-оплата успешно подтверждена.",
-          },
-          {
-            id: `${order.id}-history-${nextHistoryNumber + 1}`,
-            occurredAt: now,
-            actor: "SYSTEM",
-            type: "STATUS",
-            fromStatus: "AWAITING_PAYMENT",
-            toStatus: "PREPARING",
-            message: "Заказ передан ресторану в приготовление.",
-          },
-        ],
-      };
-    },
-    now,
-  );
+  return simulateSuccessfulOnlinePaymentWithResult(state, orderId).state;
 }
 
-export function markOrderReady(
+/**
+ * Исправление 3: result-based отметка готовности. Неправильный статус и
+ * недостаток прав — доменные ошибки, а не молчаливый no-op; при ошибке
+ * возвращается исходный state тем же объектом (без history-события).
+ */
+export function markOrderReadyWithResult(
   state: PrototypeState,
   orderId: string,
   actor: OrderActionActor = "RESTAURANT",
   workspaceRole?: RestaurantWorkspaceRole,
-): PrototypeState {
-  const now = new Date().toISOString();
-  const readyPrefix =
-    actor === "ADMIN" ? "Администратор Direct отметил готовность. " : "";
-
-  // Этап 4: готовность — действие кухни/общего экрана; оператор в SPLIT не может.
+): ActionResult<OrderTransitionResult> {
+  const fail = (error: string): ActionResult<OrderTransitionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
   const targetOrder = state.orders.find((order) => order.id === orderId);
   if (!targetOrder) {
-    return state;
+    return fail("Заказ не найден.");
   }
+  // Этап 4: готовность — действие кухни/общего экрана; оператор в SPLIT не может.
   const guard = checkRestaurantWorkspace(
     state,
     targetOrder,
@@ -1574,48 +1641,59 @@ export function markOrderReady(
     workspaceRole,
   );
   if (!guard.allowed) {
-    return state;
+    return fail("Недостаточно прав для выполнения действия.");
+  }
+  if (targetOrder.status !== "PREPARING") {
+    return fail(wrongStatusError(targetOrder.status, "PREPARING"));
   }
   const workspace = guard.role;
 
-  return replaceOrder(
+  const now = new Date().toISOString();
+  const readyPrefix =
+    actor === "ADMIN" ? "Администратор Direct отметил готовность. " : "";
+  const nextStatus =
+    targetOrder.deliveryMode === "PICKUP" ? "READY_FOR_PICKUP" : "READY";
+  const message =
+    targetOrder.deliveryMode === "PICKUP"
+      ? "Заказ готов к выдаче клиенту."
+      : targetOrder.deliveryMode === "RESTAURANT_DELIVERY"
+        ? "Заказ готов, ожидает курьера ресторана."
+        : "Заказ готов и упакован.";
+
+  const nextState = replaceOrder(
     state,
     orderId,
-    (order) => {
-      if (order.status !== "PREPARING") {
-        return order;
-      }
-
-      const nextStatus =
-        order.deliveryMode === "PICKUP" ? "READY_FOR_PICKUP" : "READY";
-      const message =
-        order.deliveryMode === "PICKUP"
-          ? "Заказ готов к выдаче клиенту."
-          : order.deliveryMode === "RESTAURANT_DELIVERY"
-            ? "Заказ готов, ожидает курьера ресторана."
-            : "Заказ готов и упакован.";
-
-      return {
-        ...order,
-        status: nextStatus,
-        updatedAt: now,
-        history: [
-          ...order.history,
-          {
-            id: `${order.id}-history-${order.history.length + 1}`,
-            occurredAt: now,
-            actor,
-            type: "STATUS",
-            fromStatus: "PREPARING",
-            toStatus: nextStatus,
-            message: `${readyPrefix}${message}`,
-            restaurantWorkspaceRole: workspace,
-          },
-        ],
-      };
-    },
+    (order) => ({
+      ...order,
+      status: nextStatus,
+      updatedAt: now,
+      history: [
+        ...order.history,
+        {
+          id: `${order.id}-history-${order.history.length + 1}`,
+          occurredAt: now,
+          actor,
+          type: "STATUS",
+          fromStatus: "PREPARING",
+          toStatus: nextStatus,
+          message: `${readyPrefix}${message}`,
+          restaurantWorkspaceRole: workspace,
+        },
+      ],
+    }),
     now,
   );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+export function markOrderReady(
+  state: PrototypeState,
+  orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+): PrototypeState {
+  return markOrderReadyWithResult(state, orderId, actor, workspaceRole).state;
 }
 
 export interface AdjustOrderEtaResult {
@@ -1902,7 +1980,7 @@ export function reportRestaurantPreparationProblem(
  * PLATFORM_DRIVER). Для водителя Direct переход READY → OUT_FOR_DELIVERY
  * разрешён только при назначенном водителе (§3). Все проверки — в домене.
  */
-function advanceCourierStatus(
+function advanceCourierStatusWithResult(
   state: PrototypeState,
   orderId: string,
   fromStatus: Order["status"],
@@ -1912,15 +1990,20 @@ function advanceCourierStatus(
   actor: OrderActionActor = "RESTAURANT",
   requireDriverForPlatform = false,
   workspaceRole?: RestaurantWorkspaceRole,
-): PrototypeState {
+): ActionResult<OrderTransitionResult> {
+  const fail = (error: string): ActionResult<OrderTransitionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
   const targetOrder = state.orders.find((order) => order.id === orderId);
+  if (!targetOrder) {
+    return fail("Заказ не найден.");
+  }
   if (
-    !targetOrder ||
-    (targetOrder.deliveryMode !== "RESTAURANT_DELIVERY" &&
-      targetOrder.deliveryMode !== "PLATFORM_DRIVER") ||
-    targetOrder.status !== fromStatus
+    targetOrder.deliveryMode !== "RESTAURANT_DELIVERY" &&
+    targetOrder.deliveryMode !== "PLATFORM_DRIVER"
   ) {
-    return state;
+    return fail("Неподдерживаемый способ получения заказа.");
   }
   // Этап 4: передача заказа курьеру/водителю — зона оператора/общего экрана.
   const guard = checkRestaurantWorkspace(
@@ -1931,21 +2014,24 @@ function advanceCourierStatus(
     workspaceRole,
   );
   if (!guard.allowed) {
-    return state;
+    return fail("Недостаточно прав для выполнения действия.");
+  }
+  if (targetOrder.status !== fromStatus) {
+    return fail(wrongStatusError(targetOrder.status, fromStatus));
   }
   if (
     requireDriverForPlatform &&
     targetOrder.deliveryMode === "PLATFORM_DRIVER" &&
     !targetOrder.assignedDriverId
   ) {
-    return state;
+    return fail("Для заказа не назначен водитель.");
   }
   const now = new Date().toISOString();
   const message =
     targetOrder.deliveryMode === "PLATFORM_DRIVER"
       ? platformMessage
       : restaurantMessage;
-  return replaceOrder(
+  const nextState = replaceOrder(
     state,
     orderId,
     (order) => ({
@@ -1968,15 +2054,16 @@ function advanceCourierStatus(
     }),
     now,
   );
+  return { state: nextState, result: { ok: true, error: null } };
 }
 
-export function markOrderOutForDelivery(
+export function markOrderOutForDeliveryWithResult(
   state: PrototypeState,
   orderId: string,
   actor: OrderActionActor = "RESTAURANT",
   workspaceRole?: RestaurantWorkspaceRole,
-): PrototypeState {
-  return advanceCourierStatus(
+): ActionResult<OrderTransitionResult> {
+  return advanceCourierStatusWithResult(
     state,
     orderId,
     "READY",
@@ -1989,13 +2076,24 @@ export function markOrderOutForDelivery(
   );
 }
 
-export function markOrderArriving(
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+export function markOrderOutForDelivery(
   state: PrototypeState,
   orderId: string,
   actor: OrderActionActor = "RESTAURANT",
   workspaceRole?: RestaurantWorkspaceRole,
 ): PrototypeState {
-  return advanceCourierStatus(
+  return markOrderOutForDeliveryWithResult(state, orderId, actor, workspaceRole)
+    .state;
+}
+
+export function markOrderArrivingWithResult(
+  state: PrototypeState,
+  orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+): ActionResult<OrderTransitionResult> {
+  return advanceCourierStatusWithResult(
     state,
     orderId,
     "OUT_FOR_DELIVERY",
@@ -2008,6 +2106,17 @@ export function markOrderArriving(
   );
 }
 
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+export function markOrderArriving(
+  state: PrototypeState,
+  orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+): PrototypeState {
+  return markOrderArrivingWithResult(state, orderId, actor, workspaceRole)
+    .state;
+}
+
 /**
  * Атомарное завершение доставки собственным курьером ресторана (§11): один
  * шаг ARRIVING → DELIVERED, который также фиксирует получение наличных и
@@ -2018,19 +2127,22 @@ export function markOrderArriving(
  * защищён идемпотентным id. Отменённый/недоставленный заказ settlement не
  * создаёт (в ARRIVING он ещё не попадает при отмене).
  */
-export function markOrderDelivered(
+export function markOrderDeliveredWithResult(
   state: PrototypeState,
   orderId: string,
   actor: OrderActionActor = "RESTAURANT",
   workspaceRole?: RestaurantWorkspaceRole,
-): PrototypeState {
+): ActionResult<OrderTransitionResult> {
+  const fail = (error: string): ActionResult<OrderTransitionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
   const targetOrder = state.orders.find((order) => order.id === orderId);
-  if (
-    !targetOrder ||
-    targetOrder.deliveryMode !== "RESTAURANT_DELIVERY" ||
-    targetOrder.status !== "ARRIVING"
-  ) {
-    return state;
+  if (!targetOrder) {
+    return fail("Заказ не найден.");
+  }
+  if (targetOrder.deliveryMode !== "RESTAURANT_DELIVERY") {
+    return fail("Неподдерживаемый способ получения заказа.");
   }
   // Этап 4: завершение доставки — выдача заказа (оператор/общий экран).
   const guard = checkRestaurantWorkspace(
@@ -2041,7 +2153,10 @@ export function markOrderDelivered(
     workspaceRole,
   );
   if (!guard.allowed) {
-    return state;
+    return fail("Недостаточно прав для выполнения действия.");
+  }
+  if (targetOrder.status !== "ARRIVING") {
+    return fail(wrongStatusError(targetOrder.status, "ARRIVING"));
   }
 
   const now = new Date().toISOString();
@@ -2094,7 +2209,7 @@ export function markOrderDelivered(
     createdAt: now,
   };
 
-  return finalizeMutation(
+  const nextState = finalizeMutation(
     state,
     {
       ...state,
@@ -2107,6 +2222,18 @@ export function markOrderDelivered(
     },
     now,
   );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+export function markOrderDelivered(
+  state: PrototypeState,
+  orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+): PrototypeState {
+  return markOrderDeliveredWithResult(state, orderId, actor, workspaceRole)
+    .state;
 }
 
 export interface CompletePickupResult {
@@ -2475,21 +2602,23 @@ function adminHistoryEvent(
  * трогаются. §21: административное решение всегда очищает stale orderPause —
  * временная пауза не подменяет ручное решение админа.
  */
-export function setRestaurantAcceptingOrders(
+export function setRestaurantAcceptingOrdersWithResult(
   state: PrototypeState,
   restaurantId: string,
   accepting: boolean,
-): PrototypeState {
+): ActionResult<OrderTransitionResult> {
   const target = state.restaurants.find((r) => r.id === restaurantId);
   if (!target) {
-    return state;
+    return { state, result: { ok: false, error: "Ресторан не найден." } };
   }
   const needsChange =
     target.isAcceptingOrders !== accepting || target.orderPause !== null;
   if (!needsChange) {
-    return state;
+    // Действительно идемпотентная настройка: требуемое значение уже установлено
+    // (например, другой вкладкой). Успех без изменения (changed=false у ack).
+    return { state, result: { ok: true, error: null } };
   }
-  return finalizeMutation(state, {
+  const nextState = finalizeMutation(state, {
     ...state,
     restaurants: state.restaurants.map((restaurant) =>
       restaurant.id === restaurantId
@@ -2497,23 +2626,44 @@ export function setRestaurantAcceptingOrders(
         : restaurant,
     ),
   });
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+export function setRestaurantAcceptingOrders(
+  state: PrototypeState,
+  restaurantId: string,
+  accepting: boolean,
+): PrototypeState {
+  return setRestaurantAcceptingOrdersWithResult(state, restaurantId, accepting)
+    .state;
 }
 
 /**
  * Этап 10: смена режима работы ресторана. Меняет ТОЛЬКО orderWorkflowMode —
  * заказы, статусы, ETA, оплату, водителя, financial snapshot, settlement и
- * историю не трогает.
+ * историю не трогает. Совпадающий режим — доменная ошибка: активную radio-карту
+ * UI не переключает, поэтому совпадение означает опередившую другую вкладку.
  */
-export function setRestaurantWorkflowMode(
+export function setRestaurantWorkflowModeWithResult(
   state: PrototypeState,
   restaurantId: string,
   mode: RestaurantOrderWorkflowMode,
-): PrototypeState {
+): ActionResult<OrderTransitionResult> {
   const target = state.restaurants.find((r) => r.id === restaurantId);
-  if (!target || target.orderWorkflowMode === mode) {
-    return state;
+  if (!target) {
+    return { state, result: { ok: false, error: "Ресторан не найден." } };
   }
-  return finalizeMutation(state, {
+  if (target.orderWorkflowMode === mode) {
+    return {
+      state,
+      result: {
+        ok: false,
+        error: "Режим работы уже изменён другой вкладкой.",
+      },
+    };
+  }
+  const nextState = finalizeMutation(state, {
     ...state,
     restaurants: state.restaurants.map((restaurant) =>
       restaurant.id === restaurantId
@@ -2521,6 +2671,16 @@ export function setRestaurantWorkflowMode(
         : restaurant,
     ),
   });
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+export function setRestaurantWorkflowMode(
+  state: PrototypeState,
+  restaurantId: string,
+  mode: RestaurantOrderWorkflowMode,
+): PrototypeState {
+  return setRestaurantWorkflowModeWithResult(state, restaurantId, mode).state;
 }
 
 // --- Операционная пауза приёма и доступность меню (Этап кухни 2) ------------
@@ -3351,21 +3511,38 @@ export function unassignDriverFromOrder(
  * ONLINE (PAID), поэтому финансы и settlement не затрагиваются; назначенный
  * водитель освобождается.
  */
-export function markOrderDeliveredByDriver(
+export function markOrderDeliveredByDriverWithResult(
   state: PrototypeState,
   orderId: string,
-): PrototypeState {
+): ActionResult<OrderTransitionResult> {
+  const fail = (error: string): ActionResult<OrderTransitionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
   const order = state.orders.find((o) => o.id === orderId);
   // §3: завершение только для оплаченного PLATFORM_DRIVER-заказа с назначенным
   // водителем и только из OUT_FOR_DELIVERY/ARRIVING (не из PREPARING).
+  if (!order) {
+    return fail("Заказ не найден.");
+  }
+  if (order.deliveryMode !== "PLATFORM_DRIVER") {
+    return fail("Неподдерживаемый способ получения заказа.");
+  }
   if (
-    !order ||
-    order.deliveryMode !== "PLATFORM_DRIVER" ||
-    !order.assignedDriverId ||
-    order.paymentStatus !== "PAID" ||
-    (order.status !== "OUT_FOR_DELIVERY" && order.status !== "ARRIVING")
+    order.status === "DELIVERED" ||
+    order.status === "PICKED_UP" ||
+    order.status === "CANCELED"
   ) {
-    return state;
+    return fail("Заказ уже обработан. Обновите данные.");
+  }
+  if (!order.assignedDriverId) {
+    return fail("Для заказа не назначен водитель.");
+  }
+  if (order.paymentStatus !== "PAID") {
+    return fail("Оплата по заказу ещё не подтверждена.");
+  }
+  if (order.status !== "OUT_FOR_DELIVERY" && order.status !== "ARRIVING") {
+    return fail("Заказ ещё не готов к этому переходу.");
   }
   const now = new Date().toISOString();
   const updatedOrder: Order = {
@@ -3385,7 +3562,7 @@ export function markOrderDeliveredByDriver(
       ),
     ],
   };
-  return finalizeMutation(
+  const nextState = finalizeMutation(
     state,
     {
       ...state,
@@ -3394,6 +3571,15 @@ export function markOrderDeliveredByDriver(
     },
     now,
   );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+export function markOrderDeliveredByDriver(
+  state: PrototypeState,
+  orderId: string,
+): PrototypeState {
+  return markOrderDeliveredByDriverWithResult(state, orderId).state;
 }
 
 /**
@@ -3690,21 +3876,31 @@ export function issuePickupWithoutCode(
  * Административное изменение времени приготовления (§9, статус PREPARING).
  * Пересчитывает ожидаемое время готовности; финансы и оплату не трогает.
  */
-export function adminSetPreparationMinutes(
+export function adminSetPreparationMinutesWithResult(
   state: PrototypeState,
   orderId: string,
   minutes: number,
-): PrototypeState {
+): ActionResult<OrderTransitionResult> {
+  const fail = (error: string): ActionResult<OrderTransitionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
   const allowed = [10, 15, 20, 25, 30, 40];
   const order = state.orders.find((o) => o.id === orderId);
-  if (!order || order.status !== "PREPARING" || !allowed.includes(minutes)) {
-    return state;
+  if (!order) {
+    return fail("Заказ не найден.");
+  }
+  if (order.status !== "PREPARING") {
+    return fail("Изменить время можно только для готовящегося заказа.");
+  }
+  if (!allowed.includes(minutes)) {
+    return fail("Недопустимое время приготовления.");
   }
   const now = new Date().toISOString();
   const expectedReadyAt = new Date(
     new Date(now).getTime() + minutes * 60_000,
   ).toISOString();
-  return replaceOrder(
+  const nextState = replaceOrder(
     state,
     orderId,
     (o) => ({
@@ -3727,6 +3923,16 @@ export function adminSetPreparationMinutes(
     }),
     now,
   );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+export function adminSetPreparationMinutes(
+  state: PrototypeState,
+  orderId: string,
+  minutes: number,
+): PrototypeState {
+  return adminSetPreparationMinutesWithResult(state, orderId, minutes).state;
 }
 
 // --- Административные действия ---------------------------------------------

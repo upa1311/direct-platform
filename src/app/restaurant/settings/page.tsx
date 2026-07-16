@@ -1,5 +1,6 @@
 "use client";
 
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type { RestaurantOrderWorkflowMode } from "@/prototype/models";
@@ -30,6 +31,10 @@ const MODE_OPTIONS: readonly {
 
 export default function RestaurantSettingsPage() {
   const { state, isHydrated, setRestaurantWorkflow } = usePrototype();
+  // Исправление 5.5: смена режима — await с pending и русской ошибкой; radio
+  // всегда отражает ТОЛЬКО подтверждённый общий state (при ошибке остаётся
+  // прежний режим, ложного «сохранено» нет).
+  const { error, pending, run } = useMutationGuard();
   const {
     selectedRestaurantId,
     setSelectedRestaurantId,
@@ -88,8 +93,9 @@ export default function RestaurantSettingsPage() {
                 type="radio"
                 name="workflow-mode"
                 checked={active}
+                disabled={pending}
                 onChange={() =>
-                  void setRestaurantWorkflow(restaurant.id, option.mode)
+                  void run(setRestaurantWorkflow(restaurant.id, option.mode))
                 }
               />
               <span className={styles.modeBody}>
@@ -104,6 +110,16 @@ export default function RestaurantSettingsPage() {
         })}
       </div>
 
+      {pending ? (
+        <p className={styles.hint} aria-live="polite">
+          Сохраняем режим…
+        </p>
+      ) : null}
+      {error ? (
+        <p className={styles.errorText} role="alert">
+          {error}
+        </p>
+      ) : null}
       <p className={styles.appliedNote} role="status">
         Сейчас выбрано: {workflowModeLabels[currentMode]}.
       </p>

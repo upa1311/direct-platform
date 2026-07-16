@@ -553,6 +553,17 @@
   outline-offset: 2px;
 }
 
+.resetButton:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.resetError {
+  color: #b3401f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .adminContent {
   width: min(1120px, calc(100% - 64px));
   margin-inline: auto;

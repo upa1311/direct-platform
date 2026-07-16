@@ -788,6 +788,104 @@ export function selectLatestPrototypeState(
 export const PROTOTYPE_SAVE_FAILED_ERROR =
   "Не удалось сохранить действие. Обновите страницу и повторите.";
 
+/**
+ * Исправление 2: подтверждение state-only мутации. `ok:false` — действие
+ * отклонено (инфраструктура или домен); `ok:true, changed:true` — новая версия
+ * состояния записана; `ok:true, changed:false` — допустимый идемпотентный no-op
+ * (состояние уже в требуемом виде, revision не изменилась).
+ */
+export interface MutationAck {
+  ok: boolean;
+  error: string | null;
+  changed: boolean;
+}
+
+/**
+ * Исправление 1.2: безопасное чтение сырого значения localStorage. Перехватывает
+ * SecurityError, недоступность localStorage и любые другие исключения чтения —
+ * гидратация приложения не должна падать из-за хранилища.
+ */
+export function safeReadStoredValue(key: string): string | null {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return null;
+    }
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** Безопасное чтение и разбор v7-состояния (битый JSON/ошибка чтения → null). */
+export function safeReadStoredState(key: string): PrototypeState | null {
+  return parseStoredState(safeReadStoredValue(key));
+}
+
+/** Безопасное чтение самого свежего доступного legacy-состояния (v6…v2). */
+export function readLegacyPrototypeState(): PrototypeState | null {
+  return (
+    parseLegacyStoredState(
+      safeReadStoredValue(LEGACY_V6_PROTOTYPE_STORAGE_KEY),
+    ) ??
+    parseLegacyStoredState(
+      safeReadStoredValue(LEGACY_V5_PROTOTYPE_STORAGE_KEY),
+    ) ??
+    parseLegacyStoredState(
+      safeReadStoredValue(LEGACY_V4_PROTOTYPE_STORAGE_KEY),
+    ) ??
+    parseLegacyStoredState(
+      safeReadStoredValue(LEGACY_V3_PROTOTYPE_STORAGE_KEY),
+    ) ??
+    parseLegacyStoredState(safeReadStoredValue(LEGACY_V2_PROTOTYPE_STORAGE_KEY))
+  );
+}
+
+export interface BootstrapResolution {
+  /** Состояние, которое вкладка должна принять локально. */
+  state: PrototypeState;
+  /** Нужно ли записать выбранное состояние в v7 (только при отсутствии v7). */
+  shouldPersist: boolean;
+}
+
+/**
+ * Исправление 1.1: чистое решение bootstrap. Вызывается под Web Lock с ЗАНОВО
+ * прочитанными значениями (никаких snapshot'ов до lock):
+ * 1) существующий валидный v7 авторитетен — legacy НЕ записывается, v7
+ *    принимается локально только если он свежее текущего локального состояния
+ *    (например, уже принятого из BroadcastChannel);
+ * 2) без v7 выбирается самое свежее из legacy и локального состояния; пока
+ *    локальное — нетронутый initial default, приоритет у legacy (у старых
+ *    версий revision мог отсутствовать и парситься как 0);
+ * 3) без v7 и без legacy ничего не записывается.
+ */
+export function resolveBootstrapState({
+  freshV7State,
+  legacyState,
+  localState,
+  localIsInitial,
+}: {
+  freshV7State: PrototypeState | null;
+  legacyState: PrototypeState | null;
+  localState: PrototypeState;
+  localIsInitial: boolean;
+}): BootstrapResolution {
+  if (freshV7State) {
+    return {
+      state: isNewerState(freshV7State, localState) ? freshV7State : localState,
+      shouldPersist: false,
+    };
+  }
+  if (legacyState) {
+    const preferLegacy =
+      localIsInitial || isNewerState(legacyState, localState);
+    return {
+      state: preferLegacy ? legacyState : localState,
+      shouldPersist: true,
+    };
+  }
+  return { state: localState, shouldPersist: false };
+}
+
 /** Русская fail-closed ошибка при недоступном Web Locks API. */
 export const SAFE_TAB_SYNC_UNAVAILABLE_ERROR =
   "Безопасная синхронизация вкладок недоступна в этом браузере.";

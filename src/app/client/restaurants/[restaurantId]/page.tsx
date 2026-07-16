@@ -9,6 +9,8 @@ import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { ClientRestaurantSchedule } from "@/components/order-flow/client-restaurant-schedule";
 import { useClientAddressConfirmation } from "@/components/order-flow/client-address-confirmation";
 import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
+import { addItemFeedbackMessage } from "@/components/util/mutation-feedback";
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -25,7 +27,14 @@ import { shouldAutoConfirmAddress } from "@/prototype/pricing-engine";
 
 export default function ClientRestaurantPage() {
   const params = useParams<{ restaurantId: string }>();
-  const { state, addItem, setItemQuantity } = usePrototype();
+  const { state, addItem, setItemQuantity: setItemQuantityAck } =
+    usePrototype();
+  // Исправление 5.7/6: изменение количества — через guard с русской ошибкой;
+  // добавление — через структурированный результат (см. addItemFeedbackMessage).
+  const { error: cartMutationError, run: runCartMutation } = useMutationGuard();
+  const setItemQuantity = (
+    ...args: Parameters<typeof setItemQuantityAck>
+  ) => runCartMutation(setItemQuantityAck(...args));
   const { isAddressConfirmed, confirmAddress } = useClientAddressConfirmation();
   const { notifyItemAdded } = useClientCartUi();
   const [feedback, setFeedback] = useState("");
@@ -80,15 +89,11 @@ export default function ClientRestaurantPage() {
   const checkoutHref = "/client/cart#checkout-cart";
   const checkoutLabel = "Перейти к оформлению";
 
-  const getAddFeedback = (result: Awaited<ReturnType<typeof addItem>>) => {
-    if (result === "ADDED") {
-      return "Блюдо добавлено в корзину.";
-    }
-    if (result === "RESTAURANT_UNAVAILABLE") {
-      return "Ресторан сейчас не принимает заказы. Выберите другой ресторан или повторите позже.";
-    }
-    return "Блюдо сейчас недоступно.";
-  };
+  // Исправление 6: сообщение строится по конкретному статусу (в т.ч.
+  // инфраструктурному SYNC_UNAVAILABLE/SAVE_FAILED) — без маскировки под
+  // «блюдо недоступно» и без предложения очистить корзину.
+  const getAddFeedback = (result: Awaited<ReturnType<typeof addItem>>) =>
+    addItemFeedbackMessage(result) ?? "";
 
   const handleAdd = async (
     menuItemId: string,
@@ -170,6 +175,11 @@ export default function ClientRestaurantPage() {
       <p className={flowStyles.feedback} aria-live="polite">
         {feedback}
       </p>
+      {cartMutationError ? (
+        <div className={flowStyles.warningNotice} role="alert">
+          {cartMutationError}
+        </div>
+      ) : null}
 
       <div className={flowStyles.menuList}>
         {menuItems.map((menuItem) => {
