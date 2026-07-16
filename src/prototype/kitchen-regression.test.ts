@@ -22,17 +22,31 @@ import {
   RESTAURANT_RESPONSE_TIMEOUT_MS,
 } from "./actions.ts";
 import { getPickupNoShowEligibleAtIso } from "./selectors.ts";
-import type { Order, PrototypeState, RestaurantOrderWorkflowMode } from "./models.ts";
+import type {
+  Order,
+  OrderHistoryEvent,
+  PrototypeState,
+  RestaurantOrderWorkflowMode,
+} from "./models.ts";
 
 /**
  * Сквозной regression кухонного lifecycle без React: каждая проверка проходит
- * ПОСЛЕДОВАТЕЛЬНОСТЬ состояний целиком и подтверждает ключевые инварианты
- * (финансы, settlement, история, роли, revision, идемпотентность). Отдельные
- * граничные случаи уже покрыты unit-тестами соседних файлов и здесь не
- * дублируются — тут проверяется именно связка шагов.
+ * последовательность состояний целиком и подтверждает КАЖДЫЙ переход отдельно
+ * (revision, история, тип/границы/роль события, финансы, settlement), а не
+ * только итог. Отдельные граничные случаи уже покрыты unit-тестами соседних
+ * файлов и здесь не дублируются — тут проверяется именно связка шагов.
+ *
+ * Время: заказы создаются реальным `new Date()`, поэтому любой явный nowIso
+ * вычисляется от фактического предыдущего состояния через afterIso(). Жёстких
+ * дат нет: с ними тест записывал paidAt на двое суток РАНЬШЕ createdAt (домен
+ * такую хронологию не валидирует, но проверка обязана быть достоверной).
  */
 
-/** Ресторан 2 — DIRECT-доставка, 3 — собственный курьер ресторана. */
+/** Момент строго позже переданного (по умолчанию +1 секунда). */
+function afterIso(iso: string, milliseconds = 1_000): string {
+  return new Date(Date.parse(iso) + milliseconds).toISOString();
+}
+
 function stateWithMode(
   restaurantId: string,
   mode: RestaurantOrderWorkflowMode,
@@ -46,6 +60,7 @@ function stateWithMode(
   };
 }
 
+/** Ресторан 2 — доставка Direct, 3 — собственный курьер ресторана. */
 function makeOrder(
   restaurantId: string,
   fulfillment: "PICKUP" | "DELIVERY",
@@ -70,73 +85,152 @@ function getOrder(state: PrototypeState, orderId: string): Order {
   return o;
 }
 
-/** Снимок инвариантов, которые кухня не имеет права менять. */
-function snapshot(state: PrototypeState, orderId: string) {
+/** Инварианты, которые ни одно кухонное действие не имеет права менять. */
+function invariantsOf(state: PrototypeState, orderId: string) {
   const o = getOrder(state, orderId);
   return {
     financials: JSON.stringify(o.financials),
+    items: JSON.stringify(o.items),
     settlements: state.settlements.length,
     revision: state.revision,
     history: o.history.length,
-    items: JSON.stringify(o.items),
   };
+}
+
+/**
+ * Проверка одного успешного перехода: ревизия +1, ожидаемое число новых
+ * событий, у последнего события — верные тип/границы/роль, состав и финансовый
+ * снимок не тронуты. Возвращает добавленные события для точечных проверок.
+ */
+function expectStep(
+  prevState: PrototypeState,
+  nextState: PrototypeState,
+  orderId: string,
+  expected: {
+    from: Order["status"];
+    to: Order["status"];
+    type: OrderHistoryEvent["type"];
+    role?: OrderHistoryEvent["restaurantWorkspaceRole"];
+    actor?: OrderHistoryEvent["actor"];
+    events?: number;
+  },
+): OrderHistoryEvent[] {
+  const before = invariantsOf(prevState, orderId);
+  const order = getOrder(nextState, orderId);
+  const addedCount = expected.events ?? 1;
+
+  assert.equal(order.status, expected.to, "итоговый статус шага");
+  assert.equal(nextState.revision, before.revision + 1, "ревизия +1 за шаг");
+  assert.equal(
+    order.history.length,
+    before.history + addedCount,
+    "число новых событий шага",
+  );
+
+  const added = order.history.slice(before.history);
+  const last = added.at(-1) as OrderHistoryEvent;
+  assert.equal(last.type, expected.type);
+  assert.equal(last.fromStatus, expected.from);
+  assert.equal(last.toStatus, expected.to);
+  assert.equal(last.restaurantWorkspaceRole, expected.role);
+  if (expected.actor) assert.equal(last.actor, expected.actor);
+
+  // Кухонный шаг не пересчитывает финансы и не меняет состав заказа.
+  assert.equal(JSON.stringify(order.financials), before.financials);
+  assert.equal(JSON.stringify(order.items), before.items);
+  return added;
+}
+
+/** Отказ домена: тот же объект state, без ревизии, событий и начислений. */
+function expectRejected(
+  prevState: PrototypeState,
+  result: { state: PrototypeState; result: { ok: boolean } },
+  orderId: string,
+): void {
+  const before = invariantsOf(prevState, orderId);
+  assert.equal(result.result.ok, false);
+  assert.equal(result.state, prevState, "state возвращается тем же объектом");
+  assert.equal(result.state.revision, before.revision);
+  assert.equal(getOrder(result.state, orderId).history.length, before.history);
+  assert.equal(result.state.settlements.length, before.settlements);
 }
 
 test("Regression 1: COMBINED PICKUP — приём → готовность → выдача по коду", () => {
   const { state, orderId } = makeOrder("restaurant-2", "PICKUP");
-  const base = snapshot(state, orderId);
   const created = getOrder(state, orderId);
+  const baseFinancials = JSON.stringify(created.financials);
   assert.equal(created.status, "RESTAURANT_REVIEW");
   assert.equal(created.paymentMethod, "PAY_AT_RESTAURANT");
   assert.equal(created.paymentStatus, "DUE_AT_PICKUP");
   assert.ok(created.pickupCode);
   assert.equal(created.pickupCodeUsed, false);
+  assert.equal(state.settlements.length, 0);
+  assert.equal(state.orders.filter((o) => o.id === orderId).length, 1);
 
-  // Приём: PICKUP сразу в PREPARING, время приготовления зафиксировано.
+  // Шаг 1 — приём: PICKUP сразу в PREPARING.
   const accepted = acceptRestaurantOrderWithResult(state, orderId, 20, "RESTAURANT", "COMBINED");
   assert.equal(accepted.result.ok, true);
+  expectStep(state, accepted.state, orderId, {
+    from: "RESTAURANT_REVIEW", to: "PREPARING", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT",
+  });
   const prep = getOrder(accepted.state, orderId);
-  assert.equal(prep.status, "PREPARING");
   assert.equal(prep.preparationMinutes, 20);
   assert.ok(prep.expectedReadyAt);
-  assert.equal(accepted.state.revision, base.revision + 1);
+  assert.equal(accepted.state.settlements.length, 0);
 
-  // Готовность: PICKUP уходит в READY_FOR_PICKUP, код не тронут.
+  // Шаг 2 — готовность: код и ожидаемое время не трогаются.
   const ready = markOrderReadyWithResult(accepted.state, orderId, "RESTAURANT", "COMBINED");
   assert.equal(ready.result.ok, true);
+  expectStep(accepted.state, ready.state, orderId, {
+    from: "PREPARING", to: "READY_FOR_PICKUP", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT",
+  });
   const readyOrder = getOrder(ready.state, orderId);
-  assert.equal(readyOrder.status, "READY_FOR_PICKUP");
   assert.equal(readyOrder.pickupCode, created.pickupCode);
   assert.equal(readyOrder.pickupCodeUsed, false);
+  assert.equal(readyOrder.expectedReadyAt, prep.expectedReadyAt);
   assert.equal(ready.state.settlements.length, 0);
 
-  // Выдача по коду: оплата на точке и ровно одно начисление комиссии.
+  // Шаг 3 — выдача: время считается от фактического состояния, не жёсткой датой.
+  const handoffAt = afterIso(readyOrder.updatedAt);
+  assert.ok(Date.parse(handoffAt) > Date.parse(readyOrder.updatedAt));
   const code = readyOrder.pickupCode as string;
-  const done = completePickupWithCode(ready.state, orderId, code, "CARD", "RESTAURANT", "2026-07-14T12:00:00.000Z", "COMBINED");
+  const done = completePickupWithCode(ready.state, orderId, code, "CARD", "RESTAURANT", handoffAt, "COMBINED");
   assert.equal(done.result.ok, true);
+  const added = expectStep(ready.state, done.state, orderId, {
+    from: "READY_FOR_PICKUP", to: "PICKED_UP", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT", events: 2,
+  });
+  // Первое из двух событий — оплата на точке, статус при этом не меняется.
+  assert.equal(added[0].type, "PAYMENT");
+  assert.equal(added[0].fromStatus, "READY_FOR_PICKUP");
+  assert.equal(added[0].toStatus, "READY_FOR_PICKUP");
+  assert.equal(added[0].restaurantWorkspaceRole, "COMBINED");
+
   const final = getOrder(done.state, orderId);
-  assert.equal(final.status, "PICKED_UP");
   assert.equal(final.paymentStatus, "PAID_AT_RESTAURANT");
   assert.equal(final.pickupCodeUsed, true);
   assert.equal(final.pickupPaidWith, "CARD");
-  assert.ok(final.paidAt);
-  // Финансовый снимок неизменен на всём пути; комиссия взята из него.
-  assert.equal(JSON.stringify(final.financials), base.financials);
-  assert.equal(final.financials.deliveryFeeCents, 0);
+  // Хронология: оплата не раньше создания и не раньше готовности.
+  assert.equal(final.paidAt, handoffAt);
+  assert.ok(Date.parse(final.paidAt as string) >= Date.parse(created.createdAt));
+  assert.ok(Date.parse(final.paidAt as string) >= Date.parse(readyOrder.updatedAt));
+  // Комиссия начисляется один раз и берётся из исторического снимка.
   assert.equal(done.state.settlements.length, 1);
   assert.equal(done.state.settlements[0].type, "PICKUP_COMMISSION");
+  assert.equal(done.state.settlements[0].orderId, orderId);
   assert.equal(
     done.state.settlements[0].amountCents,
     created.financials.platformCommissionReceivableCents,
   );
-  // Ровно три шага ревизии на три мутации; один Order.
-  assert.equal(done.state.revision, base.revision + 3);
+  assert.equal(JSON.stringify(final.financials), baseFinancials);
+  assert.equal(final.financials.deliveryFeeCents, 0);
   assert.equal(done.state.orders.filter((o) => o.id === orderId).length, 1);
 
-  // Идемпотентность: повторная выдача не создаёт второе финальное состояние.
-  const again = completePickupWithCode(done.state, orderId, code, "CARD", "RESTAURANT", "2026-07-14T12:05:00.000Z", "COMBINED");
-  assert.equal(again.result.ok, false);
-  assert.equal(again.state, done.state);
+  // Повторная выдача не создаёт второе финальное состояние.
+  const again = completePickupWithCode(done.state, orderId, code, "CARD", "RESTAURANT", afterIso(handoffAt), "COMBINED");
+  expectRejected(done.state, again, orderId);
   assert.equal(again.state.settlements.length, 1);
 });
 
@@ -144,215 +238,286 @@ test("Regression 2: COMBINED PICKUP — невыкуп после 30 минут 
   const { state, orderId } = makeOrder("restaurant-2", "PICKUP");
   const accepted = acceptRestaurantOrderWithResult(state, orderId, 20, "RESTAURANT", "COMBINED").state;
   const ready = markOrderReadyWithResult(accepted, orderId, "RESTAURANT", "COMBINED").state;
-  const before = snapshot(ready, orderId);
   const readyOrder = getOrder(ready, orderId);
+  const baseFinancials = JSON.stringify(readyOrder.financials);
+
+  // Авторитетная временная точка невыкупа — из самого домена.
   const eligibleAt = getPickupNoShowEligibleAtIso(readyOrder) as string;
   assert.ok(eligibleAt);
+  assert.ok(Date.parse(eligibleAt) > Date.parse(readyOrder.updatedAt));
 
   const res = markPickupNoShow(ready, orderId, "Клиент не пришёл", "RESTAURANT", eligibleAt, "COMBINED");
   assert.equal(res.result.ok, true);
+  expectStep(ready, res.state, orderId, {
+    from: "READY_FOR_PICKUP", to: "CANCELED", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT",
+  });
   const o = getOrder(res.state, orderId);
-  assert.equal(o.status, "CANCELED");
-  assert.ok(o.pickupNoShowAt);
+  assert.equal(o.pickupNoShowAt, eligibleAt);
   assert.equal(res.state.customer.noShowPickupCount, ready.customer.noShowPickupCount + 1);
   // Невыкуп не фиксирует оплату и не начисляет комиссию.
   assert.equal(o.paymentStatus, "DUE_AT_PICKUP");
   assert.equal(o.paidAt, null);
   assert.equal(o.pickupPaidWith, null);
   assert.equal(o.pickupCodeUsed, false);
-  assert.equal(JSON.stringify(o.financials), before.financials);
+  assert.equal(JSON.stringify(o.financials), baseFinancials);
   assert.equal(res.state.settlements.length, 0);
-  assert.equal(o.history.length, before.history + 1);
-  assert.equal(o.history.at(-1)?.restaurantWorkspaceRole, "COMBINED");
-  assert.equal(res.state.revision, before.revision + 1);
 
-  // Выдача после невыкупа невозможна.
-  const handoff = completePickupWithCode(res.state, orderId, readyOrder.pickupCode as string, "CASH", "RESTAURANT", eligibleAt, "COMBINED");
-  assert.equal(handoff.result.ok, false);
+  // Выдать заказ после невыкупа нельзя.
+  const handoff = completePickupWithCode(res.state, orderId, readyOrder.pickupCode as string, "CASH", "RESTAURANT", afterIso(eligibleAt), "COMBINED");
+  expectRejected(res.state, handoff, orderId);
   assert.equal(handoff.state.settlements.length, 0);
+  assert.equal(handoff.state.customer.noShowPickupCount, res.state.customer.noShowPickupCount);
 });
 
 test("Regression 3: SPLIT PICKUP — кухня готовит, выдаёт только оператор", () => {
   const { state, orderId } = makeOrder("restaurant-2", "PICKUP", "SPLIT_OPERATOR_KITCHEN");
 
-  // Оператор не принимает и не готовит — это зона кухни.
-  assert.equal(acceptRestaurantOrderWithResult(state, orderId, 20, "RESTAURANT", "OPERATOR").result.ok, false);
+  // Приём — зона кухни: оператор не принимает.
+  expectRejected(state, acceptRestaurantOrderWithResult(state, orderId, 20, "RESTAURANT", "OPERATOR"), orderId);
   const accepted = acceptRestaurantOrderWithResult(state, orderId, 20, "RESTAURANT", "KITCHEN");
   assert.equal(accepted.result.ok, true);
-  assert.equal(accepted.state.orders.find((o) => o.id === orderId)?.history.at(-1)?.restaurantWorkspaceRole, "KITCHEN");
+  expectStep(state, accepted.state, orderId, {
+    from: "RESTAURANT_REVIEW", to: "PREPARING", type: "STATUS",
+    role: "KITCHEN", actor: "RESTAURANT",
+  });
 
-  assert.equal(markOrderReadyWithResult(accepted.state, orderId, "RESTAURANT", "OPERATOR").result.ok, false);
+  // Готовность — тоже зона кухни.
+  expectRejected(accepted.state, markOrderReadyWithResult(accepted.state, orderId, "RESTAURANT", "OPERATOR"), orderId);
   const ready = markOrderReadyWithResult(accepted.state, orderId, "RESTAURANT", "KITCHEN");
   assert.equal(ready.result.ok, true);
-  assert.equal(getOrder(ready.state, orderId).history.at(-1)?.restaurantWorkspaceRole, "KITCHEN");
+  expectStep(accepted.state, ready.state, orderId, {
+    from: "PREPARING", to: "READY_FOR_PICKUP", type: "STATUS",
+    role: "KITCHEN", actor: "RESTAURANT",
+  });
 
-  const code = getOrder(ready.state, orderId).pickupCode as string;
-  const at = "2026-07-14T12:00:00.000Z";
-  // Кухня не выдаёт и не отмечает невыкуп: оба действия — зона оператора.
-  assert.equal(completePickupWithCode(ready.state, orderId, code, "CASH", "RESTAURANT", at, "KITCHEN").result.ok, false);
-  const eligibleAt = getPickupNoShowEligibleAtIso(getOrder(ready.state, orderId)) as string;
-  assert.equal(markPickupNoShow(ready.state, orderId, "Не пришёл", "RESTAURANT", eligibleAt, "KITCHEN").result.ok, false);
-  assert.equal(ready.state.settlements.length, 0);
+  const readyOrder = getOrder(ready.state, orderId);
+  const code = readyOrder.pickupCode as string;
+  const handoffAt = afterIso(readyOrder.updatedAt);
 
-  const done = completePickupWithCode(ready.state, orderId, code, "CASH", "RESTAURANT", at, "OPERATOR");
+  // Выдача и невыкуп кухне недоступны — это зона оператора.
+  expectRejected(ready.state, completePickupWithCode(ready.state, orderId, code, "CASH", "RESTAURANT", handoffAt, "KITCHEN"), orderId);
+  const eligibleAt = getPickupNoShowEligibleAtIso(readyOrder) as string;
+  expectRejected(ready.state, markPickupNoShow(ready.state, orderId, "Не пришёл", "RESTAURANT", eligibleAt, "KITCHEN"), orderId);
+
+  const done = completePickupWithCode(ready.state, orderId, code, "CASH", "RESTAURANT", handoffAt, "OPERATOR");
   assert.equal(done.result.ok, true);
-  const final = getOrder(done.state, orderId);
-  assert.equal(final.status, "PICKED_UP");
-  // Роли шагов: приготовление — KITCHEN, выдача — OPERATOR.
-  const added = final.history.slice(getOrder(ready.state, orderId).history.length);
+  const added = expectStep(ready.state, done.state, orderId, {
+    from: "READY_FOR_PICKUP", to: "PICKED_UP", type: "STATUS",
+    role: "OPERATOR", actor: "RESTAURANT", events: 2,
+  });
+  assert.equal(added[0].type, "PAYMENT");
   added.forEach((e) => assert.equal(e.restaurantWorkspaceRole, "OPERATOR"));
+  const final = getOrder(done.state, orderId);
+  assert.equal(final.paidAt, handoffAt);
+  assert.ok(Date.parse(final.paidAt as string) >= Date.parse(readyOrder.updatedAt));
   assert.equal(done.state.settlements.length, 1);
+  assert.equal(done.state.settlements[0].type, "PICKUP_COMMISSION");
 });
 
 test("Regression 4: RESTAURANT_DELIVERY — полная цепочка до DELIVERED", () => {
   const { state, orderId } = makeOrder("restaurant-3", "DELIVERY");
-  const base = snapshot(state, orderId);
-  assert.equal(getOrder(state, orderId).deliveryMode, "RESTAURANT_DELIVERY");
+  const created = getOrder(state, orderId);
+  const baseFinancials = JSON.stringify(created.financials);
+  assert.equal(created.deliveryMode, "RESTAURANT_DELIVERY");
 
-  const accepted = acceptRestaurantOrderWithResult(state, orderId, 30, "RESTAURANT", "COMBINED").state;
-  const prepOrder = getOrder(accepted, orderId);
-  assert.equal(prepOrder.status, "PREPARING");
-  assert.ok(prepOrder.expectedReadyAt);
+  const accepted = acceptRestaurantOrderWithResult(state, orderId, 30, "RESTAURANT", "COMBINED");
+  assert.equal(accepted.result.ok, true);
+  expectStep(state, accepted.state, orderId, {
+    from: "RESTAURANT_REVIEW", to: "PREPARING", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT",
+  });
+  assert.ok(getOrder(accepted.state, orderId).expectedReadyAt);
 
-  // Готовность курьерского заказа — READY (не READY_FOR_PICKUP).
-  const ready = markOrderReadyWithResult(accepted, orderId, "RESTAURANT", "COMBINED");
+  // Курьерский заказ готов — READY (не READY_FOR_PICKUP).
+  const ready = markOrderReadyWithResult(accepted.state, orderId, "RESTAURANT", "COMBINED");
   assert.equal(ready.result.ok, true);
-  assert.equal(getOrder(ready.state, orderId).status, "READY");
+  expectStep(accepted.state, ready.state, orderId, {
+    from: "PREPARING", to: "READY", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT",
+  });
   assert.equal(ready.state.settlements.length, 0);
 
   const out = markOrderOutForDeliveryWithResult(ready.state, orderId, "RESTAURANT", "COMBINED");
   assert.equal(out.result.ok, true);
-  assert.equal(getOrder(out.state, orderId).status, "OUT_FOR_DELIVERY");
+  expectStep(ready.state, out.state, orderId, {
+    from: "READY", to: "OUT_FOR_DELIVERY", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT",
+  });
+  assert.equal(out.state.settlements.length, 0);
+
   const arriving = markOrderArrivingWithResult(out.state, orderId, "RESTAURANT", "COMBINED");
   assert.equal(arriving.result.ok, true);
+  expectStep(out.state, arriving.state, orderId, {
+    from: "OUT_FOR_DELIVERY", to: "ARRIVING", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT",
+  });
+  assert.equal(arriving.state.settlements.length, 0);
+
+  // Доставка: оплата курьеру + переход, комиссия начисляется один раз.
   const delivered = markOrderDeliveredWithResult(arriving.state, orderId, "RESTAURANT", "COMBINED");
   assert.equal(delivered.result.ok, true);
-
+  const added = expectStep(arriving.state, delivered.state, orderId, {
+    from: "ARRIVING", to: "DELIVERED", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT", events: 2,
+  });
+  assert.equal(added[0].type, "PAYMENT");
   const final = getOrder(delivered.state, orderId);
-  assert.equal(final.status, "DELIVERED");
-  // Ровно одно начисление комиссии за доставку, снимок не пересчитан.
   const settlements = delivered.state.settlements.filter((s) => s.orderId === orderId);
   assert.equal(settlements.length, 1);
   assert.equal(settlements[0].type, "RESTAURANT_DELIVERY_COMMISSION");
-  assert.equal(JSON.stringify(final.financials), base.financials);
+  assert.equal(
+    settlements[0].amountCents,
+    created.financials.platformCommissionReceivableCents,
+  );
+  assert.equal(JSON.stringify(final.financials), baseFinancials);
 
-  // Повторная доставка не создаёт второй settlement.
   const again = markOrderDeliveredWithResult(delivered.state, orderId, "RESTAURANT", "COMBINED");
-  assert.equal(again.result.ok, false);
-  assert.equal(again.state, delivered.state);
+  expectRejected(delivered.state, again, orderId);
   assert.equal(again.state.settlements.filter((s) => s.orderId === orderId).length, 1);
 });
 
 test("Regression 5: PLATFORM_DRIVER — оплата, приготовление, READY без водителя", () => {
   const { state, orderId } = makeOrder("restaurant-2", "DELIVERY");
-  const base = snapshot(state, orderId);
-  assert.equal(getOrder(state, orderId).deliveryMode, "PLATFORM_DRIVER");
+  const created = getOrder(state, orderId);
+  const baseFinancials = JSON.stringify(created.financials);
+  assert.equal(created.deliveryMode, "PLATFORM_DRIVER");
 
-  // После приёма онлайн-заказ ждёт оплату; кухня сама её не подтверждает.
-  const accepted = acceptRestaurantOrderWithResult(state, orderId, 25, "RESTAURANT", "COMBINED").state;
-  const awaiting = getOrder(accepted, orderId);
-  assert.equal(awaiting.status, "AWAITING_PAYMENT");
-  assert.equal(awaiting.paymentStatus, "AWAITING_PAYMENT");
-  // Готовность до оплаты недопустима.
-  assert.equal(markOrderReadyWithResult(accepted, orderId, "RESTAURANT", "COMBINED").result.ok, false);
+  // Онлайн-заказ после приёма ждёт оплату.
+  const accepted = acceptRestaurantOrderWithResult(state, orderId, 25, "RESTAURANT", "COMBINED");
+  assert.equal(accepted.result.ok, true);
+  expectStep(state, accepted.state, orderId, {
+    from: "RESTAURANT_REVIEW", to: "AWAITING_PAYMENT", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT",
+  });
+  assert.equal(getOrder(accepted.state, orderId).paymentStatus, "AWAITING_PAYMENT");
+  // Кухня не может отметить готовность до оплаты.
+  expectRejected(accepted.state, markOrderReadyWithResult(accepted.state, orderId, "RESTAURANT", "COMBINED"), orderId);
 
-  const paid = simulateSuccessfulOnlinePaymentWithResult(accepted, orderId);
+  // Оплату подтверждает система: два события SYSTEM без ресторанной роли.
+  const paid = simulateSuccessfulOnlinePaymentWithResult(accepted.state, orderId);
   assert.equal(paid.result.ok, true);
+  const paidAdded = expectStep(accepted.state, paid.state, orderId, {
+    from: "AWAITING_PAYMENT", to: "PREPARING", type: "STATUS",
+    role: undefined, actor: "SYSTEM", events: 2,
+  });
+  assert.equal(paidAdded[0].type, "PAYMENT");
+  assert.equal(paidAdded[0].actor, "SYSTEM");
+  assert.equal(paidAdded[0].restaurantWorkspaceRole, undefined);
   const prep = getOrder(paid.state, orderId);
-  assert.equal(prep.status, "PREPARING");
   assert.equal(prep.paymentStatus, "PAID");
   assert.ok(prep.expectedReadyAt);
 
+  // Готовность кухни: водитель не появляется, комиссия не начисляется.
   const ready = markOrderReadyWithResult(paid.state, orderId, "RESTAURANT", "COMBINED");
   assert.equal(ready.result.ok, true);
+  expectStep(paid.state, ready.state, orderId, {
+    from: "PREPARING", to: "READY", type: "STATUS",
+    role: "COMBINED", actor: "RESTAURANT",
+  });
   const readyOrder = getOrder(ready.state, orderId);
-  assert.equal(readyOrder.status, "READY");
-  // Кухня не назначает водителя и не отправляет заказ в путь.
   assert.equal(readyOrder.assignedDriverId, null);
-  assert.equal(
-    markOrderOutForDeliveryWithResult(ready.state, orderId, "RESTAURANT", "COMBINED").result.ok,
-    false,
-  );
-  // Водителя назначает администратор — только после этого возможен выезд.
+  assert.equal(ready.state.settlements.length, 0);
+  assert.equal(JSON.stringify(readyOrder.financials), baseFinancials);
+
+  // Без назначенного водителя выезд невозможен.
+  expectRejected(ready.state, markOrderOutForDeliveryWithResult(ready.state, orderId, "RESTAURANT", "COMBINED"), orderId);
+  // Назначение — административное действие; после него переход разрешён.
   const assigned = assignDriverToOrder(ready.state, orderId, "driver-1");
   assert.equal(assigned.result.ok, true);
   assert.equal(
     markOrderOutForDeliveryWithResult(assigned.state, orderId, "RESTAURANT", "COMBINED").result.ok,
     true,
   );
-  assert.equal(JSON.stringify(getOrder(ready.state, orderId).financials), base.financials);
-  assert.equal(ready.state.settlements.length, 0);
 });
 
 test("Regression 6: ETA — корректировка не трогает статус, финансы и оплату", () => {
   const { state, orderId } = makeOrder("restaurant-2", "PICKUP", "SPLIT_OPERATOR_KITCHEN");
   const accepted = acceptRestaurantOrderWithResult(state, orderId, 20, "RESTAURANT", "KITCHEN").state;
-  const before = snapshot(accepted, orderId);
   const prep = getOrder(accepted, orderId);
-  const now = new Date().toISOString();
+  const baseSettlements = accepted.settlements.length;
 
-  const res = adjustOrderEtaFromIntent(accepted, orderId, { kind: "DELAY", minutes: 10 }, "Кухня перегружена", "RESTAURANT", now, "KITCHEN");
+  // nowIso не раньше updatedAt принятого заказа.
+  const nowIso = afterIso(prep.updatedAt);
+  assert.ok(Date.parse(nowIso) >= Date.parse(prep.updatedAt));
+
+  const res = adjustOrderEtaFromIntent(accepted, orderId, { kind: "DELAY", minutes: 10 }, "Кухня перегружена", "RESTAURANT", nowIso, "KITCHEN");
   assert.equal(res.result.ok, true);
+  const added = expectStep(accepted, res.state, orderId, {
+    from: "PREPARING", to: "PREPARING", type: "ETA",
+    role: "KITCHEN", actor: "RESTAURANT",
+  });
+  assert.equal(added[0].occurredAt, nowIso);
+  assert.ok(added[0].message.includes("Кухня перегружена"));
+
   const o = getOrder(res.state, orderId);
-  assert.equal(o.status, "PREPARING");
   assert.equal(o.preparationMinutes, prep.preparationMinutes);
   assert.notEqual(o.expectedReadyAt, prep.expectedReadyAt);
+  assert.ok(Date.parse(o.expectedReadyAt as string) > Date.parse(nowIso));
+  // Ровно одна запись аудита с корректными границами времени.
   assert.equal(o.etaAdjustments.length, prep.etaAdjustments.length + 1);
-  assert.equal(o.history.length, before.history + 1);
-  assert.equal(o.history.at(-1)?.type, "ETA");
-  assert.equal(o.history.at(-1)?.restaurantWorkspaceRole, "KITCHEN");
-  assert.equal(res.state.revision, before.revision + 1);
-  assert.equal(JSON.stringify(o.financials), before.financials);
-  assert.equal(res.state.settlements.length, before.settlements);
-  assert.equal(o.assignedDriverId, null);
+  const adj = o.etaAdjustments.at(-1);
+  assert.equal(adj?.previousExpectedReadyAt, prep.expectedReadyAt);
+  assert.equal(adj?.nextExpectedReadyAt, o.expectedReadyAt);
+  assert.equal(adj?.reason, "Кухня перегружена");
+  assert.equal(adj?.restaurantWorkspaceRole, "KITCHEN");
+  // Оплата, водитель и начисления не затрагиваются.
   assert.equal(o.paymentStatus, prep.paymentStatus);
+  assert.equal(o.paidAt, prep.paidAt);
+  assert.equal(o.assignedDriverId, null);
+  assert.equal(res.state.settlements.length, baseSettlements);
 });
 
 test("Regression 7: проблема приготовления не меняет заказ и не отменяет его", () => {
   const { state, orderId } = makeOrder("restaurant-2", "PICKUP", "SPLIT_OPERATOR_KITCHEN");
   const accepted = acceptRestaurantOrderWithResult(state, orderId, 20, "RESTAURANT", "KITCHEN").state;
-  const before = snapshot(accepted, orderId);
   const prep = getOrder(accepted, orderId);
-  const now = new Date().toISOString();
+  const baseSettlements = accepted.settlements.length;
+  const nowIso = afterIso(prep.updatedAt);
 
-  const res = reportRestaurantPreparationProblem(accepted, orderId, "Закончился ингредиент", "RESTAURANT", now, "KITCHEN");
+  const res = reportRestaurantPreparationProblem(accepted, orderId, "Закончился ингредиент", "RESTAURANT", nowIso, "KITCHEN");
   assert.equal(res.result.ok, true);
+  const added = expectStep(accepted, res.state, orderId, {
+    from: "PREPARING", to: "PREPARING", type: "PREPARATION_PROBLEM",
+    role: "KITCHEN", actor: "RESTAURANT",
+  });
+  assert.ok(added[0].message.includes("Закончился ингредиент"));
+
+  // Заказ продолжает готовиться: время, оплата и начисления не тронуты.
   const o = getOrder(res.state, orderId);
-  // Заказ продолжает готовиться: статус, время и оплата не тронуты.
-  assert.equal(o.status, "PREPARING");
   assert.equal(o.expectedReadyAt, prep.expectedReadyAt);
+  assert.equal(o.preparationMinutes, prep.preparationMinutes);
   assert.equal(o.paymentStatus, prep.paymentStatus);
-  assert.equal(JSON.stringify(o.financials), before.financials);
-  assert.equal(res.state.settlements.length, before.settlements);
-  assert.equal(o.history.length, before.history + 1);
-  assert.equal(o.history.at(-1)?.type, "PREPARATION_PROBLEM");
-  assert.equal(o.history.at(-1)?.restaurantWorkspaceRole, "KITCHEN");
-  assert.equal(res.state.revision, before.revision + 1);
+  assert.equal(o.paidAt, prep.paidAt);
+  assert.equal(res.state.settlements.length, baseSettlements);
 });
 
-test("Regression 8: авто-закрытие нового заказа через 7 минут и его идемпотентность", () => {
+test("Regression 8: авто-закрытие нового заказа на пороге 7 минут и его идемпотентность", () => {
   const { state, orderId } = makeOrder("restaurant-2", "PICKUP");
   const created = getOrder(state, orderId);
-  const base = snapshot(state, orderId);
-  const justBefore = new Date(Date.parse(created.createdAt) + RESTAURANT_RESPONSE_TIMEOUT_MS - 1000).toISOString();
-  const past = new Date(Date.parse(created.createdAt) + RESTAURANT_RESPONSE_TIMEOUT_MS + 1000).toISOString();
+  const baseFinancials = JSON.stringify(created.financials);
+  const threshold = new Date(Date.parse(created.createdAt) + RESTAURANT_RESPONSE_TIMEOUT_MS).toISOString();
 
-  // До порога заказ не трогается (тот же объект state).
+  // До порога заказ не трогается — тот же объект state.
+  const justBefore = new Date(Date.parse(threshold) - 1000).toISOString();
   assert.equal(expireUnansweredRestaurantOrders(state, justBefore), state);
 
-  const expired = expireUnansweredRestaurantOrders(state, past);
+  // На точном пороге срабатывает штатное автозакрытие системой.
+  const expired = expireUnansweredRestaurantOrders(state, threshold);
+  expectStep(state, expired, orderId, {
+    from: "RESTAURANT_REVIEW", to: "CANCELED", type: "STATUS",
+    role: undefined, actor: "SYSTEM",
+  });
   const o = getOrder(expired, orderId);
-  assert.equal(o.status, "CANCELED");
-  assert.equal(expired.revision, base.revision + 1);
-  assert.equal(o.history.length, base.history + 1);
   assert.equal(expired.settlements.length, 0);
-  assert.equal(JSON.stringify(o.financials), base.financials);
+  assert.equal(JSON.stringify(o.financials), baseFinancials);
 
   // Повторный sweep не создаёт вторую отмену.
-  const second = expireUnansweredRestaurantOrders(expired, past);
+  const second = expireUnansweredRestaurantOrders(expired, afterIso(threshold));
   assert.equal(second, expired);
-  assert.equal(getOrder(second, orderId).history.length, base.history + 1);
+  assert.equal(getOrder(second, orderId).history.length, o.history.length);
+  assert.equal(second.revision, expired.revision);
 
-  // Принять автозакрытый заказ нельзя.
-  assert.equal(acceptRestaurantOrderWithResult(expired, orderId, 20, "RESTAURANT", "COMBINED").result.ok, false);
+  // Автозакрытый заказ принять нельзя.
+  expectRejected(expired, acceptRestaurantOrderWithResult(expired, orderId, 20, "RESTAURANT", "COMBINED"), orderId);
 });
