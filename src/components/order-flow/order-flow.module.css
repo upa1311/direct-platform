@@ -302,7 +302,9 @@
 
 /* Спокойная inline-подача акции: без фона, рамки, капсулы, тени и padding. */
 .promoInline {
-  display: inline-flex;
+  /* Блочный flex: акция всегда начинается с новой строки и не приклеивается
+     к статусу ресторана; ширина остаётся по содержимому. */
+  display: flex;
   align-items: center;
   gap: 7px;
   width: fit-content;
@@ -706,8 +708,11 @@
   margin: 0;
   padding: 0;
   border: 0;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* Компактная группа по содержимому: кнопки одинаковой ширины (по более
+     длинной подписи), без растягивания на всю колонку. */
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: fit-content;
   gap: 8px;
 }
 
@@ -838,6 +843,42 @@
 }
 
 .catalogHeadingRow .field { min-width: 220px; }
+
+/* Компактный блок «Сортировка» в каталоге: небольшой элемент управления,
+   а не крупная карточка. Составные селекторы перебивают общие правила
+   `.field select`/`.field > span`, идущие ниже по файлу. Логика сортировки
+   не затрагивается. */
+.field.catalogSortField {
+  gap: 4px;
+}
+
+.field.catalogSortField > span {
+  font-size: 12px;
+}
+
+.field.catalogSortField select {
+  min-height: 40px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+@media (max-width: 768px) {
+  .field.catalogSortField {
+    gap: 3px;
+  }
+
+  .field.catalogSortField > span {
+    font-size: 11px;
+  }
+
+  .field.catalogSortField select {
+    /* Область нажатия сохраняется (~40–44px), отступы и текст меньше. */
+    min-height: 40px;
+    padding: 6px 9px;
+    font-size: 13px;
+  }
+}
 
 .checkoutHeading {
   margin-bottom: 28px;
@@ -1238,6 +1279,28 @@
   border: 1px solid #ead3b8;
   background: #fff8ef;
   color: #744a1c;
+}
+
+/* Компактная строка «Заказ получен.» — без плашки, рамки и фона.
+   p-селектор — чтобы перебить контейнерные стили абзацев страницы заказа. */
+p.pickupReceivedLine {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  margin: 16px 0 0;
+  color: #2f7d46;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.pickupReceivedLine::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2f7d46;
 }
 
 .paymentOptions {

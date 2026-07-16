@@ -32,6 +32,7 @@ import type {
 import {
   formatClock24,
   formatKitchenCountdown,
+  formatKitchenDuration,
   formatMoney,
   getAudibleKitchenReviewOrders,
   getCancellationRequestForOrder,
@@ -127,12 +128,12 @@ function etaClock(iso: string | null, timeZone: string): string {
   return formatClock24(iso, timeZone || "Europe/Chisinau");
 }
 
-/** Сколько времени прошло с момента `fromIso`. */
+/** Сколько времени прошло с момента `fromIso` («32 мин», «1 ч 17 мин»). */
 function formatElapsed(fromIso: string, nowMs: number): string {
   if (nowMs === 0) return "—";
   const diffMs = Math.max(0, nowMs - Date.parse(fromIso));
   const min = Math.floor(diffMs / 60_000);
-  if (min >= 1) return `${min} мин`;
+  if (min >= 1) return formatKitchenDuration(min);
   const sec = Math.floor(diffMs / 1000);
   return `${sec} сек`;
 }

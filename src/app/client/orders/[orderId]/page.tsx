@@ -42,10 +42,11 @@ function isPickupNoShow(order: Order): boolean {
  */
 function ClientPickupBlock({ order }: { order: Order }) {
   if (order.status === "PICKED_UP" || order.pickupCodeUsed) {
+    // Спокойная компактная строка вместо крупной зелёной плашки.
     return (
-      <div className={flowStyles.successNotice} role="status">
+      <p className={flowStyles.pickupReceivedLine} role="status">
         Заказ получен.
-      </div>
+      </p>
     );
   }
   if (isPickupNoShow(order)) {

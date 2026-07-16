@@ -14,6 +14,7 @@ import {
 import {
   formatExpectedReady,
   formatKitchenCountdown,
+  formatKitchenDuration,
   getKitchenAwaitingPaymentOrders,
   getKitchenNewOrders,
   getKitchenPreparingOrders,
@@ -442,4 +443,29 @@ test("formatKitchenCountdown: просрочка увеличивается по
   // На 7 минут позже — просрочка растёт.
   const late7 = formatKitchenCountdown(expected, t("2026-07-13T10:07:00.000Z"));
   assert.equal(late7.text, "Просрочено на 7 мин");
+});
+
+test("formatKitchenDuration: минуты и часы в человекочитаемом виде", () => {
+  assert.equal(formatKitchenDuration(1), "1 мин");
+  assert.equal(formatKitchenDuration(32), "32 мин");
+  assert.equal(formatKitchenDuration(59), "59 мин");
+  // Ровно час — без «0 мин».
+  assert.equal(formatKitchenDuration(60), "1 ч");
+  assert.equal(formatKitchenDuration(77), "1 ч 17 мин");
+  assert.equal(formatKitchenDuration(120), "2 ч");
+  assert.equal(formatKitchenDuration(125), "2 ч 5 мин");
+  // Защитные случаи: не время из будущего и не дробные минуты.
+  assert.equal(formatKitchenDuration(0), "0 мин");
+  assert.equal(formatKitchenDuration(-5), "0 мин");
+  assert.equal(formatKitchenDuration(65.9), "1 ч 5 мин");
+});
+
+test("formatKitchenCountdown: просрочка больше часа — «1 ч 17 мин»", () => {
+  const expected = "2026-07-13T10:00:00.000Z";
+  const t = (iso: string) => Date.parse(iso);
+  const late77 = formatKitchenCountdown(expected, t("2026-07-13T11:17:00.000Z"));
+  assert.equal(late77.overdue, true);
+  assert.equal(late77.text, "Просрочено на 1 ч 17 мин");
+  const late60 = formatKitchenCountdown(expected, t("2026-07-13T11:00:00.000Z"));
+  assert.equal(late60.text, "Просрочено на 1 ч");
 });

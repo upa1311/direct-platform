@@ -93,6 +93,25 @@ test("выдача по коду: paymentStatus PAID_AT_RESTAURANT", () => {
   assert.equal(getOrder(res.state, orderId).paymentStatus, "PAID_AT_RESTAURANT");
 });
 
+test("COMBINED-выдача: оба события несут роль COMBINED, snapshot и Order не тронуты", () => {
+  const { state, orderId, code } = makeReadyPickup();
+  const finBefore = JSON.stringify(getOrder(state, orderId).financials);
+  const res = completePickupWithCode(state, orderId, code, "CASH", "RESTAURANT", NOW);
+  assert.equal(res.result.ok, true);
+  const order = getOrder(res.state, orderId);
+  const [paymentEv, statusEv] = order.history.slice(-2);
+  assert.equal(paymentEv.type, "PAYMENT");
+  assert.equal(paymentEv.restaurantWorkspaceRole, "COMBINED");
+  assert.equal(statusEv.type, "STATUS");
+  assert.equal(statusEv.restaurantWorkspaceRole, "COMBINED");
+  // Финансовый снимок не пересчитан, доставка самовывоза бесплатна.
+  assert.equal(JSON.stringify(order.financials), finBefore);
+  assert.equal(order.financials.deliveryFeeCents, 0);
+  // Один Order остаётся одним Order; ревизия выросла ровно на один.
+  assert.equal(res.state.orders.filter((o) => o.id === orderId).length, 1);
+  assert.equal(res.state.revision, state.revision + 1);
+});
+
 test("выдача по коду: paidAt = nowIso", () => {
   const { state, orderId, code } = makeReadyPickup();
   const res = completePickupWithCode(state, orderId, code, "CASH", "RESTAURANT", NOW);

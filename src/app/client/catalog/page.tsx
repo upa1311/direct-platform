@@ -196,7 +196,7 @@ export default function ClientCatalogPage() {
 
       <div className={flowStyles.catalogHeadingRow} id="restaurant-list">
         <h1>Рестораны</h1>
-        <label className={flowStyles.field}>
+        <label className={`${flowStyles.field} ${flowStyles.catalogSortField}`}>
           <span>Сортировка</span>
           <select
             value={effectiveSort}

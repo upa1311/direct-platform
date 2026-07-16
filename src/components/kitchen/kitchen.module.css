@@ -709,18 +709,22 @@
   font-size: 13px;
 }
 
+/* Информационная строка времени — не кнопка: по ширине содержимого, без
+   рамки на всю карточку. */
 .countdown {
-  padding: 6px 10px;
-  border: 1px solid var(--kds-border);
+  width: fit-content;
+  padding: 2px 0;
+  border: 0;
   border-radius: 6px;
-  background: var(--kds-surface-subtle);
+  background: transparent;
   font-size: 14px;
   font-weight: 750;
   font-variant-numeric: tabular-nums;
 }
 
+/* Просрочка — компактный заметный badge по содержимому. */
 .countdownOverdue {
-  border-color: var(--kds-danger);
+  padding: 2px 8px;
   background: #fbf1f0;
   color: var(--kds-danger);
 }

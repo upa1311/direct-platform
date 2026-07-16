@@ -1098,6 +1098,21 @@ export function formatExpectedReady(
 }
 
 /**
+ * Человекочитаемая длительность для карточек кухни: < 60 — «32 мин»;
+ * ровно час — «1 ч»; больше часа — «1 ч 17 мин» (нулевой остаток минут не
+ * пишется). Чистая функция; отрицательные значения приводятся к нулю.
+ */
+export function formatKitchenDuration(totalMinutes: number): string {
+  const total = Math.max(0, Math.floor(totalMinutes));
+  if (total < 60) {
+    return `${total} мин`;
+  }
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  return minutes === 0 ? `${hours} ч` : `${hours} ч ${minutes} мин`;
+}
+
+/**
  * Обратный отсчёт до готовности / просрочка (§3, §10). `nowMs === 0` — часы
  * ещё не инициализированы (SSR). Чистая функция.
  */
@@ -1112,11 +1127,17 @@ export function formatKitchenCountdown(
   const diffMs = Date.parse(expectedReadyAt) - nowMs;
   if (diffMs <= 0) {
     const overdueMin = Math.floor(-diffMs / 60_000);
-    return { text: `Просрочено на ${overdueMin} мин`, overdue: true };
+    return {
+      text: `Просрочено на ${formatKitchenDuration(overdueMin)}`,
+      overdue: true,
+    };
   }
   const totalSec = Math.ceil(diffMs / 1000);
   if (totalSec >= 60) {
-    return { text: `${Math.floor(totalSec / 60)} мин`, overdue: false };
+    return {
+      text: formatKitchenDuration(Math.floor(totalSec / 60)),
+      overdue: false,
+    };
   }
   return {
     text: `0:${String(totalSec % 60).padStart(2, "0")}`,
