@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Pause } from "lucide-react";
 
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type {
   MenuItem,
@@ -132,6 +133,9 @@ export function EtaAdjustPanel({
   onDone: (success: boolean) => void;
 }) {
   const { adjustOrderEta } = usePrototype();
+  // Pending и защита от двойного нажатия — через общий thunk-guard; локального
+  // error-state больше нет, единственный источник ошибки — mutationError.
+  const { error: mutationError, pending, run, clearError } = useMutationGuard();
   const current = order.expectedReadyAt;
   const tz = restaurant.timeZone;
   // §1: храним типизированное НАМЕРЕНИЕ, а не готовый ISO. Конкретное время
@@ -141,7 +145,6 @@ export function EtaAdjustPanel({
   const [customMinutes, setCustomMinutes] = useState("");
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
-  const [error, setError] = useState<string | null>(null);
 
   const lastAdjustment = order.etaAdjustments.at(-1) ?? null;
 
@@ -164,12 +167,12 @@ export function EtaAdjustPanel({
   const chooseDelay = (minutes: number) => {
     setIntent({ kind: "DELAY", minutes });
     setCustomMinutes("");
-    setError(null);
+    clearError();
   };
   const chooseEarlier = (minutes: number) => {
     setIntent({ kind: "EARLIER", minutes });
     setCustomMinutes("");
-    setError(null);
+    clearError();
   };
   const chooseCustom = (value: string) => {
     setCustomMinutes(value);
@@ -179,25 +182,28 @@ export function EtaAdjustPanel({
       return;
     }
     setIntent({ kind: "FROM_NOW", minutes: n });
-    setError(null);
+    clearError();
   };
 
   const submit = async () => {
-    if (!intent) {
-      setError("Выберите новое время.");
-      return;
+    // Кнопка disabled при отсутствии intent/причины — защитный ранний выход.
+    if (!intent || !effectiveReason.trim()) return;
+    // Thunk: операция НЕ стартует до входа в guard, второй клик в том же tick
+    // не запускает вторую мутацию. Доменный результат приводится к MutationAck.
+    const res = await run(async () => {
+      const r = await adjustOrderEta(
+        order.id,
+        intent,
+        effectiveReason,
+        "RESTAURANT",
+        "KITCHEN",
+      );
+      return { ok: r.ok, error: r.error, changed: r.ok };
+    });
+    // §9: при ошибке панель не закрываем; при успехе onDone(true) закрывает её.
+    if (res.ok) {
+      onDone(true);
     }
-    if (!effectiveReason.trim()) {
-      setError("Укажите причину.");
-      return;
-    }
-    const res = await adjustOrderEta(order.id, intent, effectiveReason, "RESTAURANT", "KITCHEN");
-    // §9: при ошибке панель не закрываем и показываем domain error рядом.
-    if (!res.ok) {
-      setError(res.error);
-      return;
-    }
-    onDone(true);
   };
 
   const deltaLabel =
@@ -232,6 +238,7 @@ export function EtaAdjustPanel({
               key={m}
               className={`${styles.btn} ${styles.btnOutline}`}
               type="button"
+              disabled={pending}
               onClick={() => chooseDelay(m)}
             >
               +{m} мин
@@ -247,6 +254,7 @@ export function EtaAdjustPanel({
               key={m}
               className={`${styles.btn} ${styles.btnOutline}`}
               type="button"
+              disabled={pending}
               onClick={() => chooseEarlier(m)}
             >
               На {m} мин раньше
@@ -261,6 +269,7 @@ export function EtaAdjustPanel({
           min={1}
           max={180}
           value={customMinutes}
+          disabled={pending}
           onChange={(e) => chooseCustom(e.target.value)}
           placeholder="например, 20"
         />
@@ -268,7 +277,11 @@ export function EtaAdjustPanel({
 
       <label className={styles.field}>
         <span>Причина</span>
-        <select value={selectedReason} onChange={(e) => setReason(e.target.value)}>
+        <select
+          value={selectedReason}
+          disabled={pending}
+          onChange={(e) => setReason(e.target.value)}
+        >
           {reasons.map((r) => (
             <option value={r} key={r}>
               {r}
@@ -282,6 +295,7 @@ export function EtaAdjustPanel({
           <textarea
             maxLength={300}
             value={customReason}
+            disabled={pending}
             onChange={(e) => setCustomReason(e.target.value)}
             placeholder="Опишите причину"
           />
@@ -295,15 +309,16 @@ export function EtaAdjustPanel({
           {deltaLabel ? ` · ${deltaLabel}` : ""}
         </p>
       ) : null}
-      {error ? (
+      {mutationError ? (
         <p className={styles.error} role="alert">
-          {error}
+          {mutationError}
         </p>
       ) : null}
       <div className={styles.btnRowEnd}>
         <button
           className={`${styles.btn} ${styles.btnOutline}`}
           type="button"
+          disabled={pending}
           onClick={() => onDone(false)}
         >
           Отмена
@@ -311,10 +326,10 @@ export function EtaAdjustPanel({
         <button
           className={`${styles.btn} ${styles.btnDark}`}
           type="button"
-          disabled={!intent || !effectiveReason.trim()}
+          disabled={!intent || !effectiveReason.trim() || pending}
           onClick={submit}
         >
-          Обновить время
+          {pending ? "Сохраняем…" : "Обновить время"}
         </button>
       </div>
     </div>

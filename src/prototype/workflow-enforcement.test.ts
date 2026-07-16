@@ -260,6 +260,39 @@ test("SPLIT: оператор не меняет ETA, кухня меняет", (
   assert.equal(kitchenTry.result.ok, true);
 });
 
+test("SPLIT: кухня меняет ETA — событие с ролью KITCHEN, ревизия +1, инварианты", () => {
+  const { state, orderId } = splitPickupState();
+  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "KITCHEN");
+  const before = getOrder(prepared, orderId);
+  const finBefore = JSON.stringify(before.financials);
+  const now = new Date().toISOString();
+
+  const res = adjustOrderEtaFromIntent(
+    prepared, orderId, { kind: "DELAY", minutes: 10 }, "Кухня перегружена", "RESTAURANT", now, "KITCHEN",
+  );
+  assert.equal(res.result.ok, true);
+  const after = getOrder(res.state, orderId);
+  // Статус, время приготовления и связанные сущности не тронуты.
+  assert.equal(after.status, "PREPARING");
+  assert.equal(after.preparationMinutes, before.preparationMinutes);
+  assert.notEqual(after.expectedReadyAt, before.expectedReadyAt);
+  assert.equal(JSON.stringify(after.financials), finBefore);
+  assert.equal(res.state.settlements.length, prepared.settlements.length);
+  assert.equal(after.pickupCode, before.pickupCode);
+  assert.equal(after.pickupCodeUsed, false);
+  // Ровно одна корректировка и одно ETA-событие; ревизия выросла на один.
+  assert.equal(after.etaAdjustments.length, before.etaAdjustments.length + 1);
+  assert.equal(after.history.length, before.history.length + 1);
+  const ev = after.history.at(-1);
+  assert.equal(ev?.type, "ETA");
+  assert.equal(ev?.actor, "RESTAURANT");
+  assert.equal(ev?.fromStatus, "PREPARING");
+  assert.equal(ev?.toStatus, "PREPARING");
+  assert.equal(ev?.restaurantWorkspaceRole, "KITCHEN");
+  assert.ok(ev?.message.includes("Кухня перегружена"));
+  assert.equal(res.state.revision, prepared.revision + 1);
+});
+
 // --- Выдача -----------------------------------------------------------------
 
 test("SPLIT: кухня не выполняет выдачу, оператор выполняет", () => {
