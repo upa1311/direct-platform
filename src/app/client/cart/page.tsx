@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Gift } from "lucide-react";
 
 import { REPEAT_NOTICE_KEY } from "@/components/order-flow/client-order-actions";
-import { ClientRestaurantSchedule } from "@/components/order-flow/client-restaurant-schedule";
+import { RestaurantAvailabilityBadge } from "@/components/order-flow/restaurant-availability-badge";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
@@ -186,17 +186,23 @@ export default function ClientCartPage() {
       <header className={flowStyles.checkoutHeading}>
         <h1>Ваш выбор</h1>
         <p>{restaurant.name}</p>
-        <ClientRestaurantSchedule
-          restaurant={restaurant}
-          nowMs={nowMs}
-          showFullSchedule
-        />
         <Link
           className={flowStyles.backToMenuLink}
           href={`/client/restaurants/${restaurant.id}`}
         >
           ← Вернуться в меню
         </Link>
+        {/* В оформлении — только один актуальный статус ресторана (отдельной
+            строкой); полный график клиент видит на странице меню ресторана. */}
+        {nowMs > 0 ? (
+          <div className={flowStyles.checkoutStatusRow}>
+            <RestaurantAvailabilityBadge
+              restaurant={restaurant}
+              nowMs={nowMs}
+              compactCheckout
+            />
+          </div>
+        ) : null}
       </header>
 
       {repeatNotice ? (
@@ -205,12 +211,12 @@ export default function ClientCartPage() {
         </p>
       ) : null}
 
-      {/* §1/§2: статус доступности показывает единый бейдж в
-          ClientRestaurantSchedule (заголовок оформления) — большая плашка
-          удалена. Компактная причина недоступности оформления — у кнопки. */}
-      {/* §0.1: нижняя строка — только факт недоступности. Время возобновления /
-          следующего открытия уже показывает ClientRestaurantSchedule/бейдж, поэтому
-          detailLabel здесь НЕ дублируем. */}
+      {/* §1/§2: статус доступности показывает единый компактный бейдж в
+          заголовке оформления — большая плашка удалена. Компактная причина
+          недоступности оформления — у кнопки. */}
+      {/* §0.1: нижняя строка — только факт недоступности. Подробности графика
+          и следующего открытия клиент видит на странице меню ресторана,
+          поэтому здесь они НЕ дублируются. */}
       {nowMs > 0 && availability && !availability.canAcceptOrders ? (
         <p className={flowStyles.restaurantAvailabilityNote} role="status">
           Оформление временно недоступно.

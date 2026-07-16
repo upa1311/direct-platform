@@ -13,6 +13,7 @@ import {
   markOrderDelivered,
   markOrderOutForDelivery,
   markOrderReady,
+  markOrderReadyWithResult,
   markPickupNoShow,
   pauseRestaurantOrders,
   rejectRestaurantOrder,
@@ -175,6 +176,76 @@ test("SPLIT: кухня отмечает готовность, оператор 
   assert.equal(byOperator, prepared);
   const byKitchen = markOrderReady(prepared, orderId, "RESTAURANT", "KITCHEN");
   assert.equal(getOrder(byKitchen, orderId).status, "READY_FOR_PICKUP");
+});
+
+test("Готовность pickup: инварианты кода, оплаты, финансов и события (SPLIT)", () => {
+  const { state, orderId } = splitPickupState();
+  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "KITCHEN");
+  const before = getOrder(prepared, orderId);
+  const finBefore = JSON.stringify(before.financials);
+
+  const res = markOrderReadyWithResult(prepared, orderId, "RESTAURANT", "KITCHEN");
+  assert.equal(res.result.ok, true);
+  const order = getOrder(res.state, orderId);
+  // Переход и неизменность полей вокруг него.
+  assert.equal(order.status, "READY_FOR_PICKUP");
+  assert.equal(order.paymentMethod, "PAY_AT_RESTAURANT");
+  assert.equal(order.paymentStatus, "DUE_AT_PICKUP");
+  assert.equal(order.preparationMinutes, before.preparationMinutes);
+  assert.equal(order.expectedReadyAt, before.expectedReadyAt);
+  // Pickup code существует, не изменился и не использован.
+  assert.ok(before.pickupCode);
+  assert.equal(order.pickupCode, before.pickupCode);
+  assert.equal(order.pickupCodeUsed, false);
+  assert.equal(order.pickupPaidWith, null);
+  // Финансы и связанные сущности не тронуты.
+  assert.equal(JSON.stringify(order.financials), finBefore);
+  assert.equal(order.financials.deliveryFeeCents, 0);
+  assert.equal(res.state.settlements.length, 0);
+  assert.equal(order.assignedDriverId, null);
+  // Один Order, ревизия +1, ровно одно новое событие с ролью KITCHEN.
+  assert.equal(res.state.orders.filter((o) => o.id === orderId).length, 1);
+  assert.equal(res.state.revision, prepared.revision + 1);
+  assert.equal(order.history.length, before.history.length + 1);
+  const ev = order.history.at(-1);
+  assert.equal(ev?.actor, "RESTAURANT");
+  assert.equal(ev?.type, "STATUS");
+  assert.equal(ev?.fromStatus, "PREPARING");
+  assert.equal(ev?.toStatus, "READY_FOR_PICKUP");
+  assert.equal(ev?.restaurantWorkspaceRole, "KITCHEN");
+});
+
+test("COMBINED: событие готовности несёт роль COMBINED", () => {
+  let s = createDefaultState();
+  s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
+  s = setCartFulfillmentChoice(s, "PICKUP");
+  const created = createOrderFromCart(s);
+  const orderId = created.result.orderId as string;
+  const prepared = acceptRestaurantOrder(created.state, orderId, 20);
+  const ready = markOrderReady(prepared, orderId);
+  const ev = getOrder(ready, orderId).history.at(-1);
+  assert.equal(getOrder(ready, orderId).status, "READY_FOR_PICKUP");
+  assert.equal(ev?.restaurantWorkspaceRole, "COMBINED");
+});
+
+test("Повторная готовность pickup: ошибка без события, ревизии и изменений кода", () => {
+  const { state, orderId } = splitPickupState();
+  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "KITCHEN");
+  const first = markOrderReadyWithResult(prepared, orderId, "RESTAURANT", "KITCHEN");
+  assert.equal(first.result.ok, true);
+  const afterFirst = getOrder(first.state, orderId);
+
+  const second = markOrderReadyWithResult(first.state, orderId, "RESTAURANT", "KITCHEN");
+  assert.equal(second.result.ok, false);
+  assert.equal(second.result.error, "Заказ уже обработан. Обновите данные.");
+  // Тот же объект state: без события, без ревизии, без изменений pickup-полей.
+  assert.equal(second.state, first.state);
+  const order = getOrder(second.state, orderId);
+  assert.equal(order.history.length, afterFirst.history.length);
+  assert.equal(second.state.revision, first.state.revision);
+  assert.equal(order.pickupCode, afterFirst.pickupCode);
+  assert.equal(order.pickupCodeUsed, false);
+  assert.equal(second.state.settlements.length, 0);
 });
 
 test("SPLIT: оператор не меняет ETA, кухня меняет", () => {

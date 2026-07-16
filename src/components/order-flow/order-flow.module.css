@@ -850,6 +850,11 @@
   font-weight: 650;
 }
 
+/* Статус ресторана — всегда отдельной строкой под названием. */
+.checkoutStatusRow {
+  margin-top: 8px;
+}
+
 .addressConfirmationPrompt {
   width: fit-content;
   margin: -12px 0 18px;
