@@ -57,6 +57,38 @@ test("Тест 7: вторая операция при pending не запуск
   assert.equal(third.ok, true);
 });
 
+test("Один guard на взаимоисключающие решения: стартует только первое", async () => {
+  // Модель NewOrderCard: приём и отклонение заказа идут через ОДИН guard, так
+  // что «Принять → Отклонить» в одном tick запускает лишь первое решение.
+  for (const [firstName, secondName] of [
+    ["accept", "reject"],
+    ["reject", "accept"],
+  ] as const) {
+    const { guard } = makeGuard();
+    const calls: Record<string, number> = { accept: 0, reject: 0 };
+    let release!: () => void;
+    const inFlight = new Promise<void>((r) => (release = r));
+
+    const first = guard.run(async () => {
+      calls[firstName] += 1;
+      await inFlight;
+      return okAck;
+    });
+    // Второе решение в том же tick — его thunk не выполняется вовсе.
+    const second = await guard.run(async () => {
+      calls[secondName] += 1;
+      return okAck;
+    });
+    assert.equal(second.ok, false);
+    assert.equal(second.error, MUTATION_ALREADY_RUNNING_ERROR);
+    assert.equal(calls[secondName], 0);
+
+    release();
+    assert.equal((await first).ok, true);
+    assert.equal(calls[firstName], 1);
+  }
+});
+
 test("Тест 8: operation thunk не вызывается до входа в guard", async () => {
   const { guard } = makeGuard();
   const callOrder: string[] = [];

@@ -352,6 +352,15 @@ function NewOrderCard({
   isSplit: boolean;
 }) {
   const { state, acceptOrder, rejectOrder } = usePrototype();
+  // Приём и отклонение — взаимоисключающие решения по одному заказу, поэтому у
+  // них ОДИН общий guard: его синхронный pending-флаг не даёт запустить второе
+  // решение (в том числе «Принять → Отклонить» в одном tick), пока идёт первое.
+  const {
+    error: decisionError,
+    pending: decisionPending,
+    run: runDecision,
+    clearError: clearDecisionError,
+  } = useMutationGuard();
   const restaurant = getRestaurant(state, order.restaurant.id);
   const [prep, setPrep] = useState(() =>
     defaultPrep(restaurant?.defaultPreparationMinutes),
@@ -359,48 +368,49 @@ function NewOrderCard({
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
-  const [acceptPending, setAcceptPending] = useState(false);
-  const [acceptError, setAcceptError] = useState<string | null>(null);
-  const [rejectPending, setRejectPending] = useState(false);
-  const [rejectError, setRejectError] = useState<string | null>(null);
 
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
   const autoClose = formatAutoClose(order.createdAt, nowMs);
 
-  // Исправление 4.3: сериализованный приём (Web Lock + rebase). На время запроса
-  // кнопка заблокирована; при гонке показывается русская ошибка, карточка и
-  // выбранное время сохраняются, ложный успех не показывается.
+  // Исправление 4.3: сериализованный приём (Web Lock + rebase). При гонке
+  // показывается русская ошибка, карточка и выбранное время сохраняются,
+  // ложный успех не показывается — после успеха карточка уходит из «Новых»
+  // через обновлённый общий state.
   const doAccept = async () => {
-    if (acceptPending) return;
-    setAcceptPending(true);
-    try {
-      const result = await acceptOrder(order.id, prep, "RESTAURANT", "KITCHEN");
-      if (!result.ok) {
-        setAcceptError(result.error ?? "Не удалось принять заказ.");
-        return;
-      }
-      setAcceptError(null);
-    } finally {
-      setAcceptPending(false);
-    }
+    await runDecision(async () => {
+      const response = await acceptOrder(
+        order.id,
+        prep,
+        "RESTAURANT",
+        "KITCHEN",
+      );
+      return {
+        ok: response.ok,
+        error: response.error,
+        changed: response.ok,
+      };
+    });
   };
 
-  // Исправление 8: отклонение в COMBINED — тоже async с pending и ошибкой;
-  // форма не закрывается ложно, причина при ошибке сохраняется.
+  // Исправление 8: отклонение в COMBINED идёт через тот же guard; форма не
+  // закрывается ложно, причина при ошибке сохраняется.
   const doReject = async () => {
-    if (rejectPending) return;
-    setRejectPending(true);
-    try {
-      const result = await rejectOrder(order.id, effectiveReason, "RESTAURANT");
-      if (!result.ok) {
-        setRejectError(result.error ?? "Не удалось отклонить заказ.");
-        return;
-      }
-      setRejectError(null);
+    if (!effectiveReason.trim()) return;
+    const result = await runDecision(async () => {
+      const response = await rejectOrder(
+        order.id,
+        effectiveReason,
+        "RESTAURANT",
+      );
+      return {
+        ok: response.ok,
+        error: response.error,
+        changed: response.ok,
+      };
+    });
+    if (result.ok) {
       setRejectOpen(false);
-    } finally {
-      setRejectPending(false);
     }
   };
 
@@ -431,7 +441,11 @@ function NewOrderCard({
             <span>Время приготовления</span>
             <select
               value={prep}
-              onChange={(event) => setPrep(Number(event.target.value))}
+              disabled={decisionPending}
+              onChange={(event) => {
+                setPrep(Number(event.target.value));
+                clearDecisionError();
+              }}
             >
               {PREP_OPTIONS.map((minutes) => (
                 <option value={minutes} key={minutes}>
@@ -444,10 +458,10 @@ function NewOrderCard({
             <button
               className={`${kds.btn} ${kds.btnDark}`}
               type="button"
-              disabled={acceptPending}
+              disabled={decisionPending}
               onClick={doAccept}
             >
-              {acceptPending ? "Принимаем…" : "Принять"}
+              {decisionPending ? "Принимаем…" : "Принять"}
             </button>
             {/* Этап 8: в SPLIT кухня не отклоняет заказ (это отмена — зона
                 оператора), а сообщает о проблеме приготовления. */}
@@ -457,15 +471,19 @@ function NewOrderCard({
               <button
                 className={`${kds.btn} ${kds.btnRedOutline}`}
                 type="button"
-                onClick={() => setRejectOpen(true)}
+                disabled={decisionPending}
+                onClick={() => {
+                  setRejectOpen(true);
+                  clearDecisionError();
+                }}
               >
                 Отклонить
               </button>
             )}
           </div>
-          {acceptError ? (
+          {decisionError ? (
             <p className={kds.pickupError} role="alert">
-              {acceptError}
+              {decisionError}
             </p>
           ) : null}
         </div>
@@ -479,7 +497,11 @@ function NewOrderCard({
                   type="radio"
                   name={`reject-${order.id}`}
                   checked={reason === r}
-                  onChange={() => setReason(r)}
+                  disabled={decisionPending}
+                  onChange={() => {
+                    setReason(r);
+                    clearDecisionError();
+                  }}
                 />
                 <span>{r}</span>
               </label>
@@ -490,7 +512,11 @@ function NewOrderCard({
               <span>Ваша причина</span>
               <textarea
                 value={customReason}
-                onChange={(event) => setCustomReason(event.target.value)}
+                disabled={decisionPending}
+                onChange={(event) => {
+                  setCustomReason(event.target.value);
+                  clearDecisionError();
+                }}
                 placeholder="Опишите причину"
               />
             </label>
@@ -499,22 +525,26 @@ function NewOrderCard({
             <button
               className={`${kds.btn} ${kds.btnOutline}`}
               type="button"
-              onClick={() => setRejectOpen(false)}
+              disabled={decisionPending}
+              onClick={() => {
+                setRejectOpen(false);
+                clearDecisionError();
+              }}
             >
               Не отклонять
             </button>
             <button
               className={`${kds.btn} ${kds.btnRedOutline}`}
               type="button"
-              disabled={!effectiveReason.trim() || rejectPending}
+              disabled={!effectiveReason.trim() || decisionPending}
               onClick={doReject}
             >
-              {rejectPending ? "Отклоняем…" : "Подтвердить отклонение"}
+              {decisionPending ? "Отклоняем…" : "Подтвердить отклонение"}
             </button>
           </div>
-          {rejectError ? (
+          {decisionError ? (
             <p className={kds.pickupError} role="alert">
-              {rejectError}
+              {decisionError}
             </p>
           ) : null}
         </div>
