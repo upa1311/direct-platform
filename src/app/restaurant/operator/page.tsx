@@ -219,11 +219,18 @@ function PreparationProblemNotice({ order }: { order: Order }) {
 /** Панель выдачи самовывоза оператором: способ оплаты + код + невыкуп. */
 function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }) {
   const { completePickup, markPickupNoShow } = usePrototype();
+  // Выдача идёт через общий thunk-guard: синхронный pending не даёт двум кликам
+  // в одном tick запустить две мутации; локального error-state у выдачи нет.
+  const {
+    error: handoffError,
+    pending: handoffPending,
+    run: runHandoff,
+    clearError: clearHandoffError,
+  } = useMutationGuard();
   const methods = order.pickupPaymentMethodsSnapshot;
   const single = methods.length === 1 ? methods[0] : null;
   const [paidWith, setPaidWith] = useState<PickupPaymentMethod | null>(single);
   const [code, setCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [noShowOpen, setNoShowOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
@@ -240,16 +247,24 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
   const effectiveReason = isOther ? customReason : reason;
 
   const doConfirm = async () => {
-    if (!paidWith) {
-      setError("Выберите способ оплаты.");
-      return;
-    }
-    const res = await completePickup(order.id, code, paidWith, "RESTAURANT", "OPERATOR");
-    if (!res.ok) {
-      setError(res.error ?? "Не удалось подтвердить выдачу.");
-      return;
-    }
-    setError(null);
+    // Кнопка disabled без способа оплаты и валидного кода — защитный выход.
+    if (!paidWith || !codeValid) return;
+    // Thunk: операция НЕ стартует до входа в guard. При успехе карточка исчезает
+    // из готовых через обновлённый общий state — локальный success не нужен.
+    await runHandoff(async () => {
+      const response = await completePickup(
+        order.id,
+        code,
+        paidWith,
+        "RESTAURANT",
+        "OPERATOR",
+      );
+      return {
+        ok: response.ok,
+        error: response.error,
+        changed: response.ok,
+      };
+    });
   };
 
   const doNoShow = async () => {
@@ -282,9 +297,10 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
                 name={`op-pay-${order.id}`}
                 value={method}
                 checked={paidWith === method}
+                disabled={handoffPending}
                 onChange={() => {
                   setPaidWith(method);
-                  setError(null);
+                  clearHandoffError();
                 }}
               />
               <span>{pickupPaymentMethodLabels[method]}</span>
@@ -300,35 +316,36 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
           autoComplete="one-time-code"
           maxLength={4}
           value={code}
+          disabled={handoffPending}
           placeholder="4 цифры"
           onChange={(event) => {
             setCode(event.target.value.replace(/\D/g, "").slice(0, 4));
-            setError(null);
+            clearHandoffError();
           }}
         />
       </label>
       <p className={kds.pickupInstruction}>
         Попросите клиента назвать четырёхзначный код.
       </p>
-      {error ? (
+      {handoffError ? (
         <p className={kds.pickupError} role="alert">
-          {error}
+          {handoffError}
         </p>
       ) : null}
       <button
         className={`${kds.btn} ${kds.btnGreen}`}
         type="button"
-        disabled={!canConfirm}
+        disabled={!canConfirm || handoffPending}
         onClick={doConfirm}
       >
-        Подтвердить оплату и выдать
+        {handoffPending ? "Подтверждаем…" : "Подтвердить оплату и выдать"}
       </button>
 
       {!noShowOpen ? (
         <button
           className={`${kds.btn} ${kds.btnRedOutline}`}
           type="button"
-          disabled={!noShowEligible}
+          disabled={!noShowEligible || handoffPending}
           onClick={() => setNoShowOpen(true)}
         >
           {noShowEligible
@@ -390,7 +407,7 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
             <button
               className={`${kds.btn} ${kds.btnRedOutline}`}
               type="button"
-              disabled={!effectiveReason.trim()}
+              disabled={!effectiveReason.trim() || handoffPending}
               onClick={doNoShow}
             >
               Закрыть как невыкуп
