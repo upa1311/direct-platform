@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
+import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
 import {
   defaultPrep,
   formatAutoClose,
@@ -89,6 +91,50 @@ function OperatorOrderDetails({ order }: { order: Order }) {
       <div className={kds.metaLine}>
         Сумма: {formatMoney(order.financials.customerTotalCents)}
       </div>
+    </>
+  );
+}
+
+/**
+ * Состав заказа для оператора: read-only, без действий и мутаций. Оператор
+ * решает по заказу и общается с клиентом, поэтому обязан видеть, что именно
+ * заказано, — особенно до «Принять»/«Отклонить».
+ *
+ * Данные только из снимка order.items: изменение меню после создания заказа
+ * состав не переписывает. Классы и helper комментария — существующие кухонные;
+ * KitchenItems не трогается (там свой порядок «блюдо × количество»).
+ */
+function OperatorOrderItems({ order }: { order: Order }) {
+  const unitsTotal = order.items.reduce((sum, item) => sum + item.quantity, 0);
+
+  return (
+    <>
+      <ul className={kds.items}>
+        {order.items.map((item) => {
+          const comment = getVisibleCookingComment(item.cookingComment);
+          return (
+            <li key={`${item.menuItemId}-${item.selectedVariantId ?? "base"}`}>
+              <span className={kds.itemLine}>
+                {item.quantity} × {item.name}
+                {item.selectedVariantName ? ` · ${item.selectedVariantName}` : ""}
+              </span>
+              {comment ? (
+                <div className={kds.itemComment}>
+                  <TriangleAlert
+                    className={kds.itemCommentIcon}
+                    size={16}
+                    aria-hidden="true"
+                  />
+                  <strong className={kds.itemCommentText}>
+                    ВАЖНО: {comment}
+                  </strong>
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <p className={kds.units}>Всего единиц: {unitsTotal}</p>
     </>
   );
 }
@@ -637,6 +683,8 @@ function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
         </p>
       ) : null}
       <OperatorOrderDetails order={order} />
+      {/* Состав — после клиента/адреса/оплаты и ДО решения по заказу. */}
+      <OperatorOrderItems order={order} />
       <PreparationProblemNotice order={order} />
       {order.status === "RESTAURANT_REVIEW" ? (
         <OperatorAcceptPanel order={order} nowMs={nowMs} />
