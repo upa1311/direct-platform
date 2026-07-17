@@ -48,7 +48,7 @@ export const WORKFLOW_MODE_ORDER: readonly RestaurantOrderWorkflowMode[] = [
 
 /** Короткие подписи вариантов: служебный dropdown, а не страница настроек. */
 export const WORKFLOW_MODE_HINTS: Record<RestaurantOrderWorkflowMode, string> = {
-  COMBINED: "Приём, приготовление и выдача вместе.",
+  COMBINED: "Приём, приготовление и выдача на одном экране.",
   SPLIT_OPERATOR_KITCHEN:
     "Кухня готовит, оператор отвечает за доставку и выдачу.",
 };

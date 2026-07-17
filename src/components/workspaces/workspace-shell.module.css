@@ -312,8 +312,6 @@
   position: relative;
   flex: 0 0 auto;
   margin-bottom: 10px;
-  padding-left: 12px;
-  border-left: 1px solid #e6e9e6;
 }
 
 .navSettingsButton {
@@ -393,10 +391,11 @@
   border-color: #c8cec9;
 }
 
-/* Выбранный вариант заметен подсветкой, а не тяжёлой рамкой. */
+/* Выбранный вариант заметен спокойно: нейтральный фон и чуть чётче рамка —
+   без заливки и цветных оттенков. Акцент несёт сама radio. */
 .settingsOption:has(input:checked) {
-  border-color: #e6cdb9;
-  background: #fdf7f2;
+  border-color: #b9c0ba;
+  background: #f6f7f5;
 }
 
 .settingsOption:has(input:focus-visible) {
@@ -767,10 +766,6 @@
 
   .headerNavRow {
     gap: 8px;
-  }
-
-  .navSettings {
-    padding-left: 8px;
   }
 
   .headerTopline {
