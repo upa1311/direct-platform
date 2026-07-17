@@ -541,6 +541,15 @@ export interface CancellationRequest {
   resolvedAt: string | null;
   resolvedBy: "ADMIN" | null;
   resolutionNote: string | null;
+  /**
+   * Кто инициировал запрос. Отсутствие поля (старые сохранённые состояния)
+   * трактуется как "CLIENT" — совместимость без повышения schemaVersion.
+   */
+  requestedBy?: "CLIENT" | "RESTAURANT";
+  /** Рабочая роль ресторана, создавшая запрос (только для ресторанных запросов). */
+  restaurantWorkspaceRole?: RestaurantWorkspaceRole;
+  /** Проблема приготовления, из-за которой ресторан запросил отмену. */
+  preparationProblemId?: string;
 }
 
 export interface PrototypeState {

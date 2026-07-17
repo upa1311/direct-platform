@@ -1204,6 +1204,7 @@ export function requestOrderCancellationByClient(
     resolvedAt: null,
     resolvedBy: null,
     resolutionNote: null,
+    requestedBy: "CLIENT",
   };
 
   const orders = state.orders.map((o) =>
@@ -1232,6 +1233,119 @@ export function requestOrderCancellationByClient(
     {
       ...state,
       orders,
+      cancellationRequests: [...state.cancellationRequests, request],
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/**
+ * Ресторанный запрос на отмену у Direct. Проходит через ТОТ ЖЕ CancellationRequest
+ * pipeline, что и клиентский (никакой параллельной модели): создаёт обычный
+ * PENDING-запрос с тем же id (один на заказ) и одно событие истории. Разрешён
+ * оператору (в SPLIT) и общему экрану (в COMBINED) через MANAGE_CANCELLATION;
+ * кухне — нет. Требует OPEN preparation problem, чей id совпадает с переданным.
+ * Не меняет статус заказа, ETA, оплату, financial snapshot, settlement, pickupCode
+ * и водителя — решение (CANCELED/refund или отказ) принимает Direct существующим
+ * approve/reject контуром. При любой ошибке state возвращается тем же объектом.
+ */
+export function requestOrderCancellationByRestaurant(
+  state: PrototypeState,
+  orderId: string,
+  preparationProblemId: string,
+  reason: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+  nowIso: string = new Date().toISOString(),
+): ActionResult<RequestCancellationResult> {
+  const fail = (error: string): ActionResult<RequestCancellationResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return fail("Некорректное время операции.");
+  }
+  const order = state.orders.find((o) => o.id === orderId);
+  if (!order) {
+    return fail("Заказ не найден.");
+  }
+  const guard = checkRestaurantWorkspace(
+    state,
+    order,
+    actor,
+    "MANAGE_CANCELLATION",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
+    return fail("Недостаточно прав для запроса отмены у Direct.");
+  }
+  if (order.status !== "PREPARING") {
+    return fail("Запросить отмену можно только у готовящегося заказа.");
+  }
+  // Запрос отмены ресторана привязан к активной проблеме приготовления: устаревшая
+  // вкладка, чужой или уже решённый problemId получают ошибку без мутации.
+  const open = getOpenPreparationProblem(order);
+  if (!open || open.problemId !== preparationProblemId) {
+    return fail("Проблема уже решена или не найдена. Обновите данные.");
+  }
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) {
+    return fail("Укажите причину запроса.");
+  }
+  if (normalizedReason.length > ETA_REASON_MAX_LENGTH) {
+    return fail("Причина слишком длинная.");
+  }
+  // Один запрос на заказ — тот же id, что у клиентского flow: повторный вызов
+  // (в т.ч. из устаревшей вкладки после rebase) не создаёт дубликат.
+  const requestId = cancellationRequestId(orderId);
+  if (state.cancellationRequests.some((r) => r.id === requestId)) {
+    return fail("Запрос на отмену уже отправлен.");
+  }
+
+  const now = nowIso;
+  const request: CancellationRequest = {
+    id: requestId,
+    orderId,
+    customerId: order.customer.id,
+    restaurantId: order.restaurant.id,
+    requestedAt: now,
+    requestedOrderStatus: "PREPARING",
+    paymentMethod: order.paymentMethod,
+    reason: normalizedReason,
+    status: "PENDING",
+    resolvedAt: null,
+    resolvedBy: null,
+    resolutionNote: null,
+    requestedBy: "RESTAURANT",
+    restaurantWorkspaceRole: guard.role,
+    preparationProblemId: open.problemId,
+  };
+
+  const updatedOrder: Order = {
+    ...order,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      {
+        id: `${order.id}-history-${order.history.length + 1}`,
+        occurredAt: now,
+        actor,
+        type: "STATUS",
+        fromStatus: order.status,
+        toStatus: order.status,
+        message: `Ресторан запросил отмену у Direct. Причина: ${normalizedReason}`,
+        restaurantWorkspaceRole: guard.role,
+      },
+    ],
+  };
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
       cancellationRequests: [...state.cancellationRequests, request],
     },
     now,
@@ -2046,6 +2160,20 @@ export function resolveRestaurantPreparationProblem(
   const open = getOpenPreparationProblem(order);
   if (!open || open.problemId !== preparationProblemId) {
     return fail("Проблема уже решена или не найдена. Обновите данные.");
+  }
+  // Пока Direct не рассмотрел ресторанный запрос отмены по этой же проблеме,
+  // решать её нельзя: иначе проблема стала бы RESOLVED, «Готово» разблокировалось,
+  // а PENDING-запрос завис бы. Legacy/клиентский запрос (requestedBy !== RESTAURANT)
+  // этим специальным guard не блокирует.
+  const pendingRestaurantRequest = state.cancellationRequests.find(
+    (r) => r.orderId === orderId && r.status === "PENDING",
+  );
+  if (
+    pendingRestaurantRequest &&
+    pendingRestaurantRequest.requestedBy === "RESTAURANT" &&
+    pendingRestaurantRequest.preparationProblemId === preparationProblemId
+  ) {
+    return fail("Сначала дождитесь решения Direct по запросу на отмену.");
   }
   const normalizedReason = reason.trim();
   if (!normalizedReason) {

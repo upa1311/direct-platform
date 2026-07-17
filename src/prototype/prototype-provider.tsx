@@ -49,6 +49,7 @@ import {
   rejectRestaurantOrderWithResult,
   repeatOrderToCart,
   requestOrderCancellationByClient,
+  requestOrderCancellationByRestaurant,
   resetPrototypeState,
   restoreDefaultTariffs,
   saveTariffs,
@@ -249,6 +250,13 @@ export interface PrototypeContextValue {
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
   ) => Promise<PreparationProblemResult>;
+  requestRestaurantCancellation: (
+    orderId: string,
+    preparationProblemId: string,
+    reason: string,
+    actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => Promise<RequestCancellationResult>;
   completePickup: (
     orderId: string,
     code: string,
@@ -1082,6 +1090,32 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  const requestRestaurantCancellation = useCallback(
+    (
+      orderId: string,
+      preparationProblemId: string,
+      reason: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) => {
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          requestOrderCancellationByRestaurant(
+            baseState,
+            orderId,
+            preparationProblemId,
+            reason,
+            actor,
+            workspaceRole,
+            nowIso,
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      });
+    },
+    [runSerializedActionMutation],
+  );
+
   const completePickup = useCallback(
     (
       orderId: string,
@@ -1389,6 +1423,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       adjustOrderEta,
       reportPreparationProblem,
       resolvePreparationProblem,
+      requestRestaurantCancellation,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
@@ -1442,6 +1477,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       adjustOrderEta,
       reportPreparationProblem,
       resolvePreparationProblem,
+      requestRestaurantCancellation,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
