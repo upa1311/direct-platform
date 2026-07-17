@@ -28,6 +28,7 @@ import {
   formatKitchenCountdown,
   formatMoney,
   formatOrderEtaClock,
+  getCancellationRequester,
   getCancellationRequestForOrder,
   getDriverById,
   getPickupNoShowEligibleAtIso,
@@ -744,7 +745,11 @@ function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
           </div>
         </div>
       </div>
-      {request?.status === "PENDING" ? (
+      {/* Верхний warning — только для клиентского/legacy запроса. Ресторанный
+          PENDING-запрос показывается внутри PreparationProblemResolveBlock, чтобы
+          не дублировать два одинаковых предупреждения. */}
+      {request?.status === "PENDING" &&
+      getCancellationRequester(request) === "CLIENT" ? (
         <p className={kds.pickupError} role="status">
           Клиент запросил отмену. Решение принимает администратор Direct.
         </p>

@@ -21,6 +21,7 @@ import type {
   PublicationStatus,
   Restaurant,
   RestaurantOrderWorkflowMode,
+  RestaurantWorkspaceRole,
   SettlementEntry,
   SettlementStatus,
   SettlementType,
@@ -2210,6 +2211,90 @@ export function getLatestResolvedPreparationProblem(
       };
     }
   }
+  return null;
+}
+
+/**
+ * Проблема приготовления заказа по её id (open или уже нерешённая), без учёта
+ * RESOLVED-событий. Для admin-панели: сопоставление запроса отмены с исходной
+ * причиной кухни строго по preparationProblemId, а не по последнему событию.
+ */
+export function getPreparationProblemById(
+  order: Order,
+  problemId: string,
+): PreparationProblemView | null {
+  for (let i = order.history.length - 1; i >= 0; i -= 1) {
+    const event = order.history[i];
+    if (event.type !== "PREPARATION_PROBLEM") continue;
+    if (event.preparationProblemState === "RESOLVED") continue;
+    if (preparationProblemIdOf(event) !== problemId) continue;
+    return {
+      problemId,
+      reason: preparationProblemReason(event),
+      event,
+      occurredAt: event.occurredAt,
+    };
+  }
+  return null;
+}
+
+export type CancellationRequester = "CLIENT" | "RESTAURANT";
+
+/**
+ * Инициатор запроса на отмену. Legacy-запрос без requestedBy (старое сохранённое
+ * состояние) трактуется как CLIENT — совместимость без изменения модели.
+ */
+export function getCancellationRequester(
+  request: CancellationRequest,
+): CancellationRequester {
+  return request.requestedBy === "RESTAURANT" ? "RESTAURANT" : "CLIENT";
+}
+
+/** Запрос — ресторанный и относится именно к указанной проблеме приготовления. */
+export function isRestaurantCancellationForProblem(
+  request: CancellationRequest | null | undefined,
+  problemId: string,
+): boolean {
+  return (
+    !!request &&
+    getCancellationRequester(request) === "RESTAURANT" &&
+    request.preparationProblemId === problemId
+  );
+}
+
+/**
+ * UI-состояние ресторанного запроса отмены для конкретной проблемы. NONE —
+ * запроса нет, он клиентский/legacy или относится к другой проблеме. Чистая
+ * функция: источник истины — общий state, без локального флага success.
+ */
+export type RestaurantCancellationUiState =
+  | "NONE"
+  | "PENDING"
+  | "REJECTED"
+  | "APPROVED";
+
+export function getRestaurantCancellationUiState(
+  request: CancellationRequest | null | undefined,
+  problemId: string,
+): RestaurantCancellationUiState {
+  if (!isRestaurantCancellationForProblem(request, problemId)) return "NONE";
+  const status = request!.status;
+  if (status === "PENDING") return "PENDING";
+  if (status === "REJECTED") return "REJECTED";
+  if (status === "APPROVED") return "APPROVED";
+  return "NONE";
+}
+
+/**
+ * Человекочитаемый рабочий экран ресторана для admin-панели. Сырой enum
+ * (OPERATOR/COMBINED/KITCHEN) пользователю не показывается: KITCHEN и отсутствие
+ * роли дают null (ресторанный запрос создаёт только оператор/общий экран).
+ */
+export function restaurantWorkspaceRoleLabel(
+  role: RestaurantWorkspaceRole | undefined,
+): string | null {
+  if (role === "OPERATOR") return "Оператор заказов";
+  if (role === "COMBINED") return "Общий экран";
   return null;
 }
 

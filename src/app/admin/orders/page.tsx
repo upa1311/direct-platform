@@ -27,10 +27,13 @@ import {
   formatSettlementStatus,
   getAvailableDrivers,
   orderActorLabels,
+  getCancellationRequester,
   getDriverById,
   getOrder,
   getPendingCancellationRequests,
+  getPreparationProblemById,
   getRestaurant,
+  restaurantWorkspaceRoleLabel,
   orderStatusLabels,
   paymentMethodLabels,
   paymentStatusLabels,
@@ -772,6 +775,17 @@ function CancellationRequestCard({
   if (!order) return null;
   const paidOnline =
     order.paymentMethod === "ONLINE" && order.paymentStatus === "PAID";
+  const requester = getCancellationRequester(request);
+  const isRestaurant = requester === "RESTAURANT";
+  const workspaceLabel = isRestaurant
+    ? restaurantWorkspaceRoleLabel(request.restaurantWorkspaceRole)
+    : null;
+  // Причину кухни сопоставляем строго по preparationProblemId, а не по
+  // последнему случайному событию истории.
+  const linkedProblem =
+    isRestaurant && request.preparationProblemId
+      ? getPreparationProblemById(order, request.preparationProblemId)
+      : null;
 
   const submit = async () => {
     const result =
@@ -810,9 +824,25 @@ function CancellationRequestCard({
           <dd>{paidOnline ? "Да" : "Нет"}</dd>
         </div>
         <div className={flowStyles.definitionRow}>
-          <dt>Причина клиента</dt>
+          <dt>Инициатор</dt>
+          <dd>{isRestaurant ? "Ресторан" : "Клиент"}</dd>
+        </div>
+        <div className={flowStyles.definitionRow}>
+          <dt>{isRestaurant ? "Причина ресторана" : "Причина клиента"}</dt>
           <dd>{request.reason}</dd>
         </div>
+        {workspaceLabel ? (
+          <div className={flowStyles.definitionRow}>
+            <dt>Рабочий экран</dt>
+            <dd>{workspaceLabel}</dd>
+          </div>
+        ) : null}
+        {linkedProblem ? (
+          <div className={flowStyles.definitionRow}>
+            <dt>Проблема приготовления</dt>
+            <dd>{linkedProblem.reason}</dd>
+          </div>
+        ) : null}
         <div className={flowStyles.definitionRow}>
           <dt>Запрос создан</dt>
           <dd>{formatDateTime(request.requestedAt)}</dd>

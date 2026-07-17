@@ -41,6 +41,7 @@ import {
   formatKitchenCountdown,
   formatKitchenDuration,
   formatMoney,
+  getCancellationRequester,
   getCancellationRequestForOrder,
   getKitchenAwaitingPaymentOrders,
   getKitchenNewOrders,
@@ -48,6 +49,7 @@ import {
   getKitchenReadyOrders,
   getLatestResolvedPreparationProblem,
   getOpenPreparationProblem,
+  getRestaurantCancellationUiState,
   getOrderReadySince,
   getOrderStatusSince,
   getKitchenAcceptanceState,
@@ -65,6 +67,11 @@ function CancellationRequestNotice({
 }: {
   request: CancellationRequest;
 }) {
+  // Только клиентский/legacy запрос: статус ресторанного запроса уже выводится в
+  // PreparationProblemPanel, второй одинаковый блок кухне не показываем.
+  if (getCancellationRequester(request) !== "CLIENT") {
+    return null;
+  }
   return (
     <div className={kds.cancelNotice} role="status">
       <span className={kds.cancelBadge}>Запрос на отмену</span>
@@ -190,7 +197,7 @@ function PreparationProblemPanel({
   order: Order;
   isSplit: boolean;
 }) {
-  const { reportPreparationProblem } = usePrototype();
+  const { state, reportPreparationProblem } = usePrototype();
   // Pending и защита от двойного нажатия — через общий thunk-guard; локального
   // error-state больше нет, единственный источник ошибки — mutationError.
   const { error: mutationError, pending, run, clearError } = useMutationGuard();
@@ -229,9 +236,24 @@ function PreparationProblemPanel({
   // сам — показываем форму подтверждения.
   if (openProblem) {
     if (isSplit) {
+      // Кухня видит только статус без приватных данных и без причины решения
+      // администратора: различаем «ждём оператора» / «оператор запросил отмену» /
+      // «Direct отклонил отмену». Источник — общий state.
+      const request = getCancellationRequestForOrder(state, order.id);
+      const cancelState = getRestaurantCancellationUiState(
+        request,
+        openProblem.problemId,
+      );
+      let statusText = "Проблема передана оператору. Ожидается решение.";
+      if (cancelState === "PENDING") {
+        statusText =
+          "Оператор запросил отмену у Direct. Ожидается решение администратора.";
+      } else if (cancelState === "REJECTED") {
+        statusText = "Direct отклонил отмену. Оператор решает, как продолжить заказ.";
+      }
       return (
         <p className={kds.units} role="status">
-          Проблема передана оператору. Ожидается решение.
+          {statusText}
         </p>
       );
     }
