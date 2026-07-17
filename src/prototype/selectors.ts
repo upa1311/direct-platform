@@ -196,7 +196,7 @@ export const publicationStatusLabels: Record<PublicationStatus, string> = {
 
 /** Этап 10/11: русские подписи режима работы с заказами (enum клиенту не виден). */
 export const workflowModeLabels: Record<RestaurantOrderWorkflowMode, string> = {
-  COMBINED: "Один общий экран",
+  COMBINED: "Общий экран",
   SPLIT_OPERATOR_KITCHEN: "Оператор и кухня отдельно",
 };
 

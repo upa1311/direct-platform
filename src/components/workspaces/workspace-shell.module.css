@@ -343,15 +343,17 @@
   outline-offset: 3px;
 }
 
+/* Служебный dropdown, а не страница настроек: узкий, плотный, без пустот.
+   На узком экране ширину ограничивает вьюпорт — popover не выходит за экран. */
 .settingsPopover {
-  width: min(320px, calc(100vw - 32px));
+  width: min(340px, calc(100vw - 24px));
   position: absolute;
   z-index: 30;
   top: calc(100% + 8px);
   right: 0;
   display: grid;
   gap: 10px;
-  padding: 16px;
+  padding: 14px;
   border: 1px solid #dfe3df;
   border-radius: 14px;
   background: #fff;
@@ -360,15 +362,16 @@
 
 .settingsTitle {
   margin: 0;
-  font-size: 16px;
+  font-size: 15px;
+  line-height: 1.25;
   letter-spacing: -0.02em;
 }
 
 .settingsHint {
   margin: 0;
   color: #68716b;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.3;
 }
 
 .settingsOptions {
@@ -378,9 +381,9 @@
 
 .settingsOption {
   display: flex;
-  align-items: start;
+  align-items: flex-start;
   gap: 10px;
-  padding: 10px;
+  padding: 10px 12px;
   border: 1px solid #e6e9e6;
   border-radius: 10px;
   cursor: pointer;
@@ -388,6 +391,12 @@
 
 .settingsOption:hover {
   border-color: #c8cec9;
+}
+
+/* Выбранный вариант заметен подсветкой, а не тяжёлой рамкой. */
+.settingsOption:has(input:checked) {
+  border-color: #e6cdb9;
+  background: #fdf7f2;
 }
 
 .settingsOption:has(input:focus-visible) {
@@ -401,28 +410,30 @@
 }
 
 .settingsOption input {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
-  margin-top: 2px;
+  /* По центру первой строки названия: (line-height 18px − 16px) / 2. */
+  margin-top: 1px;
   accent-color: #b85f2c;
 }
 
 .settingsOption > span {
   display: grid;
-  gap: 3px;
+  gap: 2px;
 }
 
 .settingsOptionName {
   color: #202522;
   font-size: 14px;
+  line-height: 18px;
   font-weight: 650;
 }
 
 .settingsOptionHint {
   color: #6d756f;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.3;
 }
 
 .settingsPending {
@@ -760,11 +771,6 @@
 
   .navSettings {
     padding-left: 8px;
-  }
-
-  /* На узком экране popover остаётся внутри вьюпорта. */
-  .settingsPopover {
-    width: min(300px, calc(100vw - 24px));
   }
 
   .headerTopline {

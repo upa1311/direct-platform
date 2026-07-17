@@ -97,9 +97,6 @@ export function RestaurantSettingsMenu() {
           aria-label={RESTAURANT_SETTINGS_BUTTON_LABEL}
         >
           <h2 className={styles.settingsTitle}>Режим работы</h2>
-          <p className={styles.settingsHint}>
-            Выберите, как сотрудники ресторана работают с заказами.
-          </p>
 
           {isHydrated && restaurant ? (
             <>

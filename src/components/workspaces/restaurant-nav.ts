@@ -46,10 +46,9 @@ export const WORKFLOW_MODE_ORDER: readonly RestaurantOrderWorkflowMode[] = [
   "SPLIT_OPERATOR_KITCHEN",
 ];
 
-/** Спокойные подписи вариантов: что именно меняется для сотрудников. */
+/** Короткие подписи вариантов: служебный dropdown, а не страница настроек. */
 export const WORKFLOW_MODE_HINTS: Record<RestaurantOrderWorkflowMode, string> = {
-  COMBINED:
-    "Один сотрудник принимает заказ, указывает время приготовления и выполняет выдачу.",
+  COMBINED: "Приём, приготовление и выдача вместе.",
   SPLIT_OPERATOR_KITCHEN:
-    "Кухня отвечает за приготовление и время. Оператор работает с клиентом, оплатой, доставкой и выдачей.",
+    "Кухня готовит, оператор отвечает за доставку и выдачу.",
 };
