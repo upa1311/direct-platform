@@ -41,8 +41,15 @@ test("COMBINED разрешает все ресторанные действия
 // --- SPLIT KITCHEN действия -------------------------------------------------
 
 test("SPLIT KITCHEN: приготовление и время разрешены", () => {
-  for (const a of ["ACCEPT_ORDER", "SET_INITIAL_ETA", "ADJUST_ETA", "MARK_READY", "REPORT_PREPARATION_PROBLEM", "PAUSE_RESTAURANT", "CHANGE_MENU_AVAILABILITY"] as const) {
+  for (const a of ["ADJUST_ETA", "MARK_READY", "REPORT_PREPARATION_PROBLEM", "PAUSE_RESTAURANT", "CHANGE_MENU_AVAILABILITY"] as const) {
     assert.equal(can("SPLIT_OPERATOR_KITCHEN", "KITCHEN", a), true, a);
+  }
+});
+
+test("SPLIT KITCHEN: решение по новому заказу запрещено", () => {
+  // Непринятый заказ до кухни не доходит: приём и начальное время — у оператора.
+  for (const a of ["ACCEPT_ORDER", "SET_INITIAL_ETA"] as const) {
+    assert.equal(can("SPLIT_OPERATOR_KITCHEN", "KITCHEN", a), false, a);
   }
 });
 
@@ -60,8 +67,15 @@ test("SPLIT OPERATOR: клиент/отмена/водитель/выдача р
   }
 });
 
-test("SPLIT OPERATOR: приготовление/приём/готовность запрещены", () => {
-  for (const a of ["ACCEPT_ORDER", "SET_INITIAL_ETA", "ADJUST_ETA", "MARK_READY", "REPORT_PREPARATION_PROBLEM", "PAUSE_RESTAURANT", "CHANGE_MENU_AVAILABILITY"] as const) {
+test("SPLIT OPERATOR: решение по новому заказу и начальное время разрешены", () => {
+  for (const a of ["ACCEPT_ORDER", "SET_INITIAL_ETA"] as const) {
+    assert.equal(can("SPLIT_OPERATOR_KITCHEN", "OPERATOR", a), true, a);
+  }
+});
+
+test("SPLIT OPERATOR: приготовление и готовность запрещены", () => {
+  // Готовит кухня: оператор не меняет ETA, не сообщает о проблеме и не готовит.
+  for (const a of ["ADJUST_ETA", "MARK_READY", "REPORT_PREPARATION_PROBLEM", "PAUSE_RESTAURANT", "CHANGE_MENU_AVAILABILITY"] as const) {
     assert.equal(can("SPLIT_OPERATOR_KITCHEN", "OPERATOR", a), false, a);
   }
 });

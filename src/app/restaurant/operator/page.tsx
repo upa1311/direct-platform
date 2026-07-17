@@ -4,6 +4,15 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import kds from "@/components/kitchen/kitchen.module.css";
+import {
+  defaultPrep,
+  formatAutoClose,
+  PREP_OPTIONS,
+} from "@/components/kitchen/new-order-decision";
+import {
+  NewOrderSoundButton,
+  useNewOrderSound,
+} from "@/components/kitchen/new-order-sound";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
@@ -85,10 +94,91 @@ function OperatorOrderDetails({ order }: { order: Order }) {
 }
 
 /**
+ * Решение оператора по новому заказу в SPLIT: приём и первоначальное время.
+ * Кухня непринятый заказ не видит, поэтому и отсчёт до автозакрытия показан
+ * здесь — он по-прежнему считается от order.createdAt.
+ *
+ * Действие штатное: тот же acceptOrder и тот же сериализованный guard, что и на
+ * общем экране; роль на событии — OPERATOR. Второй клик не запускает вторую
+ * мутацию (синхронный pending), устаревшая вкладка получает русскую ошибку и
+ * ложного успеха не видит.
+ */
+function OperatorAcceptPanel({
+  order,
+  nowMs,
+}: {
+  order: Order;
+  nowMs: number;
+}) {
+  const { state, acceptOrder } = usePrototype();
+  const { error, pending, run, clearError } = useMutationGuard();
+  const restaurant = state.restaurants.find((r) => r.id === order.restaurant.id);
+  const [prep, setPrep] = useState(() =>
+    defaultPrep(restaurant?.defaultPreparationMinutes),
+  );
+  const autoClose = formatAutoClose(order.createdAt, nowMs);
+
+  const doAccept = async () => {
+    await run(async () => {
+      const response = await acceptOrder(order.id, prep, "RESTAURANT", "OPERATOR");
+      return { ok: response.ok, error: response.error, changed: response.ok };
+    });
+  };
+
+  return (
+    <>
+      {autoClose.needsAttention ? (
+        <span className={kds.attentionBadge}>Требуется реакция</span>
+      ) : null}
+      <div
+        className={`${kds.countdown} ${autoClose.urgent ? kds.countdownOverdue : ""}`}
+      >
+        {autoClose.text}
+      </div>
+      <div className={kds.panel}>
+        <label className={`${kds.field} ${kds.preparationField}`}>
+          <span>Время приготовления</span>
+          <select
+            value={prep}
+            disabled={pending}
+            onChange={(event) => {
+              setPrep(Number(event.target.value));
+              clearError();
+            }}
+          >
+            {PREP_OPTIONS.map((minutes) => (
+              <option value={minutes} key={minutes}>
+                {minutes} минут
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className={kds.btnRow}>
+          <button
+            className={`${kds.btn} ${kds.btnDark}`}
+            type="button"
+            disabled={pending}
+            onClick={doAccept}
+          >
+            {pending ? "Принимаем…" : "Принять"}
+          </button>
+          <OperatorRejectPanel order={order} />
+        </div>
+        {error ? (
+          <p className={kds.pickupError} role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+/**
  * Исправление 1: отклонение нового заказа оператором (RESTAURANT_REVIEW).
- * Оператор не принимает заказ и не задаёт время — только штатный отказ через
- * существующий rejectRestaurantOrder с ролью OPERATOR. Кухня в SPLIT кнопку
- * отклонения не получает (у неё «Не можем приготовить»).
+ * Штатный отказ через существующий rejectRestaurantOrder с ролью OPERATOR —
+ * второго reject-флоу нет. Кухня в SPLIT кнопку отклонения не получает
+ * (у неё «Не можем приготовить»).
  */
 function OperatorRejectPanel({ order }: { order: Order }) {
   const { rejectOrder } = usePrototype();
@@ -509,9 +599,10 @@ function OperatorHandoffActions({ order }: { order: Order }) {
 function operatorKitchenStatus(state: PrototypeState, order: Order): string {
   switch (order.status) {
     case "RESTAURANT_REVIEW":
-      return "Ожидает подтверждения кухни";
+      // Решение по новому заказу принимает оператор, а не кухня.
+      return "Новый заказ · ожидает вашего решения";
     case "AWAITING_PAYMENT":
-      return "Кухня подтвердила заказ · ожидается оплата";
+      return "Заказ принят · ожидается оплата";
     case "PREPARING":
       return `Кухня готовит заказ · Ожидаемая готовность: к ${formatOrderEtaClock(state, order)}`;
     case "READY":
@@ -548,7 +639,7 @@ function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
       <OperatorOrderDetails order={order} />
       <PreparationProblemNotice order={order} />
       {order.status === "RESTAURANT_REVIEW" ? (
-        <OperatorRejectPanel order={order} />
+        <OperatorAcceptPanel order={order} nowMs={nowMs} />
       ) : null}
       {order.status === "READY_FOR_PICKUP" ? (
         <OperatorPickupHandoff order={order} nowMs={nowMs} />
@@ -589,6 +680,22 @@ export default function RestaurantOperatorPage() {
       router.replace("/restaurant/kitchen");
     }
   }, [isCombined, router]);
+
+  // Звук нового заказа — тот же общий контроллер, что и на общем экране. В SPLIT
+  // решение принимает оператор, поэтому сигнал звучит здесь; кухня молчит и
+  // дубля нет. Хук вызывается до раннего return — правила хуков.
+  const {
+    soundEnabled,
+    soundBlocked,
+    enableSound,
+    disableSound,
+  } = useNewOrderSound({
+    restaurantId: selectedRestaurantId,
+    enabled:
+      isHydrated &&
+      restaurant?.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN",
+    nowMs,
+  });
 
   // До гидратации и при redirect не показываем операторский board даже коротко.
   if (!isHydrated || isCombined) {
@@ -637,8 +744,18 @@ export default function RestaurantOperatorPage() {
               </option>
             ))}
           </select>
+          <NewOrderSoundButton
+            soundEnabled={soundEnabled}
+            onEnable={() => void enableSound()}
+            onDisable={disableSound}
+          />
         </div>
       </div>
+      {soundBlocked ? (
+        <p className={kds.soundError} role="alert">
+          Браузер заблокировал звук. Нажмите значок звука ещё раз.
+        </p>
+      ) : null}
 
       {!isHydrated ? (
         <div className={kds.empty}>Загружаем заказы…</div>

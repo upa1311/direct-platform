@@ -14,10 +14,12 @@ import type {
  * определяет, какая роль что может сделать и что видит.
  */
 
-/** Действия кухни в SPLIT (приготовление и время). */
+/**
+ * Действия кухни в SPLIT: только уже принятый заказ — приготовление и время.
+ * Решение по новому заказу (принять/отклонить и начальное время) кухне не
+ * принадлежит: непринятый заказ до неё вообще не доходит.
+ */
 const KITCHEN_ACTIONS: ReadonlySet<RestaurantWorkspaceAction> = new Set([
-  "ACCEPT_ORDER",
-  "SET_INITIAL_ETA",
   "ADJUST_ETA",
   "MARK_READY",
   "REPORT_PREPARATION_PROBLEM",
@@ -25,8 +27,14 @@ const KITCHEN_ACTIONS: ReadonlySet<RestaurantWorkspaceAction> = new Set([
   "CHANGE_MENU_AVAILABILITY",
 ]);
 
-/** Действия оператора в SPLIT (клиент, оплата, водитель, выдача). */
+/**
+ * Действия оператора в SPLIT: решение по новому заказу (приём и начальное
+ * время), клиент, оплата, водитель, выдача. Отклонение проходит через
+ * MANAGE_CANCELLATION — отдельного reject-действия в матрице нет.
+ */
 const OPERATOR_ACTIONS: ReadonlySet<RestaurantWorkspaceAction> = new Set([
+  "ACCEPT_ORDER",
+  "SET_INITIAL_ETA",
   "MANAGE_CUSTOMER",
   "MANAGE_CANCELLATION",
   "MANAGE_DRIVER",

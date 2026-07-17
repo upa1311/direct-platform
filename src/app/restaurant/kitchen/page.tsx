@@ -1,11 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { BellOff, BellRing, TriangleAlert } from "lucide-react";
+import { useEffect, useState } from "react";
+import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
 import { KitchenLabelPrintButton } from "@/components/kitchen/kitchen-order-label-print";
+import {
+  defaultPrep,
+  formatAutoClose,
+  PREP_OPTIONS,
+} from "@/components/kitchen/new-order-decision";
+import {
+  NewOrderSoundButton,
+  useNewOrderSound,
+} from "@/components/kitchen/new-order-sound";
 import {
   EtaAdjustPanel,
   MenuAvailabilitySection,
@@ -13,18 +22,9 @@ import {
 } from "@/components/kitchen/kitchen-operations";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
-import {
-  disableKitchenSound,
-  enableKitchenSound,
-  KITCHEN_SOUND_KEY,
-  playKitchenBeep,
-} from "@/components/workspaces/kitchen-sound";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type { MutationAck } from "@/prototype/prototype-store";
-import {
-  PREPARATION_PROBLEM_REASONS,
-  RESTAURANT_RESPONSE_TIMEOUT_MS,
-} from "@/prototype/actions";
+import { PREPARATION_PROBLEM_REASONS } from "@/prototype/actions";
 import type {
   CancellationRequest,
   DeliveryMode,
@@ -36,7 +36,6 @@ import {
   formatKitchenCountdown,
   formatKitchenDuration,
   formatMoney,
-  getAudibleKitchenReviewOrders,
   getCancellationRequestForOrder,
   getKitchenAwaitingPaymentOrders,
   getKitchenNewOrders,
@@ -48,36 +47,10 @@ import {
   getPendingCancellationRequestsForRestaurant,
   getPickupNoShowEligibleAtIso,
   getRestaurant,
-  isKitchenBeepDue,
   isPickupNoShowEligibleAt,
   paymentStatusLabels,
   pickupPaymentMethodLabels,
 } from "@/prototype/selectors";
-
-const ATTENTION_THRESHOLD_MS = 2 * 60 * 1000;
-const URGENT_THRESHOLD_MS = 60 * 1000;
-
-/** Обратный отсчёт до автозакрытия неотвеченного заказа (§3). */
-function formatAutoClose(
-  createdAtIso: string,
-  nowMs: number,
-): { text: string; needsAttention: boolean; urgent: boolean } {
-  if (nowMs === 0) {
-    return { text: "—", needsAttention: false, urgent: false };
-  }
-  const elapsed = nowMs - Date.parse(createdAtIso);
-  const remainingMs = RESTAURANT_RESPONSE_TIMEOUT_MS - elapsed;
-  const remSec = Math.max(0, Math.ceil(remainingMs / 1000));
-  const mmss = `${Math.floor(remSec / 60)}:${String(remSec % 60).padStart(2, "0")}`;
-  const urgent = remainingMs <= URGENT_THRESHOLD_MS;
-  return {
-    text: urgent
-      ? `Заказ будет автоматически закрыт через ${mmss}`
-      : `До автоматического закрытия: ${mmss}`,
-    needsAttention: elapsed >= ATTENTION_THRESHOLD_MS,
-    urgent,
-  };
-}
 
 /** Заметный блок уведомления кухни о запросе клиента на отмену (§11). */
 function CancellationRequestNotice({
@@ -97,8 +70,6 @@ function CancellationRequestNotice({
   );
 }
 
-const PREP_OPTIONS = [10, 15, 20, 25, 30, 40] as const;
-
 const REJECT_REASONS = [
   "Нет нужных позиций",
   "Кухня перегружена",
@@ -112,12 +83,6 @@ function kitchenDeliveryLabel(mode: DeliveryMode): string {
   if (mode === "PLATFORM_DRIVER") return "Доставка Direct";
   if (mode === "RESTAURANT_DELIVERY") return "Доставка ресторана";
   return "Самовывоз";
-}
-
-function defaultPrep(value: number | undefined): number {
-  return PREP_OPTIONS.includes(value as (typeof PREP_OPTIONS)[number])
-    ? (value as number)
-    : 25;
 }
 
 function totalUnits(order: Order): number {
@@ -1048,8 +1013,6 @@ export default function RestaurantKitchenPage() {
     workspaceRestaurants,
   } = useRestaurantWorkspace();
   const [nowMs, setNowMs] = useState(0);
-  const [soundEnabled, setSoundEnabled] = useState(false);
-  const [soundBlocked, setSoundBlocked] = useState(false);
 
   const restaurant = getRestaurant(state, selectedRestaurantId);
   // Этап 8: в SPLIT кухня не видит приватные данные и не выполняет выдачу.
@@ -1058,6 +1021,8 @@ export default function RestaurantKitchenPage() {
   const acceptanceState = restaurant
     ? getKitchenAcceptanceState(restaurant, nowMs)
     : null;
+  // В SPLIT селектор возвращает пусто: решение по новому заказу — у оператора,
+  // непринятый заказ до кухни не доходит ни карточкой, ни звуком, ни таймером.
   const newOrders = getKitchenNewOrders(state, selectedRestaurantId);
   const awaitingOrders = getKitchenAwaitingPaymentOrders(
     state,
@@ -1070,79 +1035,26 @@ export default function RestaurantKitchenPage() {
     selectedRestaurantId,
   );
 
-  // Refs — единый централизованный механизм сигналов (§2), без setInterval на
-  // карточку. Синхронизируем после рендера, читаем из общего тика.
-  const stateRef = useRef(state);
-  const restaurantIdRef = useRef(selectedRestaurantId);
-  const soundEnabledRef = useRef(false);
-  const lastBeepRef = useRef<number | null>(null);
-  const announcedRef = useRef<string[]>([]);
-
+  // Единый тик экрана: часы для отсчётов и расписания сигнала.
   useEffect(() => {
-    stateRef.current = state;
-    restaurantIdRef.current = selectedRestaurantId;
-    soundEnabledRef.current = soundEnabled;
-  }, [state, selectedRestaurantId, soundEnabled]);
-
-  useEffect(() => {
-    // Единый тик кухни: часы + централизованное расписание звука (§2, §19).
-    const tick = () => {
-      setNowMs(Date.now());
-      // Звучат только заказы моложе 7 минут выбранного ресторана (§2).
-      const audibleIds = getAudibleKitchenReviewOrders(
-        stateRef.current,
-        restaurantIdRef.current,
-        Date.now(),
-      ).map((order) => order.id);
-      if (audibleIds.length === 0) {
-        // Нет звучащих заказов — сбрасываем расписание для мгновенного сигнала.
-        lastBeepRef.current = null;
-        announcedRef.current = [];
-        return;
-      }
-      if (!soundEnabledRef.current) return;
-      const due = isKitchenBeepDue({
-        reviewOrderIds: audibleIds,
-        announcedOrderIds: announcedRef.current,
-        lastBeepAtMs: lastBeepRef.current,
-        nowMs: Date.now(),
-      });
-      if (due) {
-        playKitchenBeep();
-        lastBeepRef.current = Date.now();
-        announcedRef.current = [...audibleIds];
-      }
-    };
+    const tick = () => setNowMs(Date.now());
     tick();
     const intervalId = window.setInterval(tick, 1000);
     return () => window.clearInterval(intervalId);
   }, []);
 
-  const handleEnableSound = async () => {
-    const ok = await enableKitchenSound();
-    if (!ok) {
-      setSoundBlocked(true);
-      return;
-    }
-    setSoundBlocked(false);
-    setSoundEnabled(true);
-    window.localStorage.setItem(KITCHEN_SOUND_KEY, "1");
-    // Если уже есть звучащие новые заказы — один рабочий сигнал сразу.
-    const audibleIds = getAudibleKitchenReviewOrders(
-      state,
-      selectedRestaurantId,
-      Date.now(),
-    ).map((order) => order.id);
-    playKitchenBeep();
-    lastBeepRef.current = Date.now();
-    announcedRef.current = audibleIds;
-  };
-
-  const handleDisableSound = () => {
-    disableKitchenSound();
-    setSoundEnabled(false);
-    window.localStorage.setItem(KITCHEN_SOUND_KEY, "0");
-  };
+  // Звук нового заказа — общий контроллер. В SPLIT новых заказов у кухни нет,
+  // поэтому она их и не озвучивает: сигнал уходит оператору, дубля не будет.
+  const {
+    soundEnabled,
+    soundBlocked,
+    enableSound: handleEnableSound,
+    disableSound: handleDisableSound,
+  } = useNewOrderSound({
+    restaurantId: selectedRestaurantId,
+    enabled: !isSplit,
+    nowMs,
+  });
 
   return (
     <div className={kds.screen}>
@@ -1181,28 +1093,14 @@ export default function RestaurantKitchenPage() {
               </option>
             ))}
           </select>
-          <button
-            className={`${kds.soundBtn} ${soundEnabled ? kds.soundBtnOn : ""}`}
-            type="button"
-            onClick={soundEnabled ? handleDisableSound : handleEnableSound}
-            aria-label={soundEnabled ? "Выключить звук" : "Включить звук"}
-            title={
-              soundEnabled
-                ? "Звук включён. Нажмите, чтобы выключить"
-                : "Включить звук"
-            }
-          >
-            {/* Выключенный звук — перечёркнутый колокольчик (BellOff), чтобы
-                состояние читалось с одного взгляда; включённый — BellRing. */}
-            {soundEnabled ? (
-              <BellRing size={18} aria-hidden="true" />
-            ) : (
-              <BellOff size={18} aria-hidden="true" />
-            )}
-            {soundEnabled ? (
-              <span className={kds.soundDot} aria-hidden="true" />
-            ) : null}
-          </button>
+          {/* В SPLIT новые заказы звучат у оператора — колокольчик кухне не нужен. */}
+          {!isSplit ? (
+            <NewOrderSoundButton
+              soundEnabled={soundEnabled}
+              onEnable={() => void handleEnableSound()}
+              onDisable={handleDisableSound}
+            />
+          ) : null}
         </div>
       </div>
       {soundBlocked ? (

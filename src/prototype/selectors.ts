@@ -1205,11 +1205,22 @@ export function isPickupNoShowEligibleAt(order: Order, nowIso: string): boolean 
   return nowMs >= Date.parse(eligibleAt);
 }
 
-/** «Новые» — RESTAURANT_REVIEW, самые старые сверху (ждут дольше всех). */
+/**
+ * «Новые» — RESTAURANT_REVIEW, самые старые сверху (ждут дольше всех).
+ *
+ * В SPLIT решение по новому заказу принимает оператор, поэтому у кухни новых
+ * заказов нет вовсе: список пуст. Правило живёт здесь, а не в разметке, чтобы
+ * оно проверялось тестом и было одним и тем же для карточек, звука и таймера.
+ * Доменные права этим не подменяются: приём кухни блокирует матрица прав.
+ */
 export function getKitchenNewOrders(
   state: PrototypeState,
   restaurantId: string,
 ): Order[] {
+  const mode =
+    state.restaurants.find((r) => r.id === restaurantId)?.orderWorkflowMode ??
+    "COMBINED";
+  if (mode === "SPLIT_OPERATOR_KITCHEN") return [];
   return kitchenOrders(state, restaurantId, ["RESTAURANT_REVIEW"]).sort(
     (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
   );
