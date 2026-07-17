@@ -5055,13 +5055,13 @@ button:disabled {
   }
 }
 
-/* --- Печать термонаклейки заказа (кухня) ---------------------------------
+/* --- Печать производственного тикета заказа (кухня) ----------------------
    Структурные правила печати живут здесь, а не в CSS-модуле: модуль хеширует
-   id, и #kitchen-order-print-root перестал бы совпадать с реальным DOM.
-   Внешний вид самой наклейки — в kitchen-order-label.module.css. */
+   id, и #kitchen-production-print-root перестал бы совпадать с реальным DOM.
+   Внешний вид самого тикета — в kitchen-production-ticket.module.css. */
 
 /* Корень печати существует в DOM, но на экране не показывается. */
-#kitchen-order-print-root {
+#kitchen-production-print-root {
   display: none;
 }
 
@@ -5070,15 +5070,15 @@ button:disabled {
 }
 
 @media print {
-  /* Правило намеренно ограничено маркером data-kitchen-print: он стоит на body
-     только пока печатается наклейка. Без этого ограничения обычный Ctrl+P на
-     любой странице приложения печатал бы пустой лист. */
-  body[data-kitchen-print] > *:not(#kitchen-order-print-root) {
+  /* Правило намеренно ограничено маркером data-kitchen-production-print: он
+     стоит на body только пока печатается тикет. Без этого ограничения обычный
+     Ctrl+P на любой странице приложения печатал бы пустой лист. */
+  body[data-kitchen-production-print] > *:not(#kitchen-production-print-root) {
     display: none !important;
   }
 
-  /* Наклейка — аккуратный блок в левом верхнем углу, без остального интерфейса. */
-  body[data-kitchen-print] #kitchen-order-print-root {
+  /* Тикет — аккуратный блок в левом верхнем углу, без остального интерфейса. */
+  body[data-kitchen-production-print] #kitchen-production-print-root {
     display: block !important;
     position: absolute;
     top: 0;

@@ -5,7 +5,7 @@ import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
-import { KitchenLabelPrintButton } from "@/components/kitchen/kitchen-order-label-print";
+import { KitchenProductionTicketPrintButton } from "@/components/kitchen/kitchen-production-ticket-print";
 import {
   defaultPrep,
   formatAutoClose,
@@ -641,7 +641,7 @@ function PreparingCard({
         >
           Изменить время
         </button>
-        <KitchenLabelPrintButton order={order} />
+        <KitchenProductionTicketPrintButton order={order} timeZone={timeZone} />
       </div>
       {openProblem ? (
         <p className={kds.units} role="status">
@@ -1039,7 +1039,10 @@ function ReadyCard({
         Готов {formatElapsed(getOrderReadySince(order), nowMs)} назад
       </p>
       <div className={kds.btnRow}>
-        <KitchenLabelPrintButton order={order} />
+        <KitchenProductionTicketPrintButton
+          order={order}
+          timeZone={getRestaurant(state, order.restaurant.id)?.timeZone ?? "Europe/Chisinau"}
+        />
       </div>
       {/* Этап 8: выдачу в SPLIT выполняет оператор — кухня без формы и кода. */}
       {isPickup && isSplit ? (

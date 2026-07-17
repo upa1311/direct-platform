@@ -5,21 +5,21 @@ import { createPortal } from "react-dom";
 import { Printer } from "lucide-react";
 
 import type { Order } from "@/prototype/models";
-import { KitchenOrderLabel } from "./kitchen-order-label";
+import { KitchenProductionTicket } from "./kitchen-production-ticket";
 import {
-  buildKitchenOrderLabelData,
-  type KitchenOrderLabelData,
-} from "./kitchen-order-label-data";
+  buildKitchenProductionTicketData,
+  type KitchenProductionTicketData,
+} from "./kitchen-production-ticket-data";
 import kds from "./kitchen.module.css";
 
 /** Устойчивый id корня печати; на него ссылается print CSS в globals.css. */
-const PRINT_ROOT_ID = "kitchen-order-print-root";
+const PRINT_ROOT_ID = "kitchen-production-print-root";
 /**
- * Маркер на body: печатается именно наклейка. Правило скрытия интерфейса
- * ограничено этим маркером намеренно — без него обычный Ctrl+P на любой
- * странице приложения печатал бы пустой лист.
+ * Маркер на body: печатается именно производственный тикет. Правило скрытия
+ * интерфейса ограничено этим маркером намеренно — без него обычный Ctrl+P на
+ * любой странице приложения печатал бы пустой лист.
  */
-const PRINT_MARKER = "data-kitchen-print";
+const PRINT_MARKER = "data-kitchen-production-print";
 
 function ensurePrintRoot(): HTMLElement {
   const existing = document.getElementById(PRINT_ROOT_ID);
@@ -31,7 +31,8 @@ function ensurePrintRoot(): HTMLElement {
 }
 
 /**
- * Печать одной термонаклейки на весь заказ через штатный диалог браузера.
+ * Печать одного производственного тикета на весь заказ через штатный диалог
+ * браузера. Тикет не содержит PII и финансов — модель это гарантирует.
  *
  * Печать НЕ является бизнес-мутацией: доменных действий здесь нет, статус,
  * история, revision и финансы не меняются, счётчик печати не сохраняется.
@@ -41,25 +42,31 @@ function ensurePrintRoot(): HTMLElement {
  * window.print() (ref-guard от повторного вызова) → очистка по afterprint.
  * Отмена системного диалога тоже приводит к afterprint и ничего не меняет.
  */
-export function KitchenLabelPrintButton({ order }: { order: Order }) {
-  const [label, setLabel] = useState<KitchenOrderLabelData | null>(null);
+export function KitchenProductionTicketPrintButton({
+  order,
+  timeZone,
+}: {
+  order: Order;
+  timeZone: string;
+}) {
+  const [ticket, setTicket] = useState<KitchenProductionTicketData | null>(null);
   const [printRoot, setPrintRoot] = useState<HTMLElement | null>(null);
   const printedRef = useRef(false);
 
-  // Печатаем только когда наклейка уже в DOM: effect выполняется после коммита
+  // Печатаем только когда тикет уже в DOM: effect выполняется после коммита
   // portal, поэтому window.print() не может напечатать пустой или прошлый заказ.
   useEffect(() => {
-    if (!label || !printRoot || printedRef.current) return;
+    if (!ticket || !printRoot || printedRef.current) return;
     printedRef.current = true;
     document.body.setAttribute(PRINT_MARKER, "");
     window.print();
-  }, [label, printRoot]);
+  }, [ticket, printRoot]);
 
   useEffect(() => {
     const handleAfterPrint = () => {
       document.body.removeAttribute(PRINT_MARKER);
       printedRef.current = false;
-      setLabel(null);
+      setTicket(null);
     };
     window.addEventListener("afterprint", handleAfterPrint);
     return () => window.removeEventListener("afterprint", handleAfterPrint);
@@ -77,17 +84,17 @@ export function KitchenLabelPrintButton({ order }: { order: Order }) {
       <button
         className={`${kds.btn} ${kds.btnOutline} ${kds.printLabelButton}`}
         type="button"
-        aria-label={`Печать наклейки для заказа ${order.publicNumber}`}
+        aria-label={`Печать кухонного заказа ${order.publicNumber}`}
         onClick={() => {
           setPrintRoot(ensurePrintRoot());
-          setLabel(buildKitchenOrderLabelData(order));
+          setTicket(buildKitchenProductionTicketData(order, timeZone));
         }}
       >
         <Printer size={16} aria-hidden="true" />
-        Печать наклейки
+        Печать заказа
       </button>
-      {label && printRoot
-        ? createPortal(<KitchenOrderLabel data={label} />, printRoot)
+      {ticket && printRoot
+        ? createPortal(<KitchenProductionTicket data={ticket} />, printRoot)
         : null}
     </>
   );

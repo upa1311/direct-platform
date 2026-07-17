@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildKitchenOrderLabelData } from "../components/kitchen/kitchen-order-label-data.ts";
+import { buildKitchenProductionTicketData } from "../components/kitchen/kitchen-production-ticket-data.ts";
 import { createDefaultState } from "./default-state.ts";
 import {
   acceptRestaurantOrderWithResult,
@@ -267,11 +267,11 @@ test("race: после решения свежий mark ready успешен, п
   );
 });
 
-test("печать наклейки остаётся чистой и не зависит от OPEN/RESOLVED", () => {
+test("печать тикета остаётся чистой и не зависит от OPEN/RESOLVED", () => {
   const prepared = makePreparingOrder("SPLIT_OPERATOR_KITCHEN");
   const beforeOrder = getOrder(prepared.state, prepared.orderId);
   const beforeOrderSnapshot = structuredClone(beforeOrder);
-  const beforeLabel = buildKitchenOrderLabelData(beforeOrder);
+  const beforeTicket = buildKitchenProductionTicketData(beforeOrder, "Europe/Chisinau");
   assert.deepEqual(beforeOrder, beforeOrderSnapshot, "печать не мутирует заказ");
 
   const open = reportRestaurantPreparationProblem(
@@ -284,7 +284,10 @@ test("печать наклейки остаётся чистой и не зав
   );
   assert.equal(open.result.ok, true);
   const openOrder = getOrder(open.state, prepared.orderId);
-  assert.deepEqual(buildKitchenOrderLabelData(openOrder), beforeLabel);
+  assert.deepEqual(
+    buildKitchenProductionTicketData(openOrder, "Europe/Chisinau"),
+    beforeTicket,
+  );
   const problem = getOpenPreparationProblem(openOrder);
   assert.ok(problem);
 
@@ -295,7 +298,7 @@ test("печать наклейки остаётся чистой и не зав
     "OPERATOR",
   );
   assert.deepEqual(
-    buildKitchenOrderLabelData(getOrder(resolved, prepared.orderId)),
-    beforeLabel,
+    buildKitchenProductionTicketData(getOrder(resolved, prepared.orderId), "Europe/Chisinau"),
+    beforeTicket,
   );
 });
