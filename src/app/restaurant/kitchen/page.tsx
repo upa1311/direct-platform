@@ -5,6 +5,7 @@ import { BellOff, BellRing, TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
+import { KitchenLabelPrintButton } from "@/components/kitchen/kitchen-order-label-print";
 import {
   EtaAdjustPanel,
   MenuAvailabilitySection,
@@ -631,6 +632,7 @@ function PreparingCard({
         >
           Изменить время
         </button>
+        <KitchenLabelPrintButton order={order} />
       </div>
       <div className={kds.btnRow}>
         <button
@@ -1022,6 +1024,9 @@ function ReadyCard({
       <p className={kds.subtle}>
         Готов {formatElapsed(getOrderReadySince(order), nowMs)} назад
       </p>
+      <div className={kds.btnRow}>
+        <KitchenLabelPrintButton order={order} />
+      </div>
       {/* Этап 8: выдачу в SPLIT выполняет оператор — кухня без формы и кода. */}
       {isPickup && isSplit ? (
         <p className={kds.pickupAdminHint}>

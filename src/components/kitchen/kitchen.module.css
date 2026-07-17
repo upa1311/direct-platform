@@ -211,7 +211,18 @@
    до кнопки готовности даёт grid-gap карточки (8px), отдельный margin не нужен. */
 .changeTimeRow {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-start;
+  gap: 8px;
+}
+
+/* Печать наклейки — вторичное действие: компактное, по содержимому, не спорит
+   с зелёной кнопкой статуса и переносится, а не выходит за карточку на mobile. */
+.printLabelButton {
+  width: fit-content;
+  min-height: 34px;
+  padding: 6px 11px;
+  font-size: 13px;
 }
 
 .changeTimeButton {

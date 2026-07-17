@@ -5054,3 +5054,35 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* --- Печать термонаклейки заказа (кухня) ---------------------------------
+   Структурные правила печати живут здесь, а не в CSS-модуле: модуль хеширует
+   id, и #kitchen-order-print-root перестал бы совпадать с реальным DOM.
+   Внешний вид самой наклейки — в kitchen-order-label.module.css. */
+
+/* Корень печати существует в DOM, но на экране не показывается. */
+#kitchen-order-print-root {
+  display: none;
+}
+
+@page {
+  margin: 0;
+}
+
+@media print {
+  /* Правило намеренно ограничено маркером data-kitchen-print: он стоит на body
+     только пока печатается наклейка. Без этого ограничения обычный Ctrl+P на
+     любой странице приложения печатал бы пустой лист. */
+  body[data-kitchen-print] > *:not(#kitchen-order-print-root) {
+    display: none !important;
+  }
+
+  /* Наклейка — аккуратный блок в левом верхнем углу, без остального интерфейса. */
+  body[data-kitchen-print] #kitchen-order-print-root {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: #fff;
+  }
+}

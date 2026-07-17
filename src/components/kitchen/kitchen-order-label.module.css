@@ -1,0 +1,104 @@
+/*
+ * Внешний вид термонаклейки: рулон 80 мм, печатная область ~74 мм.
+ * Только чёрное на белом — термопринтер не печатает цвет, тени и градиенты.
+ * Высота не задаётся: наклейка ровно по содержимому, иначе появляется вторая
+ * пустая страница.
+ */
+.label {
+  width: 74mm;
+  padding: 3mm;
+  background: #fff;
+  color: #000;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial,
+    sans-serif;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/* Ничего не тянет высоту за последним элементом. */
+.label > *:last-child {
+  margin-bottom: 0;
+}
+
+.brand {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+/* Номер заказа — самый заметный элемент наклейки. */
+.number {
+  margin: 1mm 0 2mm;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.delivery {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.ready {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.rule {
+  margin: 2mm 0;
+  border: 0;
+  border-top: 1px solid #000;
+}
+
+.items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  margin-bottom: 2mm;
+}
+
+/* Длинные названия переносятся, ничего не обрезается. */
+.itemLine {
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Комментарий к приготовлению: жирный, в заметной рамке, без заливки —
+ * термопринтер чёрно-белый, серый фон только съел бы контраст.
+ */
+.comment {
+  margin-top: 1mm;
+  padding: 1mm 1.5mm;
+  border: 1.5px solid #000;
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.counts {
+  margin-bottom: 2mm;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.payment {
+  padding: 1mm;
+  border: 1.5px solid #000;
+  font-size: 15px;
+  font-weight: 800;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.footer {
+  margin-top: 2mm;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
