@@ -2118,4 +2118,99 @@ export function getRestaurantOperationalEvents(
     .slice(0, limit);
 }
 
+// --- Проблема приготовления: OPEN/RESOLVED (Этап 1 из 2) --------------------
+
+/** Префикс сообщения кухни о проблеме приготовления (для извлечения причины). */
+export const PREPARATION_PROBLEM_KITCHEN_PREFIX =
+  "Кухня сообщила о проблеме: ";
+/** Префикс сообщения администратора о проблеме приготовления. */
+export const PREPARATION_PROBLEM_ADMIN_PREFIX = "Администратор Direct: ";
+
+/** Id проблемы у события: явный preparationProblemId либо (legacy) event.id. */
+export function preparationProblemIdOf(event: OrderHistoryEvent): string {
+  return event.preparationProblemId ?? event.id;
+}
+
+/** Исходная причина кухни из сообщения OPEN-события (без служебного префикса). */
+export function preparationProblemReason(event: OrderHistoryEvent): string {
+  const message = event.message ?? "";
+  if (message.startsWith(PREPARATION_PROBLEM_KITCHEN_PREFIX)) {
+    return message.slice(PREPARATION_PROBLEM_KITCHEN_PREFIX.length);
+  }
+  if (message.startsWith(PREPARATION_PROBLEM_ADMIN_PREFIX)) {
+    return message.slice(PREPARATION_PROBLEM_ADMIN_PREFIX.length);
+  }
+  return message;
+}
+
+export interface PreparationProblemView {
+  /** Идентификатор проблемы, общий для OPEN и RESOLVED событий. */
+  problemId: string;
+  /** Исходная причина кухни (без служебного префикса). */
+  reason: string;
+  /** OPEN-событие проблемы. */
+  event: OrderHistoryEvent;
+  occurredAt: string;
+}
+
+/**
+ * Нерешённая проблема приготовления заказа либо null. Чистая функция, историю
+ * не мутирует. OPEN и RESOLVED сопоставляются по problemId: проблема считается
+ * активной, только если для её id НЕТ RESOLVED-события. Legacy-событие без
+ * preparationProblemState трактуется как OPEN, его id — event.id. Возвращается
+ * самая поздняя из активных.
+ */
+export function getOpenPreparationProblem(
+  order: Order,
+): PreparationProblemView | null {
+  const resolvedIds = new Set<string>();
+  for (const event of order.history) {
+    if (
+      event.type === "PREPARATION_PROBLEM" &&
+      event.preparationProblemState === "RESOLVED"
+    ) {
+      resolvedIds.add(preparationProblemIdOf(event));
+    }
+  }
+  for (let i = order.history.length - 1; i >= 0; i -= 1) {
+    const event = order.history[i];
+    if (event.type !== "PREPARATION_PROBLEM") continue;
+    // RESOLVED-событие — это решение, а не открытие проблемы.
+    if (event.preparationProblemState === "RESOLVED") continue;
+    const problemId = preparationProblemIdOf(event);
+    if (resolvedIds.has(problemId)) continue;
+    return {
+      problemId,
+      reason: preparationProblemReason(event),
+      event,
+      occurredAt: event.occurredAt,
+    };
+  }
+  return null;
+}
+
+/**
+ * Последнее RESOLVED-событие проблемы приготовления либо null. Для кухни: показ
+ * спокойного подтверждения «оператор подтвердил решение» после решения.
+ */
+export function getLatestResolvedPreparationProblem(
+  order: Order,
+): PreparationProblemView | null {
+  for (let i = order.history.length - 1; i >= 0; i -= 1) {
+    const event = order.history[i];
+    if (
+      event.type === "PREPARATION_PROBLEM" &&
+      event.preparationProblemState === "RESOLVED"
+    ) {
+      return {
+        problemId: preparationProblemIdOf(event),
+        reason: preparationProblemReason(event),
+        event,
+        occurredAt: event.occurredAt,
+      };
+    }
+  }
+  return null;
+}
+
 export { TEST_RESTAURANT_ID };

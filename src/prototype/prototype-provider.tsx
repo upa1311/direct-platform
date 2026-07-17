@@ -40,6 +40,7 @@ import {
   markOrderReadyWithResult,
   markPickupNoShow as runPickupNoShow,
   reportRestaurantPreparationProblem,
+  resolveRestaurantPreparationProblem,
   setRestaurantWorkflowModeWithResult,
   simulateSuccessfulOnlinePaymentWithResult,
   setRestaurantAcceptingOrdersWithResult,
@@ -237,6 +238,13 @@ export interface PrototypeContextValue {
   ) => Promise<AdjustOrderEtaResult>;
   reportPreparationProblem: (
     orderId: string,
+    reason: string,
+    actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => Promise<PreparationProblemResult>;
+  resolvePreparationProblem: (
+    orderId: string,
+    preparationProblemId: string,
     reason: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
@@ -1048,6 +1056,32 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  const resolvePreparationProblem = useCallback(
+    (
+      orderId: string,
+      preparationProblemId: string,
+      reason: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) => {
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          resolveRestaurantPreparationProblem(
+            baseState,
+            orderId,
+            preparationProblemId,
+            reason,
+            actor,
+            workspaceRole,
+            nowIso,
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      });
+    },
+    [runSerializedActionMutation],
+  );
+
   const completePickup = useCallback(
     (
       orderId: string,
@@ -1354,6 +1388,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       markReady,
       adjustOrderEta,
       reportPreparationProblem,
+      resolvePreparationProblem,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
@@ -1406,6 +1441,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       markReady,
       adjustOrderEta,
       reportPreparationProblem,
+      resolvePreparationProblem,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,

@@ -52,6 +52,7 @@ import {
   detectZoneId,
   getCartDeliveryMode,
   getCartItemViews,
+  getOpenPreparationProblem,
   getRestaurant,
   isActiveOrderStatus,
   isAddressReady,
@@ -62,6 +63,8 @@ import {
   isRestaurantAcceptingOrdersAt,
   getPickupNoShowEligibleAtIso,
   isPickupNoShowEligibleAt,
+  PREPARATION_PROBLEM_ADMIN_PREFIX,
+  PREPARATION_PROBLEM_KITCHEN_PREFIX,
   WORKING_RESTAURANT_IDS,
 } from "./selectors";
 import {
@@ -1935,6 +1938,13 @@ export function reportRestaurantPreparationProblem(
   if (order.status !== "RESTAURANT_REVIEW" && order.status !== "PREPARING") {
     return fail("Сообщить о проблеме можно только до готовности заказа.");
   }
+  // Этап 1: пока прежняя проблема не решена, вторую не отправляем — иначе
+  // копятся дубли и оператор не понимает, какая активна.
+  if (getOpenPreparationProblem(order)) {
+    return fail("Проблема уже передана оператору. Дождитесь решения.");
+  }
+  // Этап 1: пока прежняя проблема не решена, вторую не отправляем — иначе
+  // копятся дубли и оператор не понимает, какая активна.
   const normalizedReason = reason.trim();
   if (!normalizedReason) {
     return fail("Укажите причину.");
@@ -1945,14 +1955,18 @@ export function reportRestaurantPreparationProblem(
 
   const now = nowIso;
   const prefix =
-    actor === "ADMIN" ? "Администратор Direct: " : "Кухня сообщила о проблеме: ";
+    actor === "ADMIN"
+      ? PREPARATION_PROBLEM_ADMIN_PREFIX
+      : PREPARATION_PROBLEM_KITCHEN_PREFIX;
+  // Id события служит и id проблемы: OPEN и последующий RESOLVED делят его.
+  const eventId = `${order.id}-history-${order.history.length + 1}`;
   const updatedOrder: Order = {
     ...order,
     updatedAt: now,
     history: [
       ...order.history,
       {
-        id: `${order.id}-history-${order.history.length + 1}`,
+        id: eventId,
         occurredAt: now,
         actor,
         type: "PREPARATION_PROBLEM",
@@ -1960,6 +1974,8 @@ export function reportRestaurantPreparationProblem(
         toStatus: order.status,
         message: `${prefix}${normalizedReason}`,
         restaurantWorkspaceRole: guard.role,
+        preparationProblemId: eventId,
+        preparationProblemState: "OPEN",
       },
     ],
   };
@@ -1974,6 +1990,104 @@ export function reportRestaurantPreparationProblem(
   );
   return { state: nextState, result: { ok: true, error: null } };
 }
+
+/**
+ * Этап 1 из 2: оператор (в COMBINED — общий экран) подтверждает, что проблема
+ * приготовления решена и заказ продолжается. Действие ТОЛЬКО замыкает цикл
+ * сообщение → решение: статус, ETA, позиции, оплату, financial snapshot,
+ * settlement и pickupCode оно НЕ меняет и заказ не отменяет. Эскалация в Direct
+ * (отмена/возврат) — отдельный следующий этап, здесь её нет.
+ *
+ * Guard: заказ существует и в PREPARING; указанная проблема существует и всё ещё
+ * OPEN (повторное/устаревшее решение получает ошибку без мутации); причина не
+ * пуста и ≤ 300; роль разрешена (SPLIT: только OPERATOR; COMBINED: общий экран).
+ */
+export function resolveRestaurantPreparationProblem(
+  state: PrototypeState,
+  orderId: string,
+  preparationProblemId: string,
+  reason: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+  nowIso: string = new Date().toISOString(),
+): ActionResult<PreparationProblemResult> {
+  const fail = (error: string): ActionResult<PreparationProblemResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return fail("Некорректное время операции.");
+  }
+  const order = state.orders.find((o) => o.id === orderId);
+  if (!order) {
+    return fail("Заказ не найден.");
+  }
+  const guard = checkRestaurantWorkspace(
+    state,
+    order,
+    actor,
+    "RESOLVE_PREPARATION_PROBLEM",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
+    return fail("Недостаточно прав для решения проблемы приготовления.");
+  }
+  if (order.status !== "PREPARING") {
+    return fail("Решить проблему можно только у готовящегося заказа.");
+  }
+  // Проблема должна существовать и быть всё ещё открытой: устаревшая вкладка,
+  // повторное подтверждение или чужой id получают ошибку без мутации.
+  const open = getOpenPreparationProblem(order);
+  if (!open || open.problemId !== preparationProblemId) {
+    return fail("Проблема уже решена или не найдена. Обновите данные.");
+  }
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) {
+    return fail("Укажите причину решения.");
+  }
+  if (normalizedReason.length > ETA_REASON_MAX_LENGTH) {
+    return fail("Причина слишком длинная.");
+  }
+
+  const now = nowIso;
+  const updatedOrder: Order = {
+    ...order,
+    updatedAt: now,
+    history: [
+      ...order.history,
+      {
+        id: `${order.id}-history-${order.history.length + 1}`,
+        occurredAt: now,
+        actor,
+        type: "PREPARATION_PROBLEM",
+        fromStatus: order.status,
+        toStatus: order.status,
+        message: `Оператор подтвердил решение: ${normalizedReason}`,
+        restaurantWorkspaceRole: guard.role,
+        preparationProblemId,
+        preparationProblemState: "RESOLVED",
+      },
+    ],
+  };
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Причины решения проблемы приготовления оператором (Этап 1), для UI. */
+export const PREPARATION_PROBLEM_RESOLUTION_REASONS = [
+  "Проблема устранена",
+  "Клиент согласился продолжить заказ",
+  "Другая причина",
+] as const;
 
 /**
  * Общий шаг курьерской доставки для обоих режимов (RESTAURANT_DELIVERY и

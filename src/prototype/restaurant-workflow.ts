@@ -35,6 +35,9 @@ const KITCHEN_ACTIONS: ReadonlySet<RestaurantWorkspaceAction> = new Set([
 const OPERATOR_ACTIONS: ReadonlySet<RestaurantWorkspaceAction> = new Set([
   "ACCEPT_ORDER",
   "SET_INITIAL_ETA",
+  // Проблему приготовления сообщает кухня, а подтверждает её решение оператор
+  // (в COMBINED — тот же общий экран через объединение наборов ниже).
+  "RESOLVE_PREPARATION_PROBLEM",
   "MANAGE_CUSTOMER",
   "MANAGE_CANCELLATION",
   "MANAGE_DRIVER",

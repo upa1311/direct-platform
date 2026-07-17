@@ -19,6 +19,7 @@ import {
   NewOrderSoundButton,
   useNewOrderSound,
 } from "@/components/kitchen/new-order-sound";
+import { PreparationProblemResolveBlock } from "@/components/kitchen/preparation-problem-resolve";
 import {
   EtaAdjustPanel,
   MenuAvailabilitySection,
@@ -45,6 +46,8 @@ import {
   getKitchenNewOrders,
   getKitchenPreparingOrders,
   getKitchenReadyOrders,
+  getLatestResolvedPreparationProblem,
+  getOpenPreparationProblem,
   getOrderReadySince,
   getOrderStatusSince,
   getKitchenAcceptanceState,
@@ -194,7 +197,11 @@ function PreparationProblemPanel({
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
-  const [sent, setSent] = useState(false);
+
+  // Источник истины — общий state, а не локальный флаг: OPEN/RESOLVED видны и в
+  // другой вкладке без reload.
+  const openProblem = getOpenPreparationProblem(order);
+  const latestResolved = getLatestResolvedPreparationProblem(order);
 
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
@@ -211,13 +218,27 @@ function PreparationProblemPanel({
       );
       return { ok: r.ok, error: r.error, changed: r.ok };
     });
-    // Панель закрывается и показывает спокойное подтверждение только при успехе;
-    // при ошибке остаётся открытой с сохранённой причиной и одной ошибкой.
-    if (res.ok) {
-      setSent(true);
-      setOpen(false);
-    }
+    // При успехе форма закрывается; активный OPEN-статус ниже показывается уже
+    // из общего state. При ошибке форма остаётся с сохранённой причиной.
+    if (res.ok) setOpen(false);
   };
+
+  // Пока проблема открыта, повторной кнопки нет: вторую проблему поверх
+  // нерешённой отправить нельзя. В SPLIT решение — зона оператора, кухня видит
+  // компактный статус. В COMBINED тот же общий экран «Заказы» решает проблему
+  // сам — показываем форму подтверждения.
+  if (openProblem) {
+    if (isSplit) {
+      return (
+        <p className={kds.units} role="status">
+          Проблема передана оператору. Ожидается решение.
+        </p>
+      );
+    }
+    return (
+      <PreparationProblemResolveBlock order={order} workspaceRole="COMBINED" />
+    );
+  }
 
   if (!open) {
     return (
@@ -225,18 +246,14 @@ function PreparationProblemPanel({
         <button
           className={`${kds.btn} ${kds.btnRedOutline}`}
           type="button"
-          onClick={() => {
-            setOpen(true);
-            setSent(false);
-          }}
+          onClick={() => setOpen(true)}
         >
           Не можем приготовить
         </button>
-        {sent ? (
+        {/* После решения оператором — спокойное подтверждение продолжения. */}
+        {latestResolved ? (
           <p className={kds.units} role="status">
-            {isSplit
-              ? "Сообщение о проблеме отправлено оператору."
-              : "Проблема приготовления сохранена."}
+            Оператор подтвердил: проблема решена, заказ продолжается.
           </p>
         ) : null}
       </>

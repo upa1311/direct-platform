@@ -186,6 +186,7 @@ export type RestaurantWorkspaceAction =
   | "ADJUST_ETA"
   | "MARK_READY"
   | "REPORT_PREPARATION_PROBLEM"
+  | "RESOLVE_PREPARATION_PROBLEM"
   | "MANAGE_CUSTOMER"
   | "MANAGE_CANCELLATION"
   | "MANAGE_DRIVER"
@@ -450,6 +451,19 @@ export interface OrderHistoryEvent {
    * аудита; клиенту не показывается. Старые события без поля продолжают работать.
    */
   restaurantWorkspaceRole?: RestaurantWorkspaceRole;
+  /**
+   * Идентификатор проблемы приготовления (для type === "PREPARATION_PROBLEM").
+   * OPEN-событие кухни и RESOLVED-событие оператора несут один и тот же id, что
+   * связывает сообщение и его решение. Старые события без поля считаются OPEN,
+   * а их id проблемы — это event.id (см. getOpenPreparationProblem).
+   */
+  preparationProblemId?: string;
+  /**
+   * Состояние проблемы приготовления. OPEN — кухня сообщила, ожидается решение;
+   * RESOLVED — оператор/общий экран подтвердил, что заказ продолжается. Отсутствие
+   * поля у старого события трактуется как OPEN.
+   */
+  preparationProblemState?: "OPEN" | "RESOLVED";
 }
 
 /**

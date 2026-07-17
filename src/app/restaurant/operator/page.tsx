@@ -7,6 +7,7 @@ import { TriangleAlert } from "lucide-react";
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
 import { formatOperatorDeliveryAddress } from "@/components/kitchen/operator-delivery-address";
+import { PreparationProblemResolveBlock } from "@/components/kitchen/preparation-problem-resolve";
 import {
   defaultPrep,
   formatAutoClose,
@@ -363,18 +364,6 @@ function OperatorRejectPanel({ order }: { order: Order }) {
 }
 
 /** Последняя проблема кухни (Этап 6) — оператор видит её сразу. */
-function PreparationProblemNotice({ order }: { order: Order }) {
-  const last = [...order.history]
-    .reverse()
-    .find((event) => event.type === "PREPARATION_PROBLEM");
-  if (!last) return null;
-  return (
-    <p className={kds.pickupError} role="status">
-      {last.message}
-    </p>
-  );
-}
-
 /** Панель выдачи самовывоза оператором: способ оплаты + код + невыкуп. */
 function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }) {
   const { completePickup, markPickupNoShow } = usePrototype();
@@ -763,7 +752,8 @@ function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
       <OperatorOrderDetails order={order} />
       {/* Состав — после клиента/адреса/оплаты и ДО решения по заказу. */}
       <OperatorOrderItems order={order} />
-      <PreparationProblemNotice order={order} />
+      {/* Проблема приготовления: оператор видит OPEN и подтверждает решение. */}
+      <PreparationProblemResolveBlock order={order} workspaceRole="OPERATOR" />
       {/* Тайминг кухни — read-only, только в PREPARING, без кухонных действий. */}
       {order.status === "PREPARING" ? (
         <OperatorPreparingTiming order={order} nowMs={nowMs} overdue={overdue} />
