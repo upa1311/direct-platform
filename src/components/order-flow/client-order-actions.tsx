@@ -258,7 +258,7 @@ function RequestCancellation({ order }: { order: Order }) {
       {!open ? (
         <div className={styles.cancelActionRow}>
           <button
-            className={styles.secondaryButton}
+            className={`${styles.secondaryButton} ${styles.requestCancelButton}`}
             type="button"
             onClick={() => {
               setOpen(true);

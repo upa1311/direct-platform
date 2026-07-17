@@ -1437,29 +1437,62 @@ p.pickupReceivedLine {
   width: fit-content;
 }
 
-/* Крупный читаемый блок предупреждения после начала приготовления (§8). */
+/* Блок предупреждения после начала приготовления (§8). Отмена здесь — уже не
+   основной путь, поэтому блок держится тихо и не спорит с остальной страницей. */
 .requestCancelBlock {
   display: grid;
-  gap: 12px;
-  margin-top: 20px;
+  gap: 8px;
+  margin-top: 14px;
 }
 
-/* §3: спокойная компактная заметка (не карточка/кнопка/баннер): узкая, лёгкий
-   левый янтарный акцент, без рамки/фона/тени, приглушённый серо-зелёный текст. */
-.requestWarningText {
+/* §3: спокойная компактная заметка (не карточка/кнопка/баннер): узкая, мягкий
+   левый акцент, без рамки/фона/тени, приглушённый серо-зелёный текст.
+   Селектор со scope, а не одиночный класс: блок лежит внутри .card, а правило
+   «.card p» (0,1,1) перебивает одиночный класс и иначе возвращает свои цвет,
+   line-height и margin. */
+.requestCancelBlock .requestWarningText {
   width: min(100%, 680px);
   justify-self: start;
   margin: 0;
-  padding: 1px 0 1px 12px;
+  padding: 0 0 0 10px;
   border: 0;
-  border-left: 3px solid #d4b06a;
+  border-left: 2px solid #e2d3b0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  color: #626b65;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.45;
+  color: #7b837d;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+/* Ряд кнопки внутри блока не добавляет собственного отступа: вертикальный
+   ритм здесь задаёт gap самого блока. Общий .cancelActionRow не трогаем —
+   им пользуется свободная отмена «Отменить» до начала приготовления. */
+.requestCancelBlock .cancelActionRow {
+  margin-top: 0;
+  justify-content: flex-start;
+}
+
+/* «Запросить отмену» — осторожное дополнительное действие, а не CTA: ниже,
+   уже, легче и тише базовой secondary-кнопки. Сам .secondaryButton не трогаем —
+   он используется по всей админке. */
+.requestCancelButton {
+  width: fit-content;
+  min-height: 30px;
+  padding: 5px 10px;
+  border-color: #e4e8e5;
+  border-radius: 8px;
+  background: transparent;
+  color: #79817b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.requestCancelButton:hover:not(:disabled) {
+  border-color: #d5dad6;
+  background: #f7f8f7;
+  color: #5c645e;
 }
 
 .requestStatusBlock {
