@@ -3,10 +3,15 @@
  * Только чёрное на белом — термопринтер не печатает цвет, тени и градиенты.
  * Высота не задаётся: наклейка ровно по содержимому, иначе появляется вторая
  * пустая страница.
+ *
+ * Поля сверху и слева больше остальных: термопринтер печатает с небольшим
+ * смещением, и текст не должен подходить вплотную к краю. Сдвигать сам
+ * print root отрицательными margin/transform нельзя — поле даёт padding.
  */
 .label {
   width: 74mm;
-  padding: 3mm;
+  box-sizing: border-box;
+  padding: 5mm 3mm 3mm 5mm;
   background: #fff;
   color: #000;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial,
@@ -20,13 +25,14 @@
   margin-bottom: 0;
 }
 
-.brand {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
+/* Способ получения — крупная жирная строка. */
+.delivery {
+  font-size: 16px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
-/* Номер заказа — самый заметный элемент наклейки. */
+/* Номер заказа — самый крупный элемент наклейки. */
 .number {
   margin: 1mm 0 2mm;
   font-size: 30px;
@@ -36,24 +42,14 @@
   overflow-wrap: anywhere;
 }
 
-.delivery {
-  font-size: 15px;
-  font-weight: 800;
-}
-
-.ready {
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.rule {
-  margin: 2mm 0;
-  border: 0;
-  border-top: 1px solid #000;
+/* Имя, адрес, ресторан — обычный читаемый текст; длинный адрес переносится. */
+.line {
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .items {
-  margin: 0;
+  margin: 2mm 0 0;
   padding: 0;
   list-style: none;
 }
@@ -88,17 +84,12 @@
   font-weight: 600;
 }
 
+/* Оплата — отдельный заметный блок с чёрной рамкой. */
 .payment {
   padding: 1mm;
   border: 1.5px solid #000;
   font-size: 15px;
   font-weight: 800;
   text-align: center;
-  overflow-wrap: anywhere;
-}
-
-.footer {
-  margin-top: 2mm;
-  font-size: 11px;
   overflow-wrap: anywhere;
 }

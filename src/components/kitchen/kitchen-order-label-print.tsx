@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Printer } from "lucide-react";
 
-import { usePrototype } from "@/prototype/prototype-provider";
 import type { Order } from "@/prototype/models";
 import { KitchenOrderLabel } from "./kitchen-order-label";
 import {
@@ -43,7 +42,6 @@ function ensurePrintRoot(): HTMLElement {
  * Отмена системного диалога тоже приводит к afterprint и ничего не меняет.
  */
 export function KitchenLabelPrintButton({ order }: { order: Order }) {
-  const { state } = usePrototype();
   const [label, setLabel] = useState<KitchenOrderLabelData | null>(null);
   const [printRoot, setPrintRoot] = useState<HTMLElement | null>(null);
   const printedRef = useRef(false);
@@ -82,7 +80,7 @@ export function KitchenLabelPrintButton({ order }: { order: Order }) {
         aria-label={`Печать наклейки для заказа ${order.publicNumber}`}
         onClick={() => {
           setPrintRoot(ensurePrintRoot());
-          setLabel(buildKitchenOrderLabelData(state, order));
+          setLabel(buildKitchenOrderLabelData(order));
         }}
       >
         <Printer size={16} aria-hidden="true" />

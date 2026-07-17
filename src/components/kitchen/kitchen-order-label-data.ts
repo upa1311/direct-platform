@@ -1,20 +1,16 @@
-import type {
-  DeliveryMode,
-  Order,
-  PaymentStatus,
-  PrototypeState,
-} from "@/prototype/models";
+import type { DeliveryMode, Order, PickupPaymentMethod } from "@/prototype/models";
 // Импорт относительный: модуль проверяется node:test, где alias «@/» не
 // резолвится. Типы стираются при стриппинге, значения — нет.
-import { formatClock24 } from "../../prototype/selectors";
+import { formatMoney } from "../../prototype/selectors";
 import { getVisibleCookingComment } from "./cooking-comment";
 
 /**
  * Безопасная модель данных термонаклейки кухни.
  *
- * Тип намеренно НЕ содержит полей клиента, адреса, кода выдачи, водителя,
- * сумм, комиссий и settlement: то, чего нет в типе, невозможно случайно
- * напечатать. Всё, что печатается, — публичный номер и снимок заказа.
+ * На наклейке печатаются имя клиента и адрес доставки — это физический ярлык
+ * для выдачи и курьера. Телефон, код выдачи, внутренний order.id, водитель,
+ * комиссии и settlement на наклейку не попадают: их нет в этом типе, поэтому
+ * напечатать их нечем. Экранные карточки кухни это не меняет.
  */
 export interface KitchenOrderLabelItem {
   quantity: number;
@@ -26,91 +22,103 @@ export interface KitchenOrderLabelItem {
 }
 
 export interface KitchenOrderLabelData {
-  brand: string;
+  /** САМОВЫВОЗ DIRECT | ДОСТАВКА DIRECT | ДОСТАВКА РЕСТОРАНА — без enum. */
+  deliveryLabel: string;
   /** Публичный номер (DIR-1042), не внутренний order.id. */
   publicNumber: string;
-  /** САМОВЫВОЗ | ДОСТАВКА DIRECT | ДОСТАВКА РЕСТОРАНА — без enum. */
-  deliveryLabel: string;
-  /** «Готово к 18:45» либо «Время готовности не задано». */
-  readyLine: string;
-  /** «Принят: 18:23» по реальному переходу в PREPARING; null — перехода нет. */
-  acceptedLine: string | null;
+  customerName: string;
+  /** Адрес только для доставки; null — самовывоз, блок не печатается. */
+  addressLine: string | null;
+  restaurantName: string;
   items: KitchenOrderLabelItem[];
   /** «Позиций: 2 · Единиц: 3» — нейтральная форма без склонений. */
   countsLine: string;
   itemsTotal: number;
   unitsTotal: number;
-  /** ОПЛАЧЕНО | ОПЛАТА ПРИ ПОЛУЧЕНИИ — без суммы и способа оплаты. */
-  paymentLabel: string;
-  restaurantName: string;
+  /** ОПЛАЧЕНО либо «К ОПЛАТЕ …: сумма». Без разбивки и комиссий. */
+  paymentLine: string;
 }
 
-const LABEL_BRAND = "DIRECT";
-const DEFAULT_TIME_ZONE = "Europe/Chisinau";
-
 export const LABEL_PAID = "ОПЛАЧЕНО";
-export const LABEL_DUE_ON_RECEIPT = "ОПЛАТА ПРИ ПОЛУЧЕНИИ";
-export const LABEL_READY_UNKNOWN = "Время готовности не задано";
+export const LABEL_NO_CUSTOMER_NAME = "Клиент не указан";
 
 /** Способ получения крупной строкой. Внутренний enum на наклейку не попадает. */
 const DELIVERY_LABELS: Record<DeliveryMode, string> = {
-  PICKUP: "САМОВЫВОЗ",
+  PICKUP: "САМОВЫВОЗ DIRECT",
   PLATFORM_DRIVER: "ДОСТАВКА DIRECT",
   RESTAURANT_DELIVERY: "ДОСТАВКА РЕСТОРАНА",
 };
 
+/** Способы оплаты на точке → хвост строки «К ОПЛАТЕ В РЕСТОРАНЕ …». */
+function pickupMethodsSuffix(methods: readonly PickupPaymentMethod[]): string {
+  const cash = methods.includes("CASH");
+  const card = methods.includes("CARD");
+  if (cash && card) return " НАЛИЧНЫМИ ИЛИ КАРТОЙ";
+  if (cash) return " НАЛИЧНЫМИ";
+  if (card) return " КАРТОЙ";
+  return "";
+}
+
 /**
- * Статусы, при которых деньги уже получены. Всё остальное печатается как
- * «оплата при получении»: ошибиться в эту сторону безопасно (сотрудник
- * переспросит), а ложное «ОПЛАЧЕНО» стоило бы ресторану денег.
+ * Строка оплаты. Для оплаченного заказа — только «ОПЛАЧЕНО», без суммы.
+ * Для неоплаченного — сколько и где взять; сумма всегда из
+ * financials.customerTotalCents, финансовая разбивка не печатается.
  */
-const PAID_STATUSES: readonly PaymentStatus[] = [
-  "PAID",
-  "PAID_AT_RESTAURANT",
-  "PAID_TO_RESTAURANT_COURIER",
-];
+export function getLabelPaymentLine(order: Order): string {
+  const status = order.paymentStatus;
+  if (
+    status === "PAID" ||
+    status === "PAID_AT_RESTAURANT" ||
+    status === "PAID_TO_RESTAURANT_COURIER"
+  ) {
+    return LABEL_PAID;
+  }
 
-export function getLabelPaymentLabel(status: PaymentStatus): string {
-  return PAID_STATUSES.includes(status) ? LABEL_PAID : LABEL_DUE_ON_RECEIPT;
+  const amount = formatMoney(
+    order.financials.customerTotalCents,
+    order.financials.currencyCode,
+  );
+
+  if (status === "CASH_ON_DELIVERY" || status === "DUE_TO_RESTAURANT_COURIER") {
+    return `К ОПЛАТЕ КУРЬЕРУ НАЛИЧНЫМИ: ${amount}`;
+  }
+  if (status === "DUE_AT_PICKUP") {
+    return `К ОПЛАТЕ В РЕСТОРАНЕ${pickupMethodsSuffix(
+      order.pickupPaymentMethodsSnapshot,
+    )}: ${amount}`;
+  }
+  // NOT_STARTED и AWAITING_PAYMENT: деньги ещё не получены.
+  return `ОПЛАТА ОЖИДАЕТСЯ: ${amount}`;
 }
 
 /**
- * Реальный момент принятия заказа — переход в PREPARING в истории. Отдельно от
- * getOrderStatusSince: тот при отсутствии события падает на updatedAt, а на
- * наклейке неверное время принятия хуже отсутствующего, поэтому здесь null.
- * Текущее время браузера не используется никогда.
+ * Адрес одной строкой — только для доставки. Квартира необязательна, пустой
+ * адрес самовывоза даёт null, чтобы блок не оставлял пустую строку.
  */
-export function findOrderAcceptedAtIso(order: Order): string | null {
-  const event = order.history.find(
-    (e) =>
-      e.type === "STATUS" &&
-      e.toStatus === "PREPARING" &&
-      e.fromStatus !== "PREPARING",
-  );
-  return event?.occurredAt ?? null;
-}
+export function getLabelAddressLine(order: Order): string | null {
+  if (order.deliveryMode === "PICKUP") return null;
+  const address = order.address;
+  if (!address) return null;
 
-function getRestaurantTimeZone(state: PrototypeState, order: Order): string {
-  return (
-    state.restaurants.find((r) => r.id === order.restaurant.id)?.timeZone ||
-    DEFAULT_TIME_ZONE
-  );
+  const parts: string[] = [];
+  const street = address.street.trim();
+  const house = address.house.trim();
+  const apartment = address.apartment.trim();
+  if (street) parts.push(street);
+  if (house) parts.push(`дом ${house}`);
+  if (apartment) parts.push(`кв. ${apartment}`);
+  return parts.length > 0 ? parts.join(", ") : null;
 }
 
 /**
- * Собирает данные наклейки из снимка заказа. Чистая функция: state и order не
- * мутируются, доменных действий нет — печать не является бизнес-мутацией.
+ * Собирает данные наклейки из снимка заказа. Чистая функция: заказ не
+ * мутируется, доменных действий нет — печать не является бизнес-мутацией.
+ * Общий state не нужен: всё печатаемое лежит в самом снимке заказа.
  *
  * Позиции берутся ТОЛЬКО из order.items (снимок на момент заказа), поэтому
  * последующее изменение меню не меняет наклейку старого заказа.
  */
-export function buildKitchenOrderLabelData(
-  state: PrototypeState,
-  order: Order,
-): KitchenOrderLabelData {
-  const timeZone = getRestaurantTimeZone(state, order);
-  const acceptedAt = findOrderAcceptedAtIso(order);
-
+export function buildKitchenOrderLabelData(order: Order): KitchenOrderLabelData {
   const items: KitchenOrderLabelItem[] = order.items.map((item) => ({
     quantity: item.quantity,
     name: item.name,
@@ -121,20 +129,15 @@ export function buildKitchenOrderLabelData(
   const unitsTotal = items.reduce((sum, item) => sum + item.quantity, 0);
 
   return {
-    brand: LABEL_BRAND,
-    publicNumber: order.publicNumber,
     deliveryLabel: DELIVERY_LABELS[order.deliveryMode],
-    readyLine: order.expectedReadyAt
-      ? `Готово к ${formatClock24(order.expectedReadyAt, timeZone)}`
-      : LABEL_READY_UNKNOWN,
-    acceptedLine: acceptedAt
-      ? `Принят: ${formatClock24(acceptedAt, timeZone)}`
-      : null,
+    publicNumber: order.publicNumber,
+    customerName: order.customer.name.trim() || LABEL_NO_CUSTOMER_NAME,
+    addressLine: getLabelAddressLine(order),
+    restaurantName: order.restaurant.name,
     items,
     countsLine: `Позиций: ${items.length} · Единиц: ${unitsTotal}`,
     itemsTotal: items.length,
     unitsTotal,
-    paymentLabel: getLabelPaymentLabel(order.paymentStatus),
-    restaurantName: order.restaurant.name,
+    paymentLine: getLabelPaymentLine(order),
   };
 }
