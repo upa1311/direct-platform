@@ -172,7 +172,9 @@ test("SPLIT OPERATOR создаёт PENDING request через общий pipeli
   assert.equal(newEvents[0].fromStatus, "PREPARING");
   assert.equal(newEvents[0].toStatus, "PREPARING");
   assert.equal(newEvents[0].restaurantWorkspaceRole, "OPERATOR");
-  assert.match(newEvents[0].message ?? "", /запросил отмену у Direct/);
+  // История видна клиенту — сообщение нейтральное, без внутренней причины.
+  assert.match(newEvents[0].message ?? "", /отправил запрос на отмену в Direct/);
+  assert.ok(!(newEvents[0].message ?? "").includes("Нет замены блюду"));
   // Проблема остаётся активной до решения Direct.
   assert.ok(getOpenPreparationProblem(after));
 });

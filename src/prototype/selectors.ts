@@ -151,6 +151,21 @@ export function clientHistoryEvent(
       hideActor: true,
     };
   }
+  // Событие создания ресторанного запроса на отмену: STATUS без смены статуса с
+  // рабочей ролью ресторана. Клиенту показываем только нейтральный текст без
+  // причины/роли — даже если в legacy-состоянии message содержал причину.
+  // Клиентский запрос (actor CLIENT) роли не несёт и под правило не попадает.
+  if (
+    event.type === "STATUS" &&
+    event.fromStatus === "PREPARING" &&
+    event.toStatus === "PREPARING" &&
+    event.restaurantWorkspaceRole != null
+  ) {
+    return {
+      message: "Ресторан отправил запрос на отмену в Direct.",
+      hideActor: true,
+    };
+  }
   if (clientSafe && order?.deliveryMode === "PICKUP") {
     if (
       event.type === "PAYMENT" &&
@@ -1399,6 +1414,19 @@ export function getClientCancellationMessage(
   request: CancellationRequest | null,
 ): string | null {
   if (!request) return null;
+  // Инициатора определяем структурно (requestedBy), а не по тексту message.
+  // Ресторанный запрос — внутренний: клиенту не раскрываем ни причину ресторана,
+  // ни комментарий администратора, ни problemId/роль.
+  if (getCancellationRequester(request) === "RESTAURANT") {
+    if (request.status === "PENDING") {
+      return "Ресторан сообщил о проблеме с выполнением заказа. Direct уточняет возможность продолжения.";
+    }
+    if (request.status === "APPROVED") {
+      return "Заказ отменён администратором Direct.";
+    }
+    return "Заказ продолжает выполняться.";
+  }
+  // Клиентский / legacy запрос — решение адресовано клиенту, тексты как прежде.
   if (request.status === "PENDING") return "Запрос на отмену рассматривается";
   if (request.status === "APPROVED") return "Отмена одобрена администратором";
   return `Запрос на отмену отклонён: ${request.resolutionNote ?? "решение администратора"}`;

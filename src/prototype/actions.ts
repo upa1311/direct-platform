@@ -1335,7 +1335,10 @@ export function requestOrderCancellationByRestaurant(
         type: "STATUS",
         fromStatus: order.status,
         toStatus: order.status,
-        message: `Ресторан запросил отмену у Direct. Причина: ${normalizedReason}`,
+        // История видна клиенту: внутреннюю причину сюда НЕ пишем — она хранится
+        // только в CancellationRequest.reason (оператор/COMBINED/admin). Роль и
+        // actor остаются для внутреннего аудита.
+        message: "Ресторан отправил запрос на отмену в Direct.",
         restaurantWorkspaceRole: guard.role,
       },
     ],
@@ -1373,6 +1376,15 @@ export function rejectCancellationRequest(
   if (!normalizedNote) return fail("Укажите причину решения.");
 
   const now = new Date().toISOString();
+  // Инициатор — по существующему структурному правилу (requestedBy). Для
+  // ресторанного запроса решение Direct внутреннее: комментарий администратора
+  // в клиентскую историю не пишем, он остаётся в request.resolutionNote. Для
+  // клиентского/legacy запроса решение адресовано клиенту — текст с причиной
+  // сохраняем как прежде.
+  const isRestaurantRequest = request.requestedBy === "RESTAURANT";
+  const rejectionMessage = isRestaurantRequest
+    ? "Direct отклонил запрос ресторана на отмену. Заказ продолжает выполняться."
+    : `Администратор Direct отклонил запрос на отмену. Причина: ${normalizedNote}`;
   const order = state.orders.find((o) => o.id === request.orderId);
   const orders = order
     ? state.orders.map((o) =>
@@ -1382,15 +1394,7 @@ export function rejectCancellationRequest(
               updatedAt: now,
               history: [
                 ...o.history,
-                adminHistoryEvent(
-                  o,
-                  1,
-                  now,
-                  "STATUS",
-                  o.status,
-                  o.status,
-                  `Администратор Direct отклонил запрос на отмену. Причина: ${normalizedNote}`,
-                ),
+                adminHistoryEvent(o, 1, now, "STATUS", o.status, o.status, rejectionMessage),
               ],
             }
           : o,
