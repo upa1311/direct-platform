@@ -12,6 +12,10 @@ import {
   PREP_OPTIONS,
 } from "@/components/kitchen/new-order-decision";
 import {
+  COMBINED_ORDERS_LABEL,
+  SPLIT_KITCHEN_LABEL,
+} from "@/components/workspaces/restaurant-nav";
+import {
   NewOrderSoundButton,
   useNewOrderSound,
 } from "@/components/kitchen/new-order-sound";
@@ -1060,7 +1064,10 @@ export default function RestaurantKitchenPage() {
     <div className={kds.screen}>
       <div className={kds.toolbar}>
         <div className={kds.toolbarLeft}>
-          <span className={kds.brand}>Кухня</span>
+          {/* В COMBINED экран ведёт заказ целиком, а не только готовит. */}
+          <span className={kds.brand}>
+            {isSplit ? SPLIT_KITCHEN_LABEL : COMBINED_ORDERS_LABEL}
+          </span>
           <span className={kds.restaurantName}>{restaurant?.name ?? "—"}</span>
         </div>
         <div className={kds.toolbarRight}>
