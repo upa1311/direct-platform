@@ -1649,6 +1649,11 @@ export function markOrderReadyWithResult(
   if (targetOrder.status !== "PREPARING") {
     return fail(wrongStatusError(targetOrder.status, "PREPARING"));
   }
+  if (getOpenPreparationProblem(targetOrder)) {
+    return fail(
+      "Сначала дождитесь решения проблемы приготовления.",
+    );
+  }
   const workspace = guard.role;
 
   const now = new Date().toISOString();

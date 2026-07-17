@@ -561,6 +561,7 @@ function PreparingCard({
     run: runReady,
   } = useMutationGuard();
   const restaurant = getRestaurant(state, order.restaurant.id);
+  const openProblem = getOpenPreparationProblem(order);
   const countdown = formatKitchenCountdown(order.expectedReadyAt, nowMs);
   const request = getCancellationRequestForOrder(state, order.id);
   const [etaOpen, setEtaOpen] = useState(false);
@@ -620,11 +621,16 @@ function PreparingCard({
         </button>
         <KitchenLabelPrintButton order={order} />
       </div>
+      {openProblem ? (
+        <p className={kds.units} role="status">
+          Сначала дождитесь решения проблемы приготовления.
+        </p>
+      ) : null}
       <div className={kds.btnRow}>
         <button
           className={`${kds.btn} ${kds.btnGreen}`}
           type="button"
-          disabled={readyPending}
+          disabled={readyPending || openProblem !== null}
           onClick={() =>
             void runReady(() => markReady(order.id, "RESTAURANT", "KITCHEN"))
           }
