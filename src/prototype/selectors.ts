@@ -1237,6 +1237,21 @@ export function getKitchenAwaitingPaymentOrders(
 }
 
 /**
+ * Порядок «Готовятся» по expectedReadyAt: просроченные (наименьшее время)
+ * первыми, затем ближайшие к готовности; заказы без expectedReadyAt — в конце.
+ * Чистый компаратор, общий для кухни и оператора — один источник сортировки.
+ */
+export function comparePreparingByReadyAt(a: Order, b: Order): number {
+  const ta = a.expectedReadyAt
+    ? Date.parse(a.expectedReadyAt)
+    : Number.POSITIVE_INFINITY;
+  const tb = b.expectedReadyAt
+    ? Date.parse(b.expectedReadyAt)
+    : Number.POSITIVE_INFINITY;
+  return ta - tb;
+}
+
+/**
  * «Готовятся» — PREPARING. Сортировка по expectedReadyAt по возрастанию:
  * просроченные (наименьшее время) первыми, затем ближайшие; заказы без
  * expectedReadyAt — в конце.
@@ -1245,15 +1260,9 @@ export function getKitchenPreparingOrders(
   state: PrototypeState,
   restaurantId: string,
 ): Order[] {
-  return kitchenOrders(state, restaurantId, ["PREPARING"]).sort((a, b) => {
-    const ta = a.expectedReadyAt
-      ? Date.parse(a.expectedReadyAt)
-      : Number.POSITIVE_INFINITY;
-    const tb = b.expectedReadyAt
-      ? Date.parse(b.expectedReadyAt)
-      : Number.POSITIVE_INFINITY;
-    return ta - tb;
-  });
+  return kitchenOrders(state, restaurantId, ["PREPARING"]).sort(
+    comparePreparingByReadyAt,
+  );
 }
 
 /** «Готовы» — READY и READY_FOR_PICKUP, самые давно готовые сверху. */

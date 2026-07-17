@@ -25,7 +25,9 @@ import type {
   PrototypeState,
 } from "@/prototype/models";
 import {
+  comparePreparingByReadyAt,
   deliveryModeLabels,
+  formatKitchenCountdown,
   formatMoney,
   formatOrderEtaClock,
   getCancellationRequestForOrder,
@@ -655,7 +657,9 @@ function operatorKitchenStatus(state: PrototypeState, order: Order): string {
     case "AWAITING_PAYMENT":
       return "Заказ принят · ожидается оплата";
     case "PREPARING":
-      return `Кухня готовит заказ · Ожидаемая готовность: к ${formatOrderEtaClock(state, order)}`;
+      // Фактическое время показывает отдельный read-only timing-блок, чтобы не
+      // дублировать ожидаемую готовность в статусной строке и в блоке сразу.
+      return "Кухня готовит заказ";
     case "READY":
       return "Заказ готов";
     case "READY_FOR_PICKUP":
@@ -669,11 +673,64 @@ function operatorKitchenStatus(state: PrototypeState, order: Order): string {
   }
 }
 
+/**
+ * Read-only тайминг кухни для оператора (PREPARING). Оператор видит то же
+ * состояние, что кухня, но без кухонных действий: только оценка, ожидаемое
+ * время, последняя корректировка ETA и обратный отсчёт/просрочка.
+ *
+ * Один источник истины с кухней: formatKitchenCountdown и formatOrderEtaClock —
+ * те же функции; вторая формула просрочки не вводится. Возвращает признак
+ * overdue наружу, чтобы карточка получила delayed-состояние.
+ */
+function OperatorPreparingTiming({
+  order,
+  nowMs,
+  overdue,
+}: {
+  order: Order;
+  nowMs: number;
+  overdue: boolean;
+}) {
+  const { state } = usePrototype();
+  const countdown = formatKitchenCountdown(order.expectedReadyAt, nowMs);
+  const lastEta = order.etaAdjustments.at(-1) ?? null;
+
+  return (
+    <>
+      {overdue ? <span className={kds.delayBadge}>Задержка</span> : null}
+      <div className={kds.metaLine}>
+        Первоначальная оценка: {order.preparationMinutes ?? "—"} мин
+      </div>
+      <p className={kds.units}>
+        Ожидаемая готовность: к {formatOrderEtaClock(state, order)}
+      </p>
+      {lastEta ? (
+        <div className={kds.metaLine}>
+          <span className={kds.badge}>Время обновлено</span> {lastEta.reason}
+        </div>
+      ) : null}
+      <div
+        className={`${kds.countdown} ${countdown.overdue ? kds.countdownOverdue : ""}`}
+      >
+        {countdown.overdue
+          ? countdown.text
+          : `До готовности: ${countdown.text}`}
+      </div>
+    </>
+  );
+}
+
 function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
   const { state } = usePrototype();
   const request = getCancellationRequestForOrder(state, order.id);
+  // Просрочку считает тот же helper, что на кухне; вторую формулу не вводим.
+  const overdue =
+    order.status === "PREPARING" &&
+    formatKitchenCountdown(order.expectedReadyAt, nowMs).overdue;
   return (
-    <article className={kds.card}>
+    <article
+      className={`${kds.card} ${overdue ? kds.cardDelayed : ""}`}
+    >
       <div className={kds.cardHead}>
         <div>
           <h3 className={kds.orderNumber}>{order.publicNumber}</h3>
@@ -691,6 +748,10 @@ function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
       {/* Состав — после клиента/адреса/оплаты и ДО решения по заказу. */}
       <OperatorOrderItems order={order} />
       <PreparationProblemNotice order={order} />
+      {/* Тайминг кухни — read-only, только в PREPARING, без кухонных действий. */}
+      {order.status === "PREPARING" ? (
+        <OperatorPreparingTiming order={order} nowMs={nowMs} overdue={overdue} />
+      ) : null}
       {order.status === "RESTAURANT_REVIEW" ? (
         <OperatorAcceptPanel order={order} nowMs={nowMs} />
       ) : null}
@@ -768,7 +829,11 @@ export default function RestaurantOperatorPage() {
   const waiting = orders.filter(
     (o) => o.status === "RESTAURANT_REVIEW" || o.status === "AWAITING_PAYMENT",
   );
-  const preparing = orders.filter((o) => o.status === "PREPARING");
+  // Тот же порядок, что на кухне: просроченные первыми, затем ближайшие к
+  // готовности, заказы без expectedReadyAt — в конце (общий компаратор).
+  const preparing = orders
+    .filter((o) => o.status === "PREPARING")
+    .sort(comparePreparingByReadyAt);
   const handoff = orders.filter(
     (o) =>
       o.status === "READY" ||
