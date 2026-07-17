@@ -1,0 +1,93 @@
+/*
+ * Внешний вид пакетной наклейки: рулон 80 мм, печатная область ~74 мм.
+ * Только чёрное на белом — термопринтер не печатает цвет, тени и градиенты.
+ * Высота не задаётся: наклейка ровно по содержимому, иначе появляется вторая
+ * пустая страница.
+ *
+ * Поля сверху и слева больше остальных: термопринтер печатает с небольшим
+ * смещением, и текст не должен подходить вплотную к краю.
+ */
+.label {
+  width: 74mm;
+  box-sizing: border-box;
+  padding: 5mm 3mm 3mm 5mm;
+  background: #fff;
+  color: #000;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial,
+    sans-serif;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/* Ничего не тянет высоту за последним элементом. */
+.label > *:last-child {
+  margin-bottom: 0;
+}
+
+/* Бренд — крупная разрядка сверху. */
+.brand {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+/* Тип документа — что это за наклейка. */
+.kind {
+  margin-bottom: 1mm;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* Способ получения — крупная жирная строка. */
+.delivery {
+  font-size: 16px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+/* Номер заказа — самый крупный элемент наклейки. */
+.number {
+  margin: 1mm 0 2mm;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+/* Ресторан — обычный читаемый текст. */
+.line {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.items {
+  margin: 2mm 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Длинные названия переносятся, ничего не обрезается. */
+.item {
+  margin-bottom: 1.5mm;
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.counts {
+  margin-bottom: 2mm;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Платёжный маркер — отдельный заметный блок с чёрной рамкой. */
+.payment {
+  padding: 1mm;
+  border: 1.5px solid #000;
+  font-size: 15px;
+  font-weight: 800;
+  text-align: center;
+  overflow-wrap: anywhere;
+}

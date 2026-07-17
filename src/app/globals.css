@@ -5086,3 +5086,32 @@ button:disabled {
     background: #fff;
   }
 }
+
+/* --- Печать пакетной наклейки заказа (оператор / общий экран) -------------
+   Отдельные root и marker от production-тикета: два механизма печати не мешают
+   друг другу, каждый скрывает интерфейс и очищает только свой маркер.
+   Внешний вид наклейки — в operator-package-label.module.css. */
+
+/* Корень печати существует в DOM, но на экране не показывается. */
+#operator-package-label-print-root {
+  display: none;
+}
+
+@media print {
+  /* Правило ограничено маркером data-operator-package-label-print: он стоит на
+     body только пока печатается наклейка. Без этого ограничения обычный Ctrl+P
+     на любой странице приложения печатал бы пустой лист. */
+  body[data-operator-package-label-print]
+    > *:not(#operator-package-label-print-root) {
+    display: none !important;
+  }
+
+  /* Наклейка — аккуратный блок в левом верхнем углу, без остального интерфейса. */
+  body[data-operator-package-label-print] #operator-package-label-print-root {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: #fff;
+  }
+}

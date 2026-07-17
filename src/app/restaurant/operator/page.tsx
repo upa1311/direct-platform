@@ -8,6 +8,7 @@ import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
 import { formatOperatorDeliveryAddress } from "@/components/kitchen/operator-delivery-address";
 import { PreparationProblemResolveBlock } from "@/components/kitchen/preparation-problem-resolve";
+import { OperatorPackageLabelPrintButton } from "@/components/operator/operator-package-label-print";
 import {
   defaultPrep,
   formatAutoClose,
@@ -757,6 +758,9 @@ function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
       <OperatorOrderDetails order={order} />
       {/* Состав — после клиента/адреса/оплаты и ДО решения по заказу. */}
       <OperatorOrderItems order={order} />
+      {/* Пакетная наклейка: только для готового заказа (helper), после состава и
+          до действий выдачи/передачи; доступна независимо от назначения водителя. */}
+      <OperatorPackageLabelPrintButton order={order} workspaceRole="OPERATOR" />
       {/* Проблема приготовления: оператор видит OPEN и подтверждает решение. */}
       <PreparationProblemResolveBlock order={order} workspaceRole="OPERATOR" />
       {/* Тайминг кухни — read-only, только в PREPARING, без кухонных действий. */}

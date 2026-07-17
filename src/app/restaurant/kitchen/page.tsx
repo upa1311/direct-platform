@@ -6,6 +6,7 @@ import { TriangleAlert } from "lucide-react";
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
 import { KitchenProductionTicketPrintButton } from "@/components/kitchen/kitchen-production-ticket-print";
+import { OperatorPackageLabelPrintButton } from "@/components/operator/operator-package-label-print";
 import {
   defaultPrep,
   formatAutoClose,
@@ -1043,6 +1044,11 @@ function ReadyCard({
           order={order}
           timeZone={getRestaurant(state, order.restaurant.id)?.timeZone ?? "Europe/Chisinau"}
         />
+        {/* Пакетная наклейка — только на общем экране COMBINED. В SPLIT KITCHEN
+            компонент не создаётся вовсе: кухня печатает лишь production ticket. */}
+        {!isSplit ? (
+          <OperatorPackageLabelPrintButton order={order} workspaceRole="COMBINED" />
+        ) : null}
       </div>
       {/* Этап 8: выдачу в SPLIT выполняет оператор — кухня без формы и кода. */}
       {isPickup && isSplit ? (
