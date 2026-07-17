@@ -288,6 +288,157 @@
   color: #202522;
 }
 
+/* Рабочие разделы слева, административная шестерёнка — справа. */
+.headerNavRow {
+  width: min(1180px, calc(100% - 40px));
+  margin-inline: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* В строке ширину держит .headerNavRow, а разделы переносятся, а не
+   прокручиваются: шестерёнка справа остаётся видимой на любой ширине. */
+.headerNavRow .headerNav {
+  width: auto;
+  min-width: 0;
+  margin-inline: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  overflow-x: visible;
+}
+
+.navSettings {
+  position: relative;
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+  padding-left: 12px;
+  border-left: 1px solid #e6e9e6;
+}
+
+.navSettingsButton {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d8ddd8;
+  border-radius: 12px;
+  background: #fff;
+  color: #626a65;
+  cursor: pointer;
+}
+
+.navSettingsButton svg {
+  width: 20px;
+  height: 20px;
+}
+
+.navSettingsButton:hover {
+  border-color: #c8cec9;
+  color: #202522;
+}
+
+.navSettingsButton:focus-visible {
+  outline: 3px solid rgb(198 102 45 / 25%);
+  outline-offset: 3px;
+}
+
+.settingsPopover {
+  width: min(320px, calc(100vw - 32px));
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #dfe3df;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 18px 40px rgb(34 43 37 / 12%);
+}
+
+.settingsTitle {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: -0.02em;
+}
+
+.settingsHint {
+  margin: 0;
+  color: #68716b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.settingsOptions {
+  display: grid;
+  gap: 8px;
+}
+
+.settingsOption {
+  display: flex;
+  align-items: start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #e6e9e6;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.settingsOption:hover {
+  border-color: #c8cec9;
+}
+
+.settingsOption:has(input:focus-visible) {
+  outline: 3px solid rgb(198 102 45 / 25%);
+  outline-offset: 1px;
+}
+
+.settingsOption:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.settingsOption input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  accent-color: #b85f2c;
+}
+
+.settingsOption > span {
+  display: grid;
+  gap: 3px;
+}
+
+.settingsOptionName {
+  color: #202522;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.settingsOptionHint {
+  color: #6d756f;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settingsPending {
+  margin: 0;
+  color: #68716b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settingsError {
+  margin: 0;
+  color: #b3401f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .workspaceContent {
   padding-block: 56px 80px;
 }
@@ -597,9 +748,23 @@
 
   .headerTopline,
   .headerNav,
+  .headerNavRow,
   .activeOrderStripInner,
   .workspaceContent {
     width: min(100% - 28px, 1180px);
+  }
+
+  .headerNavRow {
+    gap: 8px;
+  }
+
+  .navSettings {
+    padding-left: 8px;
+  }
+
+  /* На узком экране popover остаётся внутри вьюпорта. */
+  .settingsPopover {
+    width: min(300px, calc(100vw - 24px));
   }
 
   .headerTopline {

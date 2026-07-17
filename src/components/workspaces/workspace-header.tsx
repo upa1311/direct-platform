@@ -10,6 +10,8 @@ interface WorkspaceHeaderProps {
   navAriaLabel: string;
   navItems: readonly WorkspaceNavItem[];
   rightSlot?: ReactNode;
+  /** Действие справа от рабочих разделов, вне списка навигации. */
+  navRightSlot?: ReactNode;
   showWorkspaceLink?: boolean;
   brandHref?: string;
 }
@@ -19,6 +21,7 @@ export function WorkspaceHeader({
   navAriaLabel,
   navItems,
   rightSlot,
+  navRightSlot,
   showWorkspaceLink = true,
   brandHref,
 }: WorkspaceHeaderProps) {
@@ -39,7 +42,14 @@ export function WorkspaceHeader({
           ) : null}
         </div>
       </div>
-      <WorkspaceNav ariaLabel={navAriaLabel} items={navItems} />
+      {navRightSlot ? (
+        <div className={styles.headerNavRow}>
+          <WorkspaceNav ariaLabel={navAriaLabel} items={navItems} />
+          {navRightSlot}
+        </div>
+      ) : (
+        <WorkspaceNav ariaLabel={navAriaLabel} items={navItems} />
+      )}
     </header>
   );
 }
