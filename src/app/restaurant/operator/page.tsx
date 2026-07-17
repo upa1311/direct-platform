@@ -6,6 +6,7 @@ import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
+import { formatOperatorDeliveryAddress } from "@/components/kitchen/operator-delivery-address";
 import {
   defaultPrep,
   formatAutoClose,
@@ -19,11 +20,7 @@ import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-works
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
-import type {
-  Order,
-  PickupPaymentMethod,
-  PrototypeState,
-} from "@/prototype/models";
+import type { Order, PickupPaymentMethod } from "@/prototype/models";
 import {
   comparePreparingByReadyAt,
   deliveryModeLabels,
@@ -77,17 +74,36 @@ function minutesUntil(targetIso: string | null, nowMs: number): number | null {
 
 /** Клиент, телефон, адрес и оплата — данные, доступные оператору (Этап 3). */
 function OperatorOrderDetails({ order }: { order: Order }) {
+  // Полный адрес доставки — только у оператора; кухне он недоступен. Для
+  // самовывоза address === null, блок целиком не показывается.
+  const address = formatOperatorDeliveryAddress(order);
+  const phone = order.customer.phone.trim();
   return (
     <>
       <div className={kds.metaLine}>
         Клиент: {order.customer.name || "—"}
-        {order.customer.phone ? ` · ${order.customer.phone}` : ""}
+        {phone ? (
+          <>
+            {" · "}
+            {/* Компактная tel-ссылка, а не CTA: видимый текст телефона прежний. */}
+            <a className={kds.subtleLink} href={`tel:${phone}`}>
+              {phone}
+            </a>
+          </>
+        ) : null}
       </div>
-      {order.deliveryMode !== "PICKUP" && order.address ? (
-        <div className={kds.metaLine}>
-          Адрес: {order.address.street}, дом {order.address.house}
-          {order.address.apartment ? `, кв. ${order.address.apartment}` : ""}
-        </div>
+      {address ? (
+        <>
+          <div className={kds.metaLine}>Адрес: {address.main}</div>
+          {address.access ? (
+            <div className={kds.subtle}>{address.access}</div>
+          ) : null}
+          {address.comment ? (
+            <div className={kds.subtle}>
+              Комментарий к адресу: {address.comment}
+            </div>
+          ) : null}
+        </>
       ) : null}
       <div className={kds.metaLine}>
         {deliveryModeLabels[order.deliveryMode]} ·{" "}
@@ -649,7 +665,7 @@ function OperatorHandoffActions({ order }: { order: Order }) {
 }
 
 /** Русская строка статуса кухни для оператора (Этап 5/9). */
-function operatorKitchenStatus(state: PrototypeState, order: Order): string {
+function operatorKitchenStatus(order: Order): string {
   switch (order.status) {
     case "RESTAURANT_REVIEW":
       // Решение по новому заказу принимает оператор, а не кухня.
@@ -735,7 +751,7 @@ function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
         <div>
           <h3 className={kds.orderNumber}>{order.publicNumber}</h3>
           <div className={kds.cardMeta}>
-            <span>{operatorKitchenStatus(state, order)}</span>
+            <span>{operatorKitchenStatus(order)}</span>
           </div>
         </div>
       </div>

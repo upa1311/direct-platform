@@ -753,6 +753,18 @@
   font-size: 13px;
 }
 
+/* Телефон-ссылка оператора: обычный аккуратный текст, а не CTA — наследует цвет
+   строки, подчёркивание только по наведению/фокусу. */
+.subtleLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.subtleLink:hover,
+.subtleLink:focus-visible {
+  text-decoration: underline;
+}
+
 /* Информационная строка времени — не кнопка: по ширине содержимого, без
    рамки на всю карточку. */
 .countdown {
