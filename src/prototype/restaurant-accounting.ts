@@ -55,12 +55,12 @@ export function computeCompletedOrderAccountingEntries(
   const fin = order.financials;
   const recognizedAt = getOrderCompletedAt(order);
 
-  const hasSnapshotEntry = (type: RestaurantAccountingType): boolean =>
+  // Identity обязательства — (orderId, type), источник в неё НЕ входит: legacy
+  // PLATFORM_COMMISSION того же заказа блокирует создание второй snapshot-комиссии
+  // (и наоборот). Одно экономическое обязательство — одна запись на orderId/type.
+  const hasEntry = (type: RestaurantAccountingType): boolean =>
     existingEntries.some(
-      (entry) =>
-        entry.orderId === order.id &&
-        entry.type === type &&
-        entry.source === "ORDER_FINANCIAL_SNAPSHOT",
+      (entry) => entry.orderId === order.id && entry.type === type,
     );
 
   const make = (
@@ -87,7 +87,7 @@ export function computeCompletedOrderAccountingEntries(
   if (
     fin.restaurantCollectedFromCustomerCents > 0 &&
     fin.platformCommissionReceivableCents > 0 &&
-    !hasSnapshotEntry("PLATFORM_COMMISSION")
+    !hasEntry("PLATFORM_COMMISSION")
   ) {
     entries.push(
       make(
@@ -101,7 +101,7 @@ export function computeCompletedOrderAccountingEntries(
   if (
     fin.platformCollectedFromCustomerCents > 0 &&
     fin.restaurantNetAfterPlatformCommissionCents > 0 &&
-    !hasSnapshotEntry("RESTAURANT_PAYOUT")
+    !hasEntry("RESTAURANT_PAYOUT")
   ) {
     entries.push(
       make(
@@ -186,10 +186,16 @@ function legacyStatusToAccounting(
 /**
  * Миграция существующих SettlementEntry в записи журнала (source
  * LEGACY_COMMISSION_SETTLEMENT, direction RESTAURANT_OWES_DIRECT / тип
- * PLATFORM_COMMISSION). Идемпотентно: если запись с таким legacySettlementId уже
- * есть, дубликат не создаётся. Существующие записи сохраняются, старые
- * settlements не удаляются и не меняются. Сумма берётся из settlement, не
- * пересчитывается.
+ * PLATFORM_COMMISSION). Существующие записи сохраняются, старые settlements не
+ * удаляются и не меняются. Сумма берётся из settlement, не пересчитывается.
+ *
+ * Дедупликация по identity обязательства (orderId, type): legacy-запись НЕ
+ * создаётся, если этот settlement уже мигрирован (по legacySettlementId) ИЛИ для
+ * заказа уже есть PLATFORM_COMMISSION любого источника (snapshot-запись, ранее
+ * мигрированный settlement или добавленный в этом же цикле). Так один заказ не
+ * получает две комиссии даже при завершении со snapshot-записью или при
+ * нескольких legacy settlements одного заказа. Если snapshot-запись уже есть,
+ * она остаётся авторитетной — миграция её не трогает.
  */
 export function migrateLegacySettlementsToAccounting(
   existingEntries: readonly RestaurantAccountingEntry[],
@@ -201,8 +207,16 @@ export function migrateLegacySettlementsToAccounting(
       .map((entry) => entry.legacySettlementId)
       .filter((id): id is string => id !== null),
   );
+  // Заказы, у которых уже есть комиссия (любого источника) — включая записи,
+  // добавляемые ниже по ходу цикла.
+  const ordersWithCommission = new Set(
+    existingEntries
+      .filter((entry) => entry.type === "PLATFORM_COMMISSION")
+      .map((entry) => entry.orderId),
+  );
   for (const settlement of settlements) {
     if (migratedIds.has(settlement.id)) continue;
+    if (ordersWithCommission.has(settlement.orderId)) continue;
     const status = legacyStatusToAccounting(settlement.status);
     merged.push({
       id: `accounting-legacy-${settlement.id}`,
@@ -219,6 +233,7 @@ export function migrateLegacySettlementsToAccounting(
       legacySettlementId: settlement.id,
     });
     migratedIds.add(settlement.id);
+    ordersWithCommission.add(settlement.orderId);
   }
   return merged;
 }

@@ -9,13 +9,16 @@ import {
   migrateLegacySettlementsToAccounting,
   recognizeCompletedOrderAccounting,
 } from "./restaurant-accounting.ts";
-import { markOrderDeliveredByDriverWithResult } from "./actions.ts";
-import { createDefaultState } from "./default-state.ts";
 import {
   addCartItem,
+  completePickupWithCode,
   createOrderFromCart,
+  markOrderDeliveredByDriverWithResult,
+  markOrderDeliveredWithResult,
   setCartFulfillmentChoice,
 } from "./actions.ts";
+import { createDefaultState } from "./default-state.ts";
+import { parseStoredState } from "./prototype-store.ts";
 import type {
   DeliveryMode,
   FinancialSnapshot,
@@ -440,3 +443,262 @@ function entry(
     legacySettlementId: null,
   };
 }
+
+// --- Дедупликация обязательств между источниками ----------------------------
+
+function commissionEntriesFor(
+  state: PrototypeState,
+  orderId: string,
+): RestaurantAccountingEntry[] {
+  return state.restaurantAccountingEntries.filter(
+    (e) => e.orderId === orderId && e.type === "PLATFORM_COMMISSION",
+  );
+}
+
+// 16 -------------------------------------------------------------------------
+
+test("PICKUP completion + serialize/parse → ровно одна PLATFORM_COMMISSION", () => {
+  const order: Order = {
+    ...makeOrder({
+      id: "puc",
+      status: "READY_FOR_PICKUP",
+      deliveryMode: "PICKUP",
+      paymentStatus: "DUE_AT_PICKUP",
+      paidAt: null,
+      fin: RESTAURANT_COLLECTED,
+    }),
+    paymentMethod: "PAY_AT_RESTAURANT",
+    pickupCode: "1234",
+    pickupCodeUsed: false,
+    pickupPaymentMethodsSnapshot: ["CASH", "CARD"],
+  };
+  const completed = completePickupWithCode(
+    stateWith([order]),
+    "puc",
+    "1234",
+    "CASH",
+    "RESTAURANT",
+    DELIVERED_AT,
+    "COMBINED",
+  );
+  assert.equal(completed.result.ok, true, completed.result.error ?? "");
+  // Действие создало старый SettlementEntry и ровно одну snapshot-комиссию.
+  assert.equal(
+    completed.state.settlements.filter((s) => s.orderId === "puc").length,
+    1,
+  );
+  assert.equal(commissionEntriesFor(completed.state, "puc").length, 1);
+
+  // serialize → parse: старый settlement повторно НЕ мигрируется в дубль.
+  const parsed = parseStoredState(JSON.stringify(completed.state));
+  assert.ok(parsed);
+  assert.equal(commissionEntriesFor(parsed, "puc").length, 1);
+  assert.equal(
+    getRestaurantOpenReceivableCents(parsed, RESTAURANT_ID),
+    RESTAURANT_COLLECTED.platformCommissionReceivableCents,
+  );
+});
+
+// 17 -------------------------------------------------------------------------
+
+test("RESTAURANT_DELIVERY completion + serialize/parse → ровно одна комиссия", () => {
+  const order = makeOrder({
+    id: "rdc",
+    status: "ARRIVING",
+    deliveryMode: "RESTAURANT_DELIVERY",
+    paymentStatus: "DUE_TO_RESTAURANT_COURIER",
+    paidAt: null,
+    fin: RESTAURANT_COLLECTED,
+  });
+  const completed = markOrderDeliveredWithResult(
+    stateWith([order]),
+    "rdc",
+    "RESTAURANT",
+    "COMBINED",
+  );
+  assert.equal(completed.result.ok, true, completed.result.error ?? "");
+  assert.equal(commissionEntriesFor(completed.state, "rdc").length, 1);
+
+  const parsed = parseStoredState(JSON.stringify(completed.state));
+  assert.ok(parsed);
+  assert.equal(commissionEntriesFor(parsed, "rdc").length, 1);
+  assert.equal(
+    getRestaurantOpenReceivableCents(parsed, RESTAURANT_ID),
+    RESTAURANT_COLLECTED.platformCommissionReceivableCents,
+  );
+});
+
+// 18 -------------------------------------------------------------------------
+
+test("migration при существующей snapshot-записи не добавляет legacy-дубль", () => {
+  const snapshot = entry(
+    "snap",
+    "RESTAURANT_OWES_DIRECT",
+    "PLATFORM_COMMISSION",
+    800,
+    "OPEN",
+  );
+  // Snapshot-запись относится к заказу "order-snap"; settlement того же заказа.
+  const settlement: SettlementEntry = {
+    id: "s-order-snap",
+    orderId: "order-snap",
+    restaurantId: RESTAURANT_ID,
+    type: "PICKUP_COMMISSION",
+    amountCents: 800,
+    status: "PENDING",
+    createdAt: DELIVERED_AT,
+  };
+  const merged = migrateLegacySettlementsToAccounting([snapshot], [settlement]);
+  const commission = merged.filter(
+    (e) => e.orderId === "order-snap" && e.type === "PLATFORM_COMMISSION",
+  );
+  assert.equal(commission.length, 1);
+  // Авторитетной осталась snapshot-запись, её не подменили legacy.
+  assert.equal(commission[0].source, "ORDER_FINANCIAL_SNAPSHOT");
+});
+
+// 19 -------------------------------------------------------------------------
+
+test("recognition после legacy migration не создаёт snapshot-дубль", () => {
+  const order = completed("lg", "PICKUP", RESTAURANT_COLLECTED, "PICKED_UP");
+  const settlement: SettlementEntry = {
+    id: "s-lg",
+    orderId: "lg",
+    restaurantId: RESTAURANT_ID,
+    type: "PICKUP_COMMISSION",
+    amountCents: RESTAURANT_COLLECTED.platformCommissionReceivableCents!,
+    status: "PENDING",
+    createdAt: DELIVERED_AT,
+  };
+  const legacyEntries = migrateLegacySettlementsToAccounting([], [settlement]);
+  const st = stateWith([order], [settlement], legacyEntries);
+  const res = recognizeCompletedOrderAccounting(st, "lg", "2026-07-17T12:00:00.000Z");
+  assert.equal(res.result.recognizedCount, 0);
+  assert.equal(res.state, st, "state тем же объектом");
+  assert.equal(commissionEntriesFor(res.state, "lg").length, 1);
+});
+
+// 20 -------------------------------------------------------------------------
+
+test("настоящий v7 legacy state: parse создаёт ровно одну legacy-запись", () => {
+  const settlement: SettlementEntry = {
+    id: "s-v7",
+    orderId: "o-v7",
+    restaurantId: RESTAURANT_ID,
+    type: "RESTAURANT_DELIVERY_COMMISSION",
+    amountCents: 640,
+    status: "PENDING",
+    createdAt: DELIVERED_AT,
+  };
+  // Сериализуем «настоящий» v7: schemaVersion 7, без поля accounting-журнала.
+  const raw = JSON.parse(JSON.stringify(stateWith([], [settlement]))) as Record<
+    string,
+    unknown
+  >;
+  raw.schemaVersion = 7;
+  delete raw.restaurantAccountingEntries;
+
+  const parsed = parseStoredState(JSON.stringify(raw));
+  assert.ok(parsed);
+  assert.equal(parsed.schemaVersion, 8);
+  const migrated = parsed.restaurantAccountingEntries.filter(
+    (e) => e.orderId === "o-v7",
+  );
+  assert.equal(migrated.length, 1);
+  assert.equal(migrated[0].type, "PLATFORM_COMMISSION");
+  assert.equal(migrated[0].source, "LEGACY_COMMISSION_SETTLEMENT");
+  assert.equal(migrated[0].legacySettlementId, "s-v7");
+  assert.equal(migrated[0].amountCents, 640);
+  assert.equal(migrated[0].status, "OPEN");
+});
+
+// 21 -------------------------------------------------------------------------
+
+test("два legacy settlement одного orderId/type → одна PLATFORM_COMMISSION", () => {
+  const settlements: SettlementEntry[] = [
+    { id: "s-a", orderId: "same", restaurantId: RESTAURANT_ID, type: "PICKUP_COMMISSION", amountCents: 300, status: "PENDING", createdAt: DELIVERED_AT },
+    { id: "s-b", orderId: "same", restaurantId: RESTAURANT_ID, type: "PICKUP_COMMISSION", amountCents: 300, status: "PENDING", createdAt: DELIVERED_AT },
+  ];
+  const merged = migrateLegacySettlementsToAccounting([], settlements);
+  assert.equal(
+    merged.filter((e) => e.orderId === "same" && e.type === "PLATFORM_COMMISSION").length,
+    1,
+  );
+});
+
+// 22 -------------------------------------------------------------------------
+
+test("повторный parse не растит число записей и receivable", () => {
+  const order: Order = {
+    ...makeOrder({
+      id: "rp",
+      status: "READY_FOR_PICKUP",
+      deliveryMode: "PICKUP",
+      paymentStatus: "DUE_AT_PICKUP",
+      paidAt: null,
+      fin: RESTAURANT_COLLECTED,
+    }),
+    paymentMethod: "PAY_AT_RESTAURANT",
+    pickupCode: "1234",
+    pickupCodeUsed: false,
+    pickupPaymentMethodsSnapshot: ["CASH", "CARD"],
+  };
+  const done = completePickupWithCode(
+    stateWith([order]),
+    "rp",
+    "1234",
+    "CASH",
+    "RESTAURANT",
+    DELIVERED_AT,
+    "COMBINED",
+  ).state;
+
+  const parse1 = parseStoredState(JSON.stringify(done));
+  assert.ok(parse1);
+  const parse2 = parseStoredState(JSON.stringify(parse1));
+  assert.ok(parse2);
+  assert.equal(
+    parse1.restaurantAccountingEntries.length,
+    parse2.restaurantAccountingEntries.length,
+  );
+  assert.equal(
+    getRestaurantOpenReceivableCents(parse1, RESTAURANT_ID),
+    getRestaurantOpenReceivableCents(parse2, RESTAURANT_ID),
+  );
+  assert.equal(
+    getRestaurantOpenReceivableCents(parse2, RESTAURANT_ID),
+    RESTAURANT_COLLECTED.platformCommissionReceivableCents,
+  );
+});
+
+// 23 -------------------------------------------------------------------------
+
+test("RESTAURANT_PAYOUT не затрагивается дедупликацией", () => {
+  const payout = entry(
+    "po",
+    "DIRECT_OWES_RESTAURANT",
+    "RESTAURANT_PAYOUT",
+    5100,
+    "OPEN",
+  );
+  // Комиссионный settlement того же заказа не должен трогать payout.
+  const settlement: SettlementEntry = {
+    id: "s-po",
+    orderId: "order-po",
+    restaurantId: RESTAURANT_ID,
+    type: "RESTAURANT_DELIVERY_COMMISSION",
+    amountCents: 700,
+    status: "PENDING",
+    createdAt: DELIVERED_AT,
+  };
+  const merged = migrateLegacySettlementsToAccounting([payout], [settlement]);
+  // Payout сохранился, и добавилась ровно одна комиссия (payout ≠ commission).
+  assert.equal(
+    merged.filter((e) => e.orderId === "order-po" && e.type === "RESTAURANT_PAYOUT").length,
+    1,
+  );
+  assert.equal(
+    merged.filter((e) => e.orderId === "order-po" && e.type === "PLATFORM_COMMISSION").length,
+    1,
+  );
+});
