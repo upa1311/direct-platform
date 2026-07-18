@@ -192,11 +192,15 @@ function tzOffsetMs(utcMs: number, timeZone: string): number {
   }
 }
 
-/** Начало локальных суток ресторана (день, содержащий utcMs) как UTC-инстант. */
-function startOfLocalDayMs(utcMs: number, timeZone: string): number {
-  let y = 1970;
-  let mo = 1;
-  let d = 1;
+/** Календарная дата (год-месяц-день) без времени и часового пояса. */
+interface LocalDateParts {
+  year: number;
+  month: number;
+  day: number;
+}
+
+/** Календарная дата момента utcMs в часовом поясе ресторана. */
+function getLocalDateParts(utcMs: number, timeZone: string): LocalDateParts {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone,
@@ -206,16 +210,50 @@ function startOfLocalDayMs(utcMs: number, timeZone: string): number {
     }).formatToParts(new Date(utcMs));
     const map: Record<string, string> = {};
     for (const p of parts) map[p.type] = p.value;
-    y = Number(map.year);
-    mo = Number(map.month);
-    d = Number(map.day);
+    return {
+      year: Number(map.year),
+      month: Number(map.month),
+      day: Number(map.day),
+    };
   } catch {
     const dt = new Date(utcMs);
-    y = dt.getUTCFullYear();
-    mo = dt.getUTCMonth() + 1;
-    d = dt.getUTCDate();
+    return {
+      year: dt.getUTCFullYear(),
+      month: dt.getUTCMonth() + 1,
+      day: dt.getUTCDate(),
+    };
   }
-  const guess = Date.UTC(y, mo - 1, d, 0, 0);
+}
+
+/**
+ * Сдвиг КАЛЕНДАРНОЙ даты на deltaDays. Date.UTC используется только для
+ * нормализации переполнения дня через границы месяца/года — локальные сутки НЕ
+ * считаются фиксированными 24 часами (мы оперируем номерами дат, а не мс).
+ */
+function shiftCalendarDate(
+  parts: LocalDateParts,
+  deltaDays: number,
+): LocalDateParts {
+  const normalized = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day + deltaDays),
+  );
+  return {
+    year: normalized.getUTCFullYear(),
+    month: normalized.getUTCMonth() + 1,
+    day: normalized.getUTCDate(),
+  };
+}
+
+/**
+ * UTC-инстант локальной полуночи заданной календарной даты в часовом поясе
+ * ресторана. Двухпроходное разрешение offset: устойчиво к смене UTC-offset
+ * (DST), когда полночь целевой даты и «догадка» лежат по разные стороны перехода.
+ */
+function localMidnightToUtcMs(
+  parts: LocalDateParts,
+  timeZone: string,
+): number {
+  const guess = Date.UTC(parts.year, parts.month - 1, parts.day, 0, 0);
   const off1 = tzOffsetMs(guess, timeZone);
   let instant = guess - off1;
   const off2 = tzOffsetMs(instant, timeZone);
@@ -225,8 +263,10 @@ function startOfLocalDayMs(utcMs: number, timeZone: string): number {
 
 /**
  * Нижняя граница периода (включительно) в мс, либо null для ALL. «7 дней» и
- * «30 дней» включают текущий календарный день ресторана: начало суток минус
- * (N-1) дней. Часовой пояс — ресторана, а не компьютера.
+ * «30 дней» включают текущий календарный день ресторана: берём КАЛЕНДАРНУЮ дату
+ * ресторана и сдвигаем её на -6 / -29 дней, и только затем переводим локальную
+ * полночь целевой даты в UTC. Никакого вычитания фиксированных 24-часовых суток —
+ * поэтому границы корректны через переходы DST. Часовой пояс — ресторана.
  */
 function periodStartMs(
   period: RestaurantSettlementPeriod,
@@ -234,12 +274,10 @@ function periodStartMs(
   timeZone: string,
 ): number | null {
   if (period === "ALL") return null;
-  const todayStart = startOfLocalDayMs(nowMs, timeZone);
-  if (period === "TODAY") return todayStart;
-  const days = period === "LAST_7_DAYS" ? 7 : 30;
-  // Отступаем на (days-1) суток и снова выравниваем к началу локального дня
-  // (устойчиво к переходам летнего времени).
-  return startOfLocalDayMs(todayStart - (days - 1) * 86_400_000, timeZone);
+  const today = getLocalDateParts(nowMs, timeZone);
+  if (period === "TODAY") return localMidnightToUtcMs(today, timeZone);
+  const deltaDays = period === "LAST_7_DAYS" ? -6 : -29;
+  return localMidnightToUtcMs(shiftCalendarDate(today, deltaDays), timeZone);
 }
 
 // --- Основная сборка --------------------------------------------------------
@@ -270,11 +308,15 @@ export function buildRestaurantSettlementOverview(
   }
 
   const startMs = periodStartMs(period, nowMs, zone);
+  // Окно: startMs <= eventMs <= nowMs (для ALL нижней границы нет). Верхняя
+  // граница и проверка валидности применяются ко ВСЕМ периодам, включая ALL,
+  // поэтому будущие (> nowMs) и невалидные события не попадают в отчёт.
   const inPeriod = (iso: string): boolean => {
-    if (startMs === null) return true;
     const ms = Date.parse(iso);
     if (Number.isNaN(ms)) return false;
-    return ms >= startMs;
+    if (ms > nowMs) return false;
+    if (startMs !== null && ms < startMs) return false;
+    return true;
   };
 
   const restaurantOrders = state.orders.filter(

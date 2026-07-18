@@ -567,3 +567,157 @@ test("read-only: построение не меняет state/orders/settlements
   assert.equal(st.settlements, settlementsRef, "settlements — тот же массив");
   assert.equal(st.revision, revBefore);
 });
+
+// --- DST и календарные границы ----------------------------------------------
+
+function deliveredAt(id: string, completedAt: string): Order {
+  return makeOrder({
+    id,
+    status: "DELIVERED",
+    deliveryMode: "PLATFORM_DRIVER",
+    completedAt,
+    history: [statusEvent("ARRIVING", "DELIVERED", completedAt)],
+    fin: { customerTotalCents: 1000 },
+  });
+}
+
+// 12 -------------------------------------------------------------------------
+
+test("spring DST Chisinau: LAST_7_DAYS = ровно 24–30 марта, граница точна", () => {
+  // Переход на летнее время 29 марта 2026 03:00 (EET+2 → EEST+3).
+  // now — 30 марта после перехода (15:00 местного).
+  const now = "2026-03-30T12:00:00.000Z";
+  // Граница включения: 24 марта 00:00 местного. 24 марта ещё EET+2 → 22:00Z 23-го.
+  const includeBoundary = "2026-03-23T22:00:00.000Z"; // 24 марта 00:00 local
+  const excludeBoundary = "2026-03-23T21:59:00.000Z"; // 23 марта 23:59 local
+
+  // По одному заказу на каждый локальный день 23–30 марта (12:00Z в пределах дня).
+  const dayOrders = [23, 24, 25, 26, 27, 28, 29, 30].map((d) =>
+    deliveredAt(`m${d}`, `2026-03-${String(d).padStart(2, "0")}T12:00:00.000Z`),
+  );
+  const st = stateWith([
+    ...dayOrders,
+    deliveredAt("edge-in", includeBoundary),
+    deliveredAt("edge-out", excludeBoundary),
+  ]);
+
+  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "LAST_7_DAYS", now, TZ);
+  const ids = new Set(ov.rows.map((r) => r.orderId));
+
+  // Ровно 7 календарных дат 24–30 марта.
+  for (const d of [24, 25, 26, 27, 28, 29, 30]) {
+    assert.ok(ids.has(`m${d}`), `должен включать m${d}`);
+  }
+  assert.ok(!ids.has("m23"), "23 марта вне окна 7 дней");
+  // Точная граница полуночи.
+  assert.ok(ids.has("edge-in"), "24 марта 00:00 включается");
+  assert.ok(!ids.has("edge-out"), "23 марта 23:59 исключается");
+});
+
+// 13 -------------------------------------------------------------------------
+
+test("TODAY около перехода DST: начало текущего локального дня корректно", () => {
+  // now — 29 марта 2026 (день перехода), 15:00 местного EEST.
+  const now = "2026-03-29T12:00:00.000Z";
+  // 29 марта 00:00 местного: до скачка в 03:00, ещё EET+2 → 22:00Z 28-го.
+  const st = stateWith([
+    deliveredAt("in", "2026-03-28T22:00:00.000Z"), // 29 марта 00:00 local
+    deliveredAt("out", "2026-03-28T21:59:00.000Z"), // 28 марта 23:59 local
+  ]);
+  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "TODAY", now, TZ);
+  const ids = new Set(ov.rows.map((r) => r.orderId));
+  assert.ok(ids.has("in"), "29 марта 00:00 входит в TODAY");
+  assert.ok(!ids.has("out"), "28 марта 23:59 не входит в TODAY");
+});
+
+// 14 -------------------------------------------------------------------------
+
+test("LAST_30_DAYS через DST: первый допустимый день включён, предыдущий нет", () => {
+  const now = "2026-03-30T12:00:00.000Z";
+  // Сдвиг календарной даты 30 марта на -29 → 1 марта. 1 марта ещё EET+2.
+  const st = stateWith([
+    deliveredAt("in", "2026-02-28T22:00:00.000Z"), // 1 марта 00:00 local
+    deliveredAt("out", "2026-02-28T21:59:00.000Z"), // 28 февраля 23:59 local
+  ]);
+  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "LAST_30_DAYS", now, TZ);
+  const ids = new Set(ov.rows.map((r) => r.orderId));
+  assert.ok(ids.has("in"), "1 марта 00:00 включён в 30 дней");
+  assert.ok(!ids.has("out"), "28 февраля 23:59 исключён");
+});
+
+// 15 -------------------------------------------------------------------------
+
+test("будущий completed заказ исключён из всех периодов, включая ALL", () => {
+  const future = "2026-07-17T12:00:00.001Z"; // now + 1 мс
+  const st = stateWith([
+    deliveredAt("future", future),
+    deliveredAt("past", "2026-07-17T09:00:00.000Z"),
+  ]);
+  for (const p of ["TODAY", "LAST_7_DAYS", "LAST_30_DAYS", "ALL"] as const) {
+    const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, p, NOW, TZ);
+    const ids = new Set(ov.rows.map((r) => r.orderId));
+    assert.ok(!ids.has("future"), `future не в ${p}`);
+    assert.ok(ids.has("past"), `past в ${p}`);
+  }
+});
+
+// 16 -------------------------------------------------------------------------
+
+test("будущий paid-canceled исключён из «Требуют внимания» во всех периодах", () => {
+  const future = "2026-07-17T12:00:00.001Z";
+  const st = stateWith([
+    makeOrder({
+      id: "cfuture",
+      status: "CANCELED",
+      deliveryMode: "PLATFORM_DRIVER",
+      paymentStatus: "PAID",
+      paidAt: "2026-07-17T08:00:00.000Z",
+      history: [statusEvent("PREPARING", "CANCELED", future)],
+      fin: { customerTotalCents: 5000 },
+    }),
+    makeOrder({
+      id: "cpast",
+      status: "CANCELED",
+      deliveryMode: "PLATFORM_DRIVER",
+      paymentStatus: "PAID",
+      paidAt: "2026-07-17T08:00:00.000Z",
+      history: [statusEvent("PREPARING", "CANCELED", "2026-07-17T09:00:00.000Z")],
+      fin: { customerTotalCents: 6000 },
+    }),
+  ]);
+  for (const p of ["TODAY", "LAST_7_DAYS", "LAST_30_DAYS", "ALL"] as const) {
+    const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, p, NOW, TZ);
+    const ids = new Set(ov.paidCanceled.map((r) => r.orderId));
+    assert.ok(!ids.has("cfuture"), `cfuture не в ${p}`);
+    assert.ok(ids.has("cpast"), `cpast в ${p}`);
+  }
+});
+
+// 17 -------------------------------------------------------------------------
+
+test("невалидный completedAt/canceledAt не попадает даже в ALL и не падает", () => {
+  const st = stateWith([
+    makeOrder({
+      id: "badcompleted",
+      status: "DELIVERED",
+      deliveryMode: "PLATFORM_DRIVER",
+      updatedAt: "не-дата", // history пуст → completedAt = updatedAt (невалидна)
+      history: [],
+      fin: { customerTotalCents: 1000 },
+    }),
+    makeOrder({
+      id: "badcanceled",
+      status: "CANCELED",
+      deliveryMode: "PLATFORM_DRIVER",
+      paymentStatus: "PAID",
+      paidAt: "2026-07-17T08:00:00.000Z",
+      updatedAt: "тоже-не-дата",
+      history: [],
+      fin: { customerTotalCents: 2000 },
+    }),
+  ]);
+  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  assert.equal(ov.rows.length, 0);
+  assert.equal(ov.paidCanceled.length, 0);
+  assert.equal(ov.summary.completedOrderCount, 0);
+});
