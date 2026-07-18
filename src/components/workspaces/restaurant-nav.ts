@@ -17,6 +17,9 @@ import type { WorkspaceNavItem } from "./workspace-nav";
  */
 export const RESTAURANT_KITCHEN_PATH = "/restaurant/kitchen";
 
+/** Read-only раздел ресторанной сверки (первый этап settlements/accounting). */
+export const RESTAURANT_SETTLEMENTS_PATH = "/restaurant/settlements";
+
 /** Старый URL настроек: больше не рабочий экран, редиректит на заказы. */
 export const RESTAURANT_LEGACY_SETTINGS_PATH = "/restaurant/settings";
 
@@ -32,12 +35,14 @@ export const SPLIT_KITCHEN_LABEL = "Кухня";
 const COMBINED_NAV: readonly WorkspaceNavItem[] = [
   { href: RESTAURANT_KITCHEN_PATH, label: COMBINED_ORDERS_LABEL },
   { href: "/restaurant/menu", label: "Меню и доступность" },
+  { href: RESTAURANT_SETTLEMENTS_PATH, label: "Расчёты" },
 ];
 
 const SPLIT_NAV: readonly WorkspaceNavItem[] = [
   { href: "/restaurant/operator", label: "Оператор заказов" },
   { href: RESTAURANT_KITCHEN_PATH, label: SPLIT_KITCHEN_LABEL },
   { href: "/restaurant/menu", label: "Меню и доступность" },
+  { href: RESTAURANT_SETTLEMENTS_PATH, label: "Расчёты" },
 ];
 
 /**
