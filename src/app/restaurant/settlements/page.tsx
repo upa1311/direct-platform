@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
@@ -43,7 +43,13 @@ import {
   type RestaurantStatementViewResult,
 } from "@/prototype/restaurant-statement-view";
 import { defaultStatementRange } from "./statement-range";
+import {
+  visibleStatementSnapshot,
+  type StatementSnapshot,
+} from "./statement-snapshot";
 import styles from "./settlements.module.css";
+
+import type { PrototypeState } from "@/prototype/models";
 
 /** Вид раздела: по заказам, по дням, журнал обязательств или выписка. */
 type SettlementView = "ORDERS" | "DAILY" | "OBLIGATIONS" | "STATEMENT";
@@ -125,43 +131,6 @@ export default function RestaurantSettlementsPage() {
     if (view !== "OBLIGATIONS" || !isHydrated || !restaurant) return null;
     return buildRestaurantAccountingJournal(state, selectedRestaurantId);
   }, [view, isHydrated, restaurant, state, selectedRestaurantId]);
-
-  // --- Выписка: собственный период, результат фиксируется по кнопке ---
-  const [stmtStart, setStmtStart] = useState("");
-  const [stmtEnd, setStmtEnd] = useState("");
-  const [stmtResult, setStmtResult] =
-    useState<RestaurantStatementViewResult | null>(null);
-  const [stmtAsOf, setStmtAsOf] = useState<string | null>(null);
-  // Ресторан, для чьего часового пояса рассчитан текущий дефолтный диапазон.
-  const rangeRestaurantRef = useRef<string | null>(null);
-
-  // Дефолтный диапазон (30 локальных дней) — один раз на выбранный ресторан. При
-  // смене ресторана диапазон пересчитывается из его пояса, а выписка сбрасывается.
-  useEffect(() => {
-    if (!isHydrated || !restaurant || nowMs === 0) return;
-    if (rangeRestaurantRef.current === selectedRestaurantId) return;
-    const range = defaultStatementRange(nowMs, timeZone);
-    setStmtStart(range.startLocalDate);
-    setStmtEnd(range.endLocalDate);
-    setStmtResult(null);
-    setStmtAsOf(null);
-    rangeRestaurantRef.current = selectedRestaurantId;
-  }, [isHydrated, restaurant, nowMs, selectedRestaurantId, timeZone]);
-
-  const generateStatement = () => {
-    if (nowMs === 0) return;
-    // Один зафиксированный момент формирования; результат не меняется сам по себе.
-    const asOf = new Date(nowMs).toISOString();
-    setStmtAsOf(asOf);
-    setStmtResult(
-      buildRestaurantStatementView(state, selectedRestaurantId, {
-        startLocalDate: stmtStart,
-        endLocalDate: stmtEnd,
-        timeZone,
-        asOfIso: asOf,
-      }),
-    );
-  };
 
   const money = (cents: number) =>
     formatMoney(cents, overview?.currencyCode ?? "USD");
@@ -335,16 +304,14 @@ export default function RestaurantSettlementsPage() {
           ) : view === "OBLIGATIONS" ? (
             <ObligationsView rows={journal ?? []} money={money} timeZone={timeZone} />
           ) : view === "STATEMENT" ? (
-            <StatementView
-              restaurantName={restaurant.name}
+            // key по restaurantId:timeZone принудительно перемонтирует секцию при
+            // смене контекста — синхронная изоляция без stale-render на первый кадр.
+            <RestaurantStatementSection
+              key={`${selectedRestaurantId}:${timeZone}`}
+              state={state}
+              restaurantId={selectedRestaurantId}
               timeZone={timeZone}
-              startLocalDate={stmtStart}
-              endLocalDate={stmtEnd}
-              onStartChange={setStmtStart}
-              onEndChange={setStmtEnd}
-              onGenerate={generateStatement}
-              result={stmtResult}
-              asOfIso={stmtAsOf}
+              nowMs={nowMs}
             />
           ) : (
             <OrdersView overview={overview} money={money} timeZone={timeZone} />
@@ -694,9 +661,65 @@ function ObligationsView({
   );
 }
 
+/**
+ * Изолированный контейнер состояния выписки. Монтируется с key
+ * `restaurantId:timeZone`, поэтому при смене ресторана или пояса перемонтируется
+ * с чистым состоянием и свежим default range. Сформированная выписка хранится
+ * envelope'ом с restaurantId/timeZone и показывается только при их точном
+ * совпадении с текущим контекстом — старые данные не появляются под новым
+ * рестораном ни на один render (двойная защита: key-remount + envelope-gate).
+ */
+function RestaurantStatementSection({
+  state,
+  restaurantId,
+  timeZone,
+  nowMs,
+}: {
+  state: PrototypeState;
+  restaurantId: string;
+  timeZone: string;
+  nowMs: number;
+}) {
+  // Lazy init: default range из текущего пояса один раз при монтировании.
+  const [range, setRange] = useState(() => defaultStatementRange(nowMs, timeZone));
+  const [snapshot, setSnapshot] = useState<StatementSnapshot<
+    RestaurantStatementViewResult
+  > | null>(null);
+
+  const generate = () => {
+    if (nowMs === 0) return;
+    // Фиксируем контекст и момент формирования; результат к ним жёстко привязан.
+    const rid = restaurantId;
+    const tz = timeZone;
+    const asOf = new Date(nowMs).toISOString();
+    const result = buildRestaurantStatementView(state, rid, {
+      startLocalDate: range.startLocalDate,
+      endLocalDate: range.endLocalDate,
+      timeZone: tz,
+      asOfIso: asOf,
+    });
+    setSnapshot({ restaurantId: rid, timeZone: tz, asOfIso: asOf, result });
+  };
+
+  // Envelope виден только при точном совпадении контекста (без опоры на useEffect).
+  const visible = visibleStatementSnapshot(snapshot, restaurantId, timeZone);
+
+  return (
+    <StatementView
+      timeZone={timeZone}
+      startLocalDate={range.startLocalDate}
+      endLocalDate={range.endLocalDate}
+      onStartChange={(value) => setRange((r) => ({ ...r, startLocalDate: value }))}
+      onEndChange={(value) => setRange((r) => ({ ...r, endLocalDate: value }))}
+      onGenerate={generate}
+      result={visible?.result ?? null}
+      asOfIso={visible?.asOfIso ?? null}
+    />
+  );
+}
+
 /** Представление «Выписка» — read-only, полностью из presentation-model. */
 function StatementView({
-  restaurantName,
   timeZone,
   startLocalDate,
   endLocalDate,
@@ -706,7 +729,6 @@ function StatementView({
   result,
   asOfIso,
 }: {
-  restaurantName: string;
   timeZone: string;
   startLocalDate: string;
   endLocalDate: string;
@@ -772,10 +794,11 @@ function StatementView({
         </div>
       ) : (
         <>
-          {/* Мета */}
+          {/* Мета: имя ресторана берём из самой presentation-model view, чтобы
+              не смешать старый result с текущим restaurant prop. */}
           <div className={styles.info}>
             <p>
-              Ресторан: <strong>{restaurantName}</strong>. Период:{" "}
+              Ресторан: <strong>{view.restaurantName}</strong>. Период:{" "}
               {formatLocalDateRu(view.startLocalDate)} —{" "}
               {formatLocalDateRu(view.endLocalDate)}. Часовой пояс:{" "}
               {getRestaurantTimeZoneLabel(timeZone)}.
