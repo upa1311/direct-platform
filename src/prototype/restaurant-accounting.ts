@@ -654,9 +654,14 @@ export interface AccountingResolutionConfirmation {
 export function formatAccountingResolutionMessage(
   confirmation: AccountingResolutionConfirmation,
 ): string {
-  const orderLabel = confirmation.publicNumber ?? "Старое начисление";
-  if (confirmation.outcome === "SETTLED") {
-    return `Расчёт по заказу ${orderLabel} на сумму ${confirmation.amountText} зафиксирован. Денежный перевод системой не выполнялся.`;
+  const { outcome, publicNumber, amountText } = confirmation;
+  if (outcome === "SETTLED") {
+    // Отдельная грамматика для orphan: не «по заказу Старое начисление».
+    return publicNumber
+      ? `Расчёт по заказу ${publicNumber} на сумму ${amountText} зафиксирован. Денежный перевод системой не выполнялся.`
+      : `Расчёт по старому начислению на сумму ${amountText} зафиксирован. Денежный перевод системой не выполнялся.`;
   }
-  return `Комиссия Direct по заказу ${orderLabel} на сумму ${confirmation.amountText} списана. Это не возврат и не выплата ресторану.`;
+  return publicNumber
+    ? `Комиссия Direct по заказу ${publicNumber} на сумму ${amountText} списана. Это не возврат и не выплата ресторану.`
+    : `Старое комиссионное начисление Direct на сумму ${amountText} списано. Это не возврат и не выплата ресторану.`;
 }
