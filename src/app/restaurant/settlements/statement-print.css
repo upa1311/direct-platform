@@ -1,9 +1,14 @@
 /*
  * ПЕЧАТЬ ВЫПИСКИ — глобальные @media print правила (обычный, не-module CSS, чтобы
- * можно было module-agnostic скрыть весь интерфейс через `body *`). Все классы с
- * префиксом direct-print-* используются только печатным документом. На экране
- * документ скрыт; правила печати активны исключительно во время печати, поэтому
- * при отмене диалога печати интерфейс остаётся видимым (screen-стили не трогаются).
+ * можно было module-agnostic скрыть весь интерфейс). Все классы с префиксом
+ * direct-print-* используются только печатным документом. На экране документ
+ * скрыт; правила печати активны исключительно во время печати, поэтому при отмене
+ * диалога печати интерфейс остаётся видимым (screen-стили не трогаются).
+ *
+ * Все агрессивные правила скрытия интерфейса ограничены контекстом
+ * `body:has(.direct-print-doc)` — они срабатывают ТОЛЬКО когда на странице есть
+ * сформированный печатный документ выписки. Печать других представлений/маршрутов
+ * (где direct-print-doc нет) остаётся нетронутой.
  */
 
 /* Печатный документ скрыт на экране. */
@@ -24,31 +29,56 @@
   }
 
   /* 1) Скрыть «краску» всего интерфейса (toolbar, шапка воркспейса, навигация,
-        переключатели, показатели, форма периода, кнопки) независимо от модулей. */
-  body * {
+        переключатели, показатели, форма периода, кнопки) независимо от модулей —
+        только когда печатается выписка. */
+  body:has(.direct-print-doc) * {
     visibility: hidden !important;
   }
 
   /* 2) Показать только печатный документ и его содержимое. */
-  .direct-print-doc,
-  .direct-print-doc * {
+  body:has(.direct-print-doc) .direct-print-doc,
+  body:has(.direct-print-doc) .direct-print-doc * {
     visibility: visible !important;
   }
 
-  /* 3) Схлопнуть высоту экранного дерева, чтобы не было пустых страниц: внутри
+  /* 3) Полностью исключить внешнюю шапку воркспейса из РАСКЛАДКИ печати (не только
+        visibility): иначе скрытый RestaurantHeader и его navigation row оставляют
+        пустое место сверху, и документ начинается ниже верхнего поля @page. Шапка
+        — единственный <header> на странице расчётов и прямой предок вне <main>. */
+  body:has(.direct-print-doc) header {
+    display: none !important;
+  }
+
+  /* 4) Снять экранные отступы/ограничения ширины обёртки контента, чтобы печать
+        использовала всю область A4 и документ начинался от верхнего поля страницы. */
+  body:has(.direct-print-doc) main {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: auto !important;
+    max-width: none !important;
+  }
+
+  /* 5) Схлопнуть высоту экранного дерева, чтобы не было пустых страниц: внутри
         страницы расчётов оставляем в потоке только печатный документ. Маркеры
         direct-print-root (обёртка экрана) и direct-print-screen (контейнер)
         добавлены в разметке; печатный документ — прямой потомок контейнера. */
-  .direct-print-root > * {
+  body:has(.direct-print-doc) .direct-print-root > * {
     display: none !important;
   }
-  .direct-print-root > .direct-print-screen {
+  /* Снять экранные отступы обёрток, чтобы документ начинался от верхнего поля
+     @page, а не с screen-padding контейнера. */
+  body:has(.direct-print-doc) .direct-print-root,
+  body:has(.direct-print-doc) .direct-print-screen {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body:has(.direct-print-doc) .direct-print-root > .direct-print-screen {
     display: block !important;
   }
-  .direct-print-screen > * {
+  body:has(.direct-print-doc) .direct-print-screen > * {
     display: none !important;
   }
-  .direct-print-doc {
+  body:has(.direct-print-doc) .direct-print-doc {
     display: block !important;
     color: #000 !important;
     background: #fff !important;
