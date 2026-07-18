@@ -47,6 +47,8 @@ import {
   visibleStatementSnapshot,
   type StatementSnapshot,
 } from "./statement-snapshot";
+import { buildStatementCsvExport } from "./statement-csv-export";
+import type { RestaurantStatementCsvFile } from "@/prototype/restaurant-statement-csv";
 import styles from "./settlements.module.css";
 
 import type { PrototypeState } from "@/prototype/models";
@@ -59,6 +61,27 @@ function formatLocalDateRu(localDate: string): string {
   const [y, m, d] = localDate.split("-");
   if (!y || !m || !d) return localDate;
   return `${d}.${m}.${y}`;
+}
+
+/**
+ * Клиентское скачивание CSV: один клик → один файл. Blob + object URL, после
+ * запуска скачивания object URL немедленно отзывается (revokeObjectURL). Без
+ * внешних библиотек и серверного endpoint.
+ */
+function triggerCsvDownload(file: RestaurantStatementCsvFile): void {
+  const blob = new Blob([file.content], { type: file.mimeType });
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.fileName;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /** Дата-время завершения/отмены в часовом поясе ресторана, ru-RU. */
@@ -704,6 +727,14 @@ function RestaurantStatementSection({
   // Envelope виден только при точном совпадении контекста (без опоры на useEffect).
   const visible = visibleStatementSnapshot(snapshot, restaurantId, timeZone);
 
+  // CSV доступен ТОЛЬКО из зафиксированного успешного snapshot текущего контекста;
+  // при ошибке/отсутствии/смене restaurantId или timeZone helper вернёт null.
+  // asOfIso берётся из envelope — новый Date.now() не запрашивается.
+  const csvFile = useMemo(
+    () => buildStatementCsvExport(snapshot, restaurantId, timeZone),
+    [snapshot, restaurantId, timeZone],
+  );
+
   return (
     <StatementView
       timeZone={timeZone}
@@ -714,6 +745,7 @@ function RestaurantStatementSection({
       onGenerate={generate}
       result={visible?.result ?? null}
       asOfIso={visible?.asOfIso ?? null}
+      csvFile={csvFile}
     />
   );
 }
@@ -728,6 +760,7 @@ function StatementView({
   onGenerate,
   result,
   asOfIso,
+  csvFile,
 }: {
   timeZone: string;
   startLocalDate: string;
@@ -737,6 +770,7 @@ function StatementView({
   onGenerate: () => void;
   result: RestaurantStatementViewResult | null;
   asOfIso: string | null;
+  csvFile: RestaurantStatementCsvFile | null;
 }) {
   const view = result?.ok ? result.view : null;
   const noMovements =
@@ -809,6 +843,21 @@ function StatementView({
               </p>
             ) : null}
           </div>
+
+          {/* Скачивание CSV: доступно только для зафиксированной успешной выписки
+              текущего контекста (csvFile !== null). Экспортирует именно её, не
+              перестраивая и не запрашивая новый момент. */}
+          {csvFile ? (
+            <div className={styles.statementForm}>
+              <button
+                type="button"
+                className={styles.generateButton}
+                onClick={() => triggerCsvDownload(csvFile)}
+              >
+                Скачать CSV
+              </button>
+            </div>
+          ) : null}
 
           {noMovements ? (
             <div className={styles.empty}>
