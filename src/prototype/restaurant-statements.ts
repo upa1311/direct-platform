@@ -5,6 +5,7 @@ import type {
   RestaurantAccountingType,
 } from "./models";
 import {
+  compareLocalDate,
   isValidTimeZone,
   localMidnightToUtcMs,
   parseLocalDate,
@@ -148,14 +149,17 @@ export function buildRestaurantStatementMovements(
   if (!start) return fail("Некорректная начальная дата.");
   const end = parseLocalDate(endLocalDate);
   if (!end) return fail("Некорректная конечная дата.");
+  // Порядок дат сравниваем ПО КАЛЕНДАРЮ, а не через границы окна: соседний
+  // перевёрнутый диапазон (start = день после end) иначе прошёл бы, т.к. его
+  // startMs равен endExclusiveMs. Одинаковая дата валидна (compare == 0).
+  if (compareLocalDate(start, end) > 0) {
+    return fail("Начальная дата позже конечной.");
+  }
   const startMs = localMidnightToUtcMs(start, timeZone);
   const endExclusiveMs = localMidnightToUtcMs(
     shiftCalendarDate(end, 1),
     timeZone,
   );
-  if (startMs > endExclusiveMs) {
-    return fail("Начальная дата позже конечной.");
-  }
   const asOfMs = Date.parse(asOfIso);
   if (typeof asOfIso !== "string" || Number.isNaN(asOfMs)) {
     return fail("Некорректное время среза.");
@@ -224,23 +228,40 @@ export function buildRestaurantStatementMovements(
 
   // --- Закрывающие движения ---
   for (const event of state.restaurantAccountingResolutionEvents) {
-    if (event.restaurantId !== restaurantId) continue;
     const entry = entryById.get(event.accountingEntryId);
+    const eventSelected = event.restaurantId === restaurantId;
+    const entrySelected = entry?.restaurantId === restaurantId;
+
     if (!entry) {
-      // Сумму не выдумываем; факт повреждения фиксируем, в totals не включаем.
-      issues.push({
-        kind: "RESOLUTION_ENTRY_NOT_FOUND",
-        entryKey: event.accountingEntryId,
-      });
+      // Entry отсутствует. Фиксируем только если само событие относится к
+      // выбранному ресторану; чужое повреждённое событие пропускаем.
+      if (eventSelected) {
+        issues.push({
+          kind: "RESOLUTION_ENTRY_NOT_FOUND",
+          entryKey: event.accountingEntryId,
+        });
+      }
       continue;
     }
-    if (entry.restaurantId !== restaurantId) {
-      issues.push({
-        kind: "RESOLUTION_RESTAURANT_MISMATCH",
-        entryKey: entry.id,
-      });
+
+    if (event.restaurantId !== entry.restaurantId) {
+      // Несовпадение ресторанов события и записи. Fail-safe: сумму не учитываем,
+      // строку не создаём. Issue — если хотя бы одна сторона относится к
+      // выбранному ресторану (двунаправленно). Если обе стороны чужие — не наша
+      // проблема, пропускаем без issue.
+      if (eventSelected || entrySelected) {
+        issues.push({
+          kind: "RESOLUTION_RESTAURANT_MISMATCH",
+          entryKey: entry.id,
+        });
+      }
       continue;
     }
+
+    // Здесь event.restaurantId === entry.restaurantId. Если это не выбранный
+    // ресторан — согласованное чужое движение, просто пропускаем.
+    if (!eventSelected) continue;
+
     const ms = Date.parse(event.occurredAt);
     if (Number.isNaN(ms)) {
       issues.push({ kind: "INVALID_RESOLUTION_AT", entryKey: entry.id });
