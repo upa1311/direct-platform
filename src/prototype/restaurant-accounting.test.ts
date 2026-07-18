@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildRestaurantAccountingJournal,
   computeCompletedOrderAccountingEntries,
   getRestaurantOpenPayableCents,
   getRestaurantOpenReceivableCents,
@@ -701,4 +702,198 @@ test("RESTAURANT_PAYOUT не затрагивается дедупликацие
     merged.filter((e) => e.orderId === "order-po" && e.type === "PLATFORM_COMMISSION").length,
     1,
   );
+});
+
+// --- Журнал обязательств (read-only selector) -------------------------------
+
+function jentry(
+  overrides: Partial<RestaurantAccountingEntry> & { id: string },
+): RestaurantAccountingEntry {
+  return {
+    orderId: `order-${overrides.id}`,
+    restaurantId: RESTAURANT_ID,
+    direction: "RESTAURANT_OWES_DIRECT",
+    type: "PLATFORM_COMMISSION",
+    amountCents: 100,
+    currencyCode: "USD",
+    status: "OPEN",
+    recognizedAt: DELIVERED_AT,
+    settledAt: null,
+    source: "ORDER_FINANCIAL_SNAPSHOT",
+    legacySettlementId: null,
+    ...overrides,
+  };
+}
+
+// 24 -------------------------------------------------------------------------
+
+test("journal: только записи выбранного ресторана", () => {
+  const st = stateWith([], [], [
+    jentry({ id: "mine", restaurantId: RESTAURANT_ID }),
+    jentry({ id: "other", restaurantId: "restaurant-2" }),
+  ]);
+  const rows = buildRestaurantAccountingJournal(st, RESTAURANT_ID);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].entryId, "mine");
+});
+
+// 25 -------------------------------------------------------------------------
+
+test("journal: связывает запись с публичным номером заказа", () => {
+  const order = completed("linked", "PICKUP", RESTAURANT_COLLECTED, "PICKED_UP");
+  const st = stateWith([order], [], [
+    jentry({ id: "e", orderId: "linked" }),
+  ]);
+  const rows = buildRestaurantAccountingJournal(st, RESTAURANT_ID);
+  assert.equal(rows[0].publicNumber, order.publicNumber);
+  assert.equal(rows[0].hasOrder, true);
+});
+
+// 26 -------------------------------------------------------------------------
+
+test("journal: отсутствующий legacy-заказ сохраняется, publicNumber null, без orderId", () => {
+  const st = stateWith([], [], [
+    jentry({
+      id: "orphan",
+      orderId: "удалённый-заказ",
+      source: "LEGACY_COMMISSION_SETTLEMENT",
+      legacySettlementId: "s-old",
+    }),
+  ]);
+  const rows = buildRestaurantAccountingJournal(st, RESTAURANT_ID);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].publicNumber, null);
+  assert.equal(rows[0].hasOrder, false);
+  // Внутренний orderId не входит в публичную row-модель.
+  assert.ok(!("orderId" in rows[0]));
+  assert.ok(!JSON.stringify(rows[0]).includes("удалённый-заказ"));
+});
+
+// 27 -------------------------------------------------------------------------
+
+test("journal: сортировка recognizedAt по убыванию", () => {
+  const st = stateWith([], [], [
+    jentry({ id: "old", recognizedAt: "2026-07-15T10:00:00.000Z" }),
+    jentry({ id: "new", recognizedAt: "2026-07-17T10:00:00.000Z" }),
+    jentry({ id: "mid", recognizedAt: "2026-07-16T10:00:00.000Z" }),
+  ]);
+  const rows = buildRestaurantAccountingJournal(st, RESTAURANT_ID);
+  assert.deepEqual(rows.map((r) => r.entryId), ["new", "mid", "old"]);
+});
+
+// 28 -------------------------------------------------------------------------
+
+test("journal: невалидные даты внизу, стабильный tie-breaker, без падения", () => {
+  const st = stateWith([], [], [
+    jentry({ id: "b-invalid", recognizedAt: "не-дата" }),
+    jentry({ id: "valid", recognizedAt: "2026-07-17T10:00:00.000Z" }),
+    jentry({ id: "a-invalid", recognizedAt: "тоже-не-дата" }),
+  ]);
+  const rows = buildRestaurantAccountingJournal(st, RESTAURANT_ID);
+  assert.equal(rows[0].entryId, "valid");
+  // Невалидные — внизу, между собой стабильно по entryId (a перед b).
+  assert.deepEqual(rows.slice(1).map((r) => r.entryId), ["a-invalid", "b-invalid"]);
+});
+
+// 29 -------------------------------------------------------------------------
+
+test("journal: направления, типы, статусы и источники сохраняются для UI-mapping", () => {
+  const st = stateWith([], [], [
+    jentry({ id: "c1", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", status: "OPEN", source: "ORDER_FINANCIAL_SNAPSHOT", recognizedAt: "2026-07-17T04:00:00.000Z" }),
+    jentry({ id: "c2", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", status: "SETTLED", source: "ORDER_FINANCIAL_SNAPSHOT", settledAt: "2026-07-17T05:00:00.000Z", recognizedAt: "2026-07-17T03:00:00.000Z" }),
+    jentry({ id: "c3", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", status: "WAIVED", source: "LEGACY_COMMISSION_SETTLEMENT", recognizedAt: "2026-07-17T02:00:00.000Z" }),
+  ]);
+  const rows = buildRestaurantAccountingJournal(st, RESTAURANT_ID);
+  const byId = new Map(rows.map((r) => [r.entryId, r]));
+  assert.equal(byId.get("c1")!.direction, "RESTAURANT_OWES_DIRECT");
+  assert.equal(byId.get("c1")!.type, "PLATFORM_COMMISSION");
+  assert.equal(byId.get("c1")!.status, "OPEN");
+  assert.equal(byId.get("c1")!.source, "ORDER_FINANCIAL_SNAPSHOT");
+  assert.equal(byId.get("c2")!.direction, "DIRECT_OWES_RESTAURANT");
+  assert.equal(byId.get("c2")!.type, "RESTAURANT_PAYOUT");
+  assert.equal(byId.get("c2")!.status, "SETTLED");
+  assert.equal(byId.get("c2")!.settledAt, "2026-07-17T05:00:00.000Z");
+  assert.equal(byId.get("c3")!.status, "WAIVED");
+  assert.equal(byId.get("c3")!.source, "LEGACY_COMMISSION_SETTLEMENT");
+});
+
+// 30 -------------------------------------------------------------------------
+
+test("journal: OPEN/SETTLED/WAIVED не меняют open balance formulas", () => {
+  const st = stateWith([], [], [
+    jentry({ id: "o", direction: "RESTAURANT_OWES_DIRECT", amountCents: 800, status: "OPEN" }),
+    jentry({ id: "s", direction: "RESTAURANT_OWES_DIRECT", amountCents: 999, status: "SETTLED" }),
+    jentry({ id: "w", direction: "DIRECT_OWES_RESTAURANT", amountCents: 777, status: "WAIVED" }),
+    jentry({ id: "p", direction: "DIRECT_OWES_RESTAURANT", amountCents: 500, status: "OPEN" }),
+  ]);
+  // Журнал показывает все 4, но открытый баланс учитывает только OPEN.
+  assert.equal(buildRestaurantAccountingJournal(st, RESTAURANT_ID).length, 4);
+  assert.equal(getRestaurantOpenReceivableCents(st, RESTAURANT_ID), 800);
+  assert.equal(getRestaurantOpenPayableCents(st, RESTAURANT_ID), 500);
+  assert.equal(getRestaurantNetPositionCents(st, RESTAURANT_ID), -300);
+});
+
+// 31 -------------------------------------------------------------------------
+
+test("journal: один orderId/type остаётся одной строкой после повторного parse", () => {
+  const order: Order = {
+    ...makeOrder({
+      id: "jp",
+      status: "READY_FOR_PICKUP",
+      deliveryMode: "PICKUP",
+      paymentStatus: "DUE_AT_PICKUP",
+      paidAt: null,
+      fin: RESTAURANT_COLLECTED,
+    }),
+    paymentMethod: "PAY_AT_RESTAURANT",
+    pickupCode: "1234",
+    pickupCodeUsed: false,
+    pickupPaymentMethodsSnapshot: ["CASH", "CARD"],
+  };
+  const done = completePickupWithCode(
+    stateWith([order]),
+    "jp",
+    "1234",
+    "CASH",
+    "RESTAURANT",
+    DELIVERED_AT,
+    "COMBINED",
+  ).state;
+  const parsed = parseStoredState(JSON.stringify(done));
+  assert.ok(parsed);
+  const rows = buildRestaurantAccountingJournal(parsed, RESTAURANT_ID).filter(
+    (r) => r.type === "PLATFORM_COMMISSION",
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].publicNumber, order.publicNumber);
+});
+
+// 32 -------------------------------------------------------------------------
+
+test("journal: read-only, state/orders/accounting/settlements не меняются", () => {
+  const order = completed("ro", "PICKUP", RESTAURANT_COLLECTED, "PICKED_UP");
+  const settlement: SettlementEntry = {
+    id: "s-ro",
+    orderId: "ro",
+    restaurantId: RESTAURANT_ID,
+    type: "PICKUP_COMMISSION",
+    amountCents: 800,
+    status: "PENDING",
+    createdAt: DELIVERED_AT,
+  };
+  const st = stateWith([order], [settlement], [jentry({ id: "e", orderId: "ro" })]);
+  const snapshot = JSON.stringify(st);
+  const ordersRef = st.orders;
+  const entriesRef = st.restaurantAccountingEntries;
+  const settlementsRef = st.settlements;
+  const revBefore = st.revision;
+
+  buildRestaurantAccountingJournal(st, RESTAURANT_ID);
+  buildRestaurantAccountingJournal(st, RESTAURANT_ID);
+
+  assert.equal(JSON.stringify(st), snapshot);
+  assert.equal(st.orders, ordersRef);
+  assert.equal(st.restaurantAccountingEntries, entriesRef);
+  assert.equal(st.settlements, settlementsRef);
+  assert.equal(st.revision, revBefore);
 });

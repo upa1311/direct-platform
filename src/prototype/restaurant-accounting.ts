@@ -36,9 +36,10 @@ function accountingEntryId(orderId: string, type: RestaurantAccountingType): str
 
 /**
  * Обязательства, которые СЛЕДУЕТ создать для завершённого заказа, но которых ещё
- * нет. Чистая функция: заказ и financials не мутируются. Дедупликация по
- * (orderId, type, source=ORDER_FINANCIAL_SNAPSHOT) — повторный вызов и гонка не
- * создают дубликат. recognizedAt берётся из реального completedAt заказа.
+ * нет. Чистая функция: заказ и financials не мутируются. Дедупликация по identity
+ * (orderId, type) — источник (snapshot/legacy) в identity НЕ входит, поэтому
+ * повторный вызов, гонка и уже мигрированная legacy-комиссия дубликат не создают.
+ * recognizedAt берётся из реального completedAt заказа.
  *
  * A. Деньги клиента собрал ресторан (restaurantCollectedFromCustomerCents > 0):
  *    ресторан должен Direct комиссию (platformCommissionReceivableCents), если > 0.
@@ -288,4 +289,112 @@ export function getRestaurantNetPositionCents(
     getRestaurantOpenPayableCents(state, restaurantId) -
     getRestaurantOpenReceivableCents(state, restaurantId)
   );
+}
+
+// --- Русские подписи для UI (сырой enum наружу не выводится) -----------------
+
+export const ACCOUNTING_DIRECTION_LABELS: Record<
+  RestaurantAccountingEntry["direction"],
+  string
+> = {
+  RESTAURANT_OWES_DIRECT: "Ресторан должен Direct",
+  DIRECT_OWES_RESTAURANT: "Direct должен ресторану",
+};
+
+export const ACCOUNTING_TYPE_LABELS: Record<
+  RestaurantAccountingEntry["type"],
+  string
+> = {
+  PLATFORM_COMMISSION: "Комиссия Direct",
+  RESTAURANT_PAYOUT: "Выплата ресторану",
+};
+
+export const ACCOUNTING_STATUS_LABELS: Record<
+  RestaurantAccountingEntry["status"],
+  string
+> = {
+  OPEN: "Ожидает расчёта",
+  SETTLED: "Закрыто",
+  WAIVED: "Списано",
+};
+
+export const ACCOUNTING_SOURCE_LABELS: Record<
+  RestaurantAccountingEntry["source"],
+  string
+> = {
+  ORDER_FINANCIAL_SNAPSHOT: "Финансовый снимок заказа",
+  LEGACY_COMMISSION_SETTLEMENT: "Перенесённое комиссионное начисление",
+};
+
+// --- Read-only журнал обязательств для UI -----------------------------------
+
+/**
+ * Безопасная строка журнала обязательств. Только поля, допустимые к показу:
+ * ни клиента/телефона/адреса/кода/оплаты, ни внутреннего orderId. entryId —
+ * только React-ключ (в UI не показывается), сырые enum переводятся в UI.
+ */
+export interface RestaurantAccountingJournalRow {
+  /** Внутренний ключ строки для React; в интерфейсе не показывается. */
+  entryId: string;
+  /** Публичный номер заказа или null, если старого заказа уже нет. */
+  publicNumber: string | null;
+  recognizedAt: string;
+  settledAt: string | null;
+  direction: RestaurantAccountingEntry["direction"];
+  type: RestaurantAccountingEntry["type"];
+  amountCents: number;
+  currencyCode: RestaurantAccountingEntry["currencyCode"];
+  status: RestaurantAccountingEntry["status"];
+  source: RestaurantAccountingEntry["source"];
+  /** Есть ли ещё связанный заказ (для подписи «Старое начисление»). */
+  hasOrder: boolean;
+}
+
+/**
+ * Read-only журнал двусторонних обязательств ресторана. Не мутирует state. Для
+ * каждой записи подтягивает публичный номер связанного заказа; если заказа уже
+ * нет, запись СОХРАНЯЕТСЯ (publicNumber = null, hasOrder = false), внутренний
+ * orderId наружу не выводится. Сортировка: новые recognizedAt сверху, записи с
+ * невалидной датой — вниз, стабильный tie-breaker по entryId.
+ */
+export function buildRestaurantAccountingJournal(
+  state: PrototypeState,
+  restaurantId: string,
+): RestaurantAccountingJournalRow[] {
+  const publicNumberByOrderId = new Map<string, string>();
+  for (const order of state.orders) {
+    publicNumberByOrderId.set(order.id, order.publicNumber);
+  }
+
+  const rows: RestaurantAccountingJournalRow[] = state.restaurantAccountingEntries
+    .filter((entry) => entry.restaurantId === restaurantId)
+    .map((entry) => {
+      const publicNumber = publicNumberByOrderId.get(entry.orderId) ?? null;
+      return {
+        entryId: entry.id,
+        publicNumber,
+        recognizedAt: entry.recognizedAt,
+        settledAt: entry.settledAt,
+        direction: entry.direction,
+        type: entry.type,
+        amountCents: entry.amountCents,
+        currencyCode: entry.currencyCode,
+        status: entry.status,
+        source: entry.source,
+        hasOrder: publicNumber !== null,
+      };
+    });
+
+  rows.sort((a, b) => {
+    const ta = Date.parse(a.recognizedAt);
+    const tb = Date.parse(b.recognizedAt);
+    const aValid = !Number.isNaN(ta);
+    const bValid = !Number.isNaN(tb);
+    if (aValid !== bValid) return aValid ? -1 : 1; // невалидные — вниз
+    if (aValid && bValid && ta !== tb) return tb - ta; // новые сверху
+    // Стабильный tie-breaker по внутреннему id.
+    return a.entryId < b.entryId ? -1 : a.entryId > b.entryId ? 1 : 0;
+  });
+
+  return rows;
 }

@@ -24,14 +24,20 @@ import {
   type RestaurantSettlementPeriod,
 } from "@/prototype/restaurant-settlements";
 import {
+  ACCOUNTING_DIRECTION_LABELS,
+  ACCOUNTING_SOURCE_LABELS,
+  ACCOUNTING_STATUS_LABELS,
+  ACCOUNTING_TYPE_LABELS,
+  buildRestaurantAccountingJournal,
   getRestaurantNetPositionCents,
   getRestaurantOpenPayableCents,
   getRestaurantOpenReceivableCents,
+  type RestaurantAccountingJournalRow,
 } from "@/prototype/restaurant-accounting";
 import styles from "./settlements.module.css";
 
-/** Вид раздела: по отдельным заказам или сводка по дням. */
-type SettlementView = "ORDERS" | "DAILY";
+/** Вид раздела: по заказам, по дням или журнал обязательств. */
+type SettlementView = "ORDERS" | "DAILY" | "OBLIGATIONS";
 
 /** Локальная дата ресторана YYYY-MM-DD → «16.07.2026» без пересчёта пояса. */
 function formatLocalDateRu(localDate: string): string {
@@ -105,6 +111,12 @@ export default function RestaurantSettlementsPage() {
     };
   }, [isHydrated, restaurant, state, selectedRestaurantId]);
 
+  // Журнал обязательств — вся история, независимо от периода отчёта.
+  const journal = useMemo(() => {
+    if (view !== "OBLIGATIONS" || !isHydrated || !restaurant) return null;
+    return buildRestaurantAccountingJournal(state, selectedRestaurantId);
+  }, [view, isHydrated, restaurant, state, selectedRestaurantId]);
+
   const money = (cents: number) =>
     formatMoney(cents, overview?.currencyCode ?? "USD");
 
@@ -170,6 +182,14 @@ export default function RestaurantSettlementsPage() {
             >
               По дням
             </button>
+            <button
+              type="button"
+              className={styles.periodButton}
+              aria-pressed={view === "OBLIGATIONS"}
+              onClick={() => setView("OBLIGATIONS")}
+            >
+              Обязательства
+            </button>
           </div>
 
           {/* Сводные показатели */}
@@ -209,10 +229,13 @@ export default function RestaurantSettlementsPage() {
             </p>
           </div>
 
-          {/* Взаимные обязательства — открытая позиция двустороннего журнала. */}
+          {/* Взаимные обязательства — открытая позиция за всё время (не зависит
+              от переключателя периода). */}
           {position ? (
             <>
-              <h2 className={styles.sectionTitle}>Взаимные обязательства</h2>
+              <h2 className={styles.sectionTitle}>
+                Взаимные обязательства · за всё время
+              </h2>
               <div className={styles.summaryGrid}>
                 <SummaryCard
                   label="Ресторан должен Direct"
@@ -236,6 +259,10 @@ export default function RestaurantSettlementsPage() {
               </div>
               <div className={styles.info}>
                 <p>
+                  Эти суммы показывают все открытые обязательства и не зависят от
+                  выбранного периода отчёта.
+                </p>
+                <p>
                   Чистая позиция — информационная разница открытых обязательств.
                   Автоматический взаимозачёт и фактическая выплата не выполняются.
                 </p>
@@ -245,6 +272,8 @@ export default function RestaurantSettlementsPage() {
 
           {view === "DAILY" ? (
             <DailyView days={daily ?? []} money={money} />
+          ) : view === "OBLIGATIONS" ? (
+            <ObligationsView rows={journal ?? []} money={money} timeZone={timeZone} />
           ) : (
             <OrdersView overview={overview} money={money} timeZone={timeZone} />
           )}
@@ -471,6 +500,125 @@ function DayMetric({ label, value }: { label: string; value: string }) {
       <span className={styles.dayMetricLabel}>{label}</span>
       <span className={styles.dayMetricValue}>{value}</span>
     </div>
+  );
+}
+
+type ObligationStatusFilter = "OPEN" | "CLOSED" | "ALL";
+type ObligationDirectionFilter =
+  | "ALL"
+  | "RESTAURANT_OWES_DIRECT"
+  | "DIRECT_OWES_RESTAURANT";
+
+/** Представление «Обязательства» — read-only журнал двусторонних обязательств. */
+function ObligationsView({
+  rows,
+  money,
+  timeZone,
+}: {
+  rows: RestaurantAccountingJournalRow[];
+  money: (cents: number) => string;
+  timeZone: string;
+}) {
+  const [statusFilter, setStatusFilter] = useState<ObligationStatusFilter>("OPEN");
+  const [directionFilter, setDirectionFilter] =
+    useState<ObligationDirectionFilter>("ALL");
+
+  // Фильтры presentation-only: сами записи не меняются.
+  const visible = rows.filter((row) => {
+    const statusOk =
+      statusFilter === "ALL"
+        ? true
+        : statusFilter === "OPEN"
+          ? row.status === "OPEN"
+          : row.status === "SETTLED" || row.status === "WAIVED";
+    const directionOk =
+      directionFilter === "ALL" ? true : row.direction === directionFilter;
+    return statusOk && directionOk;
+  });
+
+  return (
+    <>
+      <h2 className={styles.sectionTitle}>Обязательства · за всё время</h2>
+
+      <div className={styles.periods} role="group" aria-label="Статус">
+        {(
+          [
+            ["OPEN", "Открытые"],
+            ["CLOSED", "Закрытые"],
+            ["ALL", "Все"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={styles.periodButton}
+            aria-pressed={statusFilter === value}
+            onClick={() => setStatusFilter(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className={styles.periods} role="group" aria-label="Направление">
+        {(
+          [
+            ["ALL", "Все направления"],
+            ["RESTAURANT_OWES_DIRECT", "Ресторан должен Direct"],
+            ["DIRECT_OWES_RESTAURANT", "Direct должен ресторану"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={styles.periodButton}
+            aria-pressed={directionFilter === value}
+            onClick={() => setDirectionFilter(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {visible.length === 0 ? (
+        <div className={styles.empty}>Обязательств по выбранным фильтрам нет.</div>
+      ) : (
+        <div className={styles.tableScroll}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Дата признания</th>
+                <th>Заказ</th>
+                <th>Кто кому должен</th>
+                <th>Основание</th>
+                <th className={styles.num}>Сумма</th>
+                <th>Статус</th>
+                <th>Источник</th>
+                <th>Дата закрытия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((row) => (
+                <tr key={row.entryId}>
+                  <td>{formatInZone(row.recognizedAt, timeZone)}</td>
+                  <td className={styles.orderNumber}>
+                    {row.publicNumber ?? "Старое начисление"}
+                  </td>
+                  <td>{ACCOUNTING_DIRECTION_LABELS[row.direction]}</td>
+                  <td>{ACCOUNTING_TYPE_LABELS[row.type]}</td>
+                  <td className={styles.money}>{money(row.amountCents)}</td>
+                  <td>{ACCOUNTING_STATUS_LABELS[row.status]}</td>
+                  <td>{ACCOUNTING_SOURCE_LABELS[row.source]}</td>
+                  <td>
+                    {row.settledAt ? formatInZone(row.settledAt, timeZone) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }
 
