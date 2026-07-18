@@ -717,3 +717,143 @@ test("reconciliation выполняется для обеих сторон", () 
       s.settledDirectOwesRestaurantCents,
   );
 });
+
+// --- Admissibility canonical resolution -------------------------------------
+
+// 39 -------------------------------------------------------------------------
+
+test("RESTAURANT_PAYOUT + WAIVED: INVALID_RESOLUTION_OUTCOME, не закрывает payable", () => {
+  const st = stateWith(
+    [entry({ id: "p", recognizedAt: BEFORE, direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 5100 })],
+    [event({ id: "e", accountingEntryId: "p", nextStatus: "WAIVED", occurredAt: INSIDE })],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.ok(m.issues.some((i) => i.kind === "INVALID_RESOLUTION_OUTCOME" && i.entryKey === "p"));
+  assert.equal(m.resolutions.length, 0, "нет resolution row");
+  assert.equal(s.waivedRestaurantOwesDirectCents, 0);
+  assert.equal(s.settledDirectOwesRestaurantCents, 0);
+  assert.equal(s.closingDirectOwesRestaurantCents, 5100, "payable остаётся в closing");
+});
+
+// 40 -------------------------------------------------------------------------
+
+test("RESTAURANT_PAYOUT: ранний invalid WAIVED не заслоняет более поздний SETTLED", () => {
+  const st = stateWith(
+    [entry({ id: "p", recognizedAt: "2026-07-12T10:00:00.000Z", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 5100 })],
+    [
+      event({ id: "eW", accountingEntryId: "p", nextStatus: "WAIVED", occurredAt: "2026-07-14T10:00:00.000Z" }),
+      event({ id: "eS", accountingEntryId: "p", nextStatus: "SETTLED", occurredAt: "2026-07-16T10:00:00.000Z" }),
+    ],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.ok(m.issues.some((i) => i.kind === "INVALID_RESOLUTION_OUTCOME" && i.entryKey === "p"));
+  assert.equal(m.resolutions.length, 1, "canonical — допустимый SETTLED");
+  assert.equal(m.resolutions[0].outcome, "SETTLED");
+  assert.equal(m.resolutions[0].occurredAt, "2026-07-16T10:00:00.000Z");
+  assert.equal(s.settledDirectOwesRestaurantCents, 5100);
+  assert.equal(s.closingDirectOwesRestaurantCents, 0);
+  assert.ok(
+    !m.issues.some((i) => i.kind === "DUPLICATE_RESOLUTION_EVENT"),
+    "invalid WAIVED не создаёт duplicate",
+  );
+});
+
+// 41 -------------------------------------------------------------------------
+
+test("PLATFORM_COMMISSION + RESTAURANT_OWES_DIRECT + WAIVED остаётся допустимым", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: BEFORE, direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "WAIVED", occurredAt: INSIDE })],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.ok(!m.issues.some((i) => i.kind === "INVALID_RESOLUTION_OUTCOME"));
+  assert.equal(m.resolutions.length, 1);
+  assert.equal(m.resolutions[0].outcome, "WAIVED");
+  assert.equal(s.waivedRestaurantOwesDirectCents, 800);
+  assert.equal(s.closingRestaurantOwesDirectCents, 0, "receivable закрыт");
+});
+
+// 42 -------------------------------------------------------------------------
+
+test("повреждённая комбинация ROD + RESTAURANT_PAYOUT + WAIVED недопустима", () => {
+  const st = stateWith(
+    [entry({ id: "x", recognizedAt: BEFORE, direction: "RESTAURANT_OWES_DIRECT", type: "RESTAURANT_PAYOUT", amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "x", nextStatus: "WAIVED", occurredAt: INSIDE })],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.ok(m.issues.some((i) => i.kind === "INVALID_RESOLUTION_OUTCOME" && i.entryKey === "x"));
+  assert.equal(m.resolutions.length, 0);
+  assert.equal(s.closingRestaurantOwesDirectCents, 800, "позиция не закрыта");
+});
+
+// 43 -------------------------------------------------------------------------
+
+test("два допустимых SETTLED: canonical самый ранний, DUPLICATE_RESOLUTION_EVENT", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: "2026-07-12T10:00:00.000Z", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 2000 })],
+    [
+      event({ id: "eLate", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: "2026-07-17T10:00:00.000Z" }),
+      event({ id: "eEarly", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: "2026-07-15T10:00:00.000Z" }),
+    ],
+  );
+  const m = build(st, PERIOD());
+  assert.equal(m.resolutions.length, 1);
+  assert.equal(m.resolutions[0].occurredAt, "2026-07-15T10:00:00.000Z");
+  assert.ok(m.issues.some((i) => i.kind === "DUPLICATE_RESOLUTION_EVENT" && i.entryKey === "c"));
+});
+
+// 44 -------------------------------------------------------------------------
+
+test("одинаковый occurredAt: canonical — меньший event.id (tie-breaker)", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: "2026-07-12T10:00:00.000Z", amountCents: 800 })],
+    [
+      event({ id: "e-b", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: INSIDE, note: "from-b" }),
+      event({ id: "e-a", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: INSIDE, note: "from-a" }),
+    ],
+  );
+  const m = build(st, PERIOD());
+  assert.equal(m.resolutions.length, 1);
+  // e-a < e-b по id → canonical e-a, его note.
+  assert.equal(m.resolutions[0].note, "from-a");
+  assert.ok(m.issues.some((i) => i.kind === "DUPLICATE_RESOLUTION_EVENT" && i.entryKey === "c"));
+});
+
+// 45 -------------------------------------------------------------------------
+
+test("invalid outcome не влияет на opening/closing reconciliation", () => {
+  const st = stateWith(
+    [
+      // Payout с недопустимым WAIVED — остаётся открытым, участвует в reconciliation.
+      entry({ id: "pBad", recognizedAt: "2026-07-12T10:00:00.000Z", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 2000 }),
+      // Валидная receivable, закрытая внутри периода.
+      entry({ id: "rOk", recognizedAt: BEFORE, direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 }),
+    ],
+    [
+      event({ id: "eBad", accountingEntryId: "pBad", nextStatus: "WAIVED", occurredAt: INSIDE }),
+      event({ id: "eOk", accountingEntryId: "rOk", nextStatus: "SETTLED", occurredAt: INSIDE }),
+    ],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.ok(m.issues.some((i) => i.kind === "INVALID_RESOLUTION_OUTCOME" && i.entryKey === "pBad"));
+  assert.equal(
+    s.closingRestaurantOwesDirectCents,
+    s.openingRestaurantOwesDirectCents +
+      s.recognizedRestaurantOwesDirectCents -
+      s.settledRestaurantOwesDirectCents -
+      s.waivedRestaurantOwesDirectCents,
+  );
+  assert.equal(
+    s.closingDirectOwesRestaurantCents,
+    s.openingDirectOwesRestaurantCents +
+      s.recognizedDirectOwesRestaurantCents -
+      s.settledDirectOwesRestaurantCents,
+  );
+  // Недопустимый WAIVED не закрыл payout: он остаётся в closing.
+  assert.equal(s.closingDirectOwesRestaurantCents, 2000);
+});

@@ -70,6 +70,7 @@ export type RestaurantStatementIssueKind =
   | "RESOLUTION_ENTRY_NOT_FOUND"
   | "RESOLUTION_RESTAURANT_MISMATCH"
   | "RESOLUTION_BEFORE_RECOGNITION"
+  | "INVALID_RESOLUTION_OUTCOME"
   | "DUPLICATE_RESOLUTION_EVENT"
   | "FUTURE_EVENT_EXCLUDED";
 
@@ -255,6 +256,19 @@ export function buildRestaurantStatementMovements(
   // ресторана и попутно фиксируем per-event повреждения. Канонический resolution
   // (самый ранний по occurredAt, tie-break по event.id) используется одновременно
   // для движений, opening и closing — чтобы balances не расходились с движениями.
+  // Допустимый outcome для записи: SETTLED — для любой корректной записи (оба
+  // направления, оба типа). WAIVED — только для комиссионного требования Direct
+  // к ресторану (RESTAURANT_OWES_DIRECT + PLATFORM_COMMISSION). Любая другая
+  // комбинация с WAIVED недопустима.
+  const isAdmissibleOutcome = (
+    event: RestaurantAccountingResolutionEvent,
+    entry: RestaurantAccountingEntry,
+  ): boolean =>
+    event.nextStatus === "SETTLED" ||
+    (event.nextStatus === "WAIVED" &&
+      entry.direction === "RESTAURANT_OWES_DIRECT" &&
+      entry.type === "PLATFORM_COMMISSION");
+
   const validCandidatesByEntry = new Map<
     string,
     RestaurantAccountingResolutionEvent[]
@@ -299,6 +313,12 @@ export function buildRestaurantStatementMovements(
       issues.push({ kind: "RESOLUTION_BEFORE_RECOGNITION", entryKey: entry.id });
       continue;
     }
+    // Шаг 6: недопустимый для записи outcome (например WAIVED для выплаты) не
+    // становится кандидатом — не заслоняет допустимое закрытие и не считается.
+    if (!isAdmissibleOutcome(event, entry)) {
+      issues.push({ kind: "INVALID_RESOLUTION_OUTCOME", entryKey: entry.id });
+      continue;
+    }
     const list = validCandidatesByEntry.get(entry.id);
     if (list) list.push(event);
     else validCandidatesByEntry.set(entry.id, [event]);
@@ -316,16 +336,6 @@ export function buildRestaurantStatementMovements(
       issues.push({ kind: "DUPLICATE_RESOLUTION_EVENT", entryKey: entryId });
     }
   }
-
-  // Валидное закрытие: SETTLED закрывает оба направления; WAIVED — только
-  // требование ресторана перед Direct (receivable).
-  const isValidClosure = (
-    event: RestaurantAccountingResolutionEvent,
-    entry: RestaurantAccountingEntry,
-  ): boolean =>
-    event.nextStatus === "SETTLED" ||
-    (event.nextStatus === "WAIVED" &&
-      entry.direction === "RESTAURANT_OWES_DIRECT");
 
   // --- Закрывающие движения (только canonical) ---
   for (const [entryId, canonical] of canonicalByEntry) {
@@ -374,10 +384,11 @@ export function buildRestaurantStatementMovements(
     if (Number.isNaN(recMs)) continue; // невалидная дата признания — уже помечена
     if (recMs > asOfMs) continue; // не признано на момент asOf
     const canonical = canonicalByEntry.get(entry.id);
-    // Обязательство валидно закрыто до момента x, если canonical — валидное
-    // закрытие своей стороны, произошло строго раньше x и не позже asOf.
+    // Обязательство закрыто до момента x, если у записи есть canonical (он всегда
+    // допустимое закрытие своей стороны — недопустимые outcome кандидатами не
+    // становятся), произошёл строго раньше x и не позже asOf.
     const closedBefore = (x: number): boolean => {
-      if (!canonical || !isValidClosure(canonical, entry)) return false;
+      if (!canonical) return false;
       const occMs = Date.parse(canonical.occurredAt);
       return occMs < x && occMs <= asOfMs;
     };
