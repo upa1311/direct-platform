@@ -422,6 +422,118 @@ export function buildRestaurantSettlementOverview(
   };
 }
 
+// --- Сверка по дням ---------------------------------------------------------
+
+/** Одна строка дневной сверки: агрегаты завершённых заказов за локальный день. */
+export interface RestaurantDailySettlementRow {
+  /** Локальная календарная дата ресторана в формате YYYY-MM-DD. */
+  localDate: string;
+  completedOrderCount: number;
+  customerTotalCents: number;
+  foodSubtotalCents: number;
+  restaurantNetCents: number;
+  restaurantCollectedFromCustomerCents: number;
+  platformCollectedFromCustomerCents: number;
+  platformCommissionReceivableCents: number;
+  pendingLedgerCents: number;
+  paidCanceledCount: number;
+  /** Завершённые заказы дня (новые сверху) — для раскрытия строки. */
+  orders: RestaurantSettlementRow[];
+}
+
+/** Локальная календарная дата момента utcMs в формате YYYY-MM-DD. */
+function formatLocalDate(utcMs: number, timeZone: string): string {
+  const { year, month, day } = getLocalDateParts(utcMs, timeZone);
+  const mm = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return `${year}-${mm}-${dd}`;
+}
+
+/**
+ * Дневная сверка ресторана за период. Read-only и построена ПОВЕРХ
+ * buildRestaurantSettlementOverview: те же completedAt, границы периода, часовой
+ * пояс, правила DELIVERED/PICKED_UP, исключение будущих/невалидных событий и
+ * классификация paid-canceled — второй формулы периодов нет. Завершённые заказы
+ * группируются по локальной дате completedAt, оплаченные отмены — по локальной
+ * дате canceledAt. Сумма всех дней по каждому финансовому полю равна общей
+ * summary за тот же период. Дни — новые сверху; заказы внутри дня — новые сверху.
+ */
+export function buildRestaurantDailySettlement(
+  state: PrototypeState,
+  restaurantId: string,
+  period: RestaurantSettlementPeriod,
+  nowIso: string,
+  timeZone: string,
+): RestaurantDailySettlementRow[] {
+  const zone = timeZone || "Europe/Chisinau";
+  const overview = buildRestaurantSettlementOverview(
+    state,
+    restaurantId,
+    period,
+    nowIso,
+    zone,
+  );
+
+  // Фактический PENDING по существующему журналу комиссий, по заказам. Тот же
+  // источник (state.settlements), что и в overview — не пересчёт snapshot.
+  const pendingByOrderId = new Map<string, number>();
+  for (const entry of state.settlements) {
+    if (entry.restaurantId !== restaurantId) continue;
+    if (entry.status !== "PENDING") continue;
+    pendingByOrderId.set(
+      entry.orderId,
+      (pendingByOrderId.get(entry.orderId) ?? 0) + entry.amountCents,
+    );
+  }
+
+  const dayMap = new Map<string, RestaurantDailySettlementRow>();
+  const ensureDay = (localDate: string): RestaurantDailySettlementRow => {
+    let day = dayMap.get(localDate);
+    if (!day) {
+      day = {
+        localDate,
+        completedOrderCount: 0,
+        customerTotalCents: 0,
+        foodSubtotalCents: 0,
+        restaurantNetCents: 0,
+        restaurantCollectedFromCustomerCents: 0,
+        platformCollectedFromCustomerCents: 0,
+        platformCommissionReceivableCents: 0,
+        pendingLedgerCents: 0,
+        paidCanceledCount: 0,
+        orders: [],
+      };
+      dayMap.set(localDate, day);
+    }
+    return day;
+  };
+
+  // overview.rows уже отсортированы по убыванию completedAt: порядок внутри дня
+  // сохраняется при раскладке по корзинам.
+  for (const row of overview.rows) {
+    const day = ensureDay(formatLocalDate(Date.parse(row.completedAt), zone));
+    day.completedOrderCount += 1;
+    day.customerTotalCents += row.customerTotalCents;
+    day.foodSubtotalCents += row.foodSubtotalCents;
+    day.restaurantNetCents += row.restaurantNetAfterPlatformCommissionCents;
+    day.restaurantCollectedFromCustomerCents +=
+      row.restaurantCollectedFromCustomerCents;
+    day.platformCollectedFromCustomerCents +=
+      row.platformCollectedFromCustomerCents;
+    day.platformCommissionReceivableCents += row.platformCommissionReceivableCents;
+    day.pendingLedgerCents += pendingByOrderId.get(row.orderId) ?? 0;
+    day.orders.push(row);
+  }
+
+  for (const paid of overview.paidCanceled) {
+    const day = ensureDay(formatLocalDate(Date.parse(paid.canceledAt), zone));
+    day.paidCanceledCount += 1;
+  }
+
+  // Новые даты сверху; YYYY-MM-DD сравнивается лексикографически = хронологически.
+  return [...dayMap.values()].sort((a, b) => b.localDate.localeCompare(a.localDate));
+}
+
 /** Русские подписи периодов для переключателя. */
 export const RESTAURANT_SETTLEMENT_PERIOD_LABELS: Record<
   RestaurantSettlementPeriod,

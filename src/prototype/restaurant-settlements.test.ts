@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildRestaurantDailySettlement,
   buildRestaurantSettlementOverview,
   getOrderCanceledAt,
   getOrderCompletedAt,
@@ -720,4 +721,302 @@ test("невалидный completedAt/canceledAt не попадает даже
   assert.equal(ov.rows.length, 0);
   assert.equal(ov.paidCanceled.length, 0);
   assert.equal(ov.summary.completedOrderCount, 0);
+});
+
+// --- Сверка по дням ---------------------------------------------------------
+
+function completed(
+  id: string,
+  completedAt: string,
+  fin: Partial<FinancialSnapshot>,
+  mode: DeliveryMode = "PLATFORM_DRIVER",
+): Order {
+  return makeOrder({
+    id,
+    status: mode === "PICKUP" ? "PICKED_UP" : "DELIVERED",
+    deliveryMode: mode,
+    completedAt,
+    history: [
+      statusEvent(
+        mode === "PICKUP" ? "READY_FOR_PICKUP" : "ARRIVING",
+        mode === "PICKUP" ? "PICKED_UP" : "DELIVERED",
+        completedAt,
+      ),
+    ],
+    fin,
+  });
+}
+
+// 18 -------------------------------------------------------------------------
+
+test("дневная сверка группирует заказы по локальной дате completedAt ресторана", () => {
+  const st = stateWith([
+    completed("a", "2026-07-15T12:00:00.000Z", { customerTotalCents: 1000 }),
+    completed("b", "2026-07-15T18:00:00.000Z", { customerTotalCents: 2000 }),
+    completed("c", "2026-07-16T09:00:00.000Z", { customerTotalCents: 3000 }),
+  ]);
+  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+
+  assert.deepEqual(days.map((d) => d.localDate), ["2026-07-16", "2026-07-15"]);
+  const d15 = days.find((d) => d.localDate === "2026-07-15")!;
+  assert.equal(d15.completedOrderCount, 2);
+  assert.equal(d15.customerTotalCents, 3000);
+  assert.equal(days.find((d) => d.localDate === "2026-07-16")!.completedOrderCount, 1);
+});
+
+// 19 -------------------------------------------------------------------------
+
+test("заказ у UTC-полуночи попадает в правильный локальный день ресторана", () => {
+  // 22:00Z 16 июля = 01:00 местного (EEST+3) 17 июля.
+  const st = stateWith([
+    completed("late", "2026-07-16T22:00:00.000Z", { customerTotalCents: 500 }),
+  ]);
+  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  assert.equal(days.length, 1);
+  assert.equal(days[0].localDate, "2026-07-17");
+});
+
+// 20 -------------------------------------------------------------------------
+
+test("группировка по дням корректна через переход DST", () => {
+  const now = "2026-03-31T12:00:00.000Z";
+  const st = stateWith([
+    // 28 марта (EET+2): 12:00Z = 14:00 местного 28-го.
+    completed("mar28", "2026-03-28T12:00:00.000Z", { customerTotalCents: 1000 }),
+    // 30 марта (EEST+3): 12:00Z = 15:00 местного 30-го.
+    completed("mar30", "2026-03-30T12:00:00.000Z", { customerTotalCents: 2000 }),
+  ]);
+  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", now, TZ);
+  const byDate = new Map(days.map((d) => [d.localDate, d]));
+  assert.ok(byDate.has("2026-03-28"));
+  assert.ok(byDate.has("2026-03-30"));
+  assert.equal(byDate.get("2026-03-28")!.orders[0].orderId, "mar28");
+  assert.equal(byDate.get("2026-03-30")!.orders[0].orderId, "mar30");
+});
+
+// 21 -------------------------------------------------------------------------
+
+test("сумма всех дней равна общей summary за тот же период", () => {
+  const st = stateWith([
+    completed("a", "2026-07-15T12:00:00.000Z", {
+      customerTotalCents: 1000,
+      foodSubtotalCents: 800,
+      restaurantNetAfterPlatformCommissionCents: 700,
+      restaurantCollectedFromCustomerCents: 1000,
+      platformCollectedFromCustomerCents: 0,
+      platformCommissionReceivableCents: 100,
+    }),
+    completed("b", "2026-07-16T12:00:00.000Z", {
+      customerTotalCents: 3000,
+      foodSubtotalCents: 2500,
+      restaurantNetAfterPlatformCommissionCents: 2100,
+      restaurantCollectedFromCustomerCents: 0,
+      platformCollectedFromCustomerCents: 3000,
+      platformCommissionReceivableCents: 400,
+    }),
+    completed("c", "2026-07-17T09:00:00.000Z", {
+      customerTotalCents: 500,
+      foodSubtotalCents: 450,
+      restaurantNetAfterPlatformCommissionCents: 420,
+      restaurantCollectedFromCustomerCents: 250,
+      platformCollectedFromCustomerCents: 250,
+      platformCommissionReceivableCents: 30,
+    }),
+  ]);
+  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "ALL", NOW, TZ);
+
+  const sum = (pick: (d: (typeof days)[number]) => number) =>
+    days.reduce((acc, d) => acc + pick(d), 0);
+
+  assert.equal(sum((d) => d.completedOrderCount), ov.summary.completedOrderCount);
+  assert.equal(sum((d) => d.customerTotalCents), ov.summary.customerTotalCents);
+  assert.equal(sum((d) => d.foodSubtotalCents), ov.summary.foodSubtotalCents);
+  assert.equal(sum((d) => d.restaurantNetCents), ov.summary.restaurantNetCents);
+  assert.equal(
+    sum((d) => d.restaurantCollectedFromCustomerCents),
+    ov.summary.restaurantCollectedFromCustomerCents,
+  );
+  assert.equal(
+    sum((d) => d.platformCollectedFromCustomerCents),
+    ov.summary.platformCollectedFromCustomerCents,
+  );
+  assert.equal(
+    sum((d) => d.platformCommissionReceivableCents),
+    ov.summary.platformCommissionReceivableCents,
+  );
+  assert.equal(sum((d) => d.pendingLedgerCents), ov.summary.pendingLedgerCents);
+});
+
+// 22 -------------------------------------------------------------------------
+
+test("PENDING журнала агрегируется отдельно от snapshot-комиссии", () => {
+  const st = stateWith(
+    [
+      completed("a", "2026-07-15T12:00:00.000Z", {
+        platformCommissionReceivableCents: 500,
+      }),
+    ],
+    [
+      {
+        id: "s-pending",
+        orderId: "a",
+        restaurantId: RESTAURANT_ID,
+        type: "RESTAURANT_DELIVERY_COMMISSION",
+        amountCents: 700,
+        status: "PENDING",
+        createdAt: "2026-07-15T12:00:00.000Z",
+      },
+      {
+        id: "s-paid",
+        orderId: "a",
+        restaurantId: RESTAURANT_ID,
+        type: "RESTAURANT_DELIVERY_COMMISSION",
+        amountCents: 999,
+        status: "PAID",
+        createdAt: "2026-07-15T12:00:00.000Z",
+      },
+    ],
+  );
+  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  assert.equal(days.length, 1);
+  // Snapshot-комиссия и фактический PENDING — разные величины, не смешиваются.
+  assert.equal(days[0].platformCommissionReceivableCents, 500);
+  assert.equal(days[0].pendingLedgerCents, 700);
+});
+
+// 23 -------------------------------------------------------------------------
+
+test("paid-canceled увеличивает только paidCanceledCount дня и не входит в totals", () => {
+  const st = stateWith([
+    completed("done", "2026-07-16T12:00:00.000Z", { customerTotalCents: 2000 }),
+    makeOrder({
+      id: "cancel",
+      status: "CANCELED",
+      deliveryMode: "PLATFORM_DRIVER",
+      paymentStatus: "PAID",
+      paidAt: "2026-07-16T08:00:00.000Z",
+      history: [statusEvent("PREPARING", "CANCELED", "2026-07-16T14:00:00.000Z")],
+      fin: { customerTotalCents: 9999 },
+    }),
+  ]);
+  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const d16 = days.find((d) => d.localDate === "2026-07-16")!;
+  assert.equal(d16.paidCanceledCount, 1);
+  assert.equal(d16.completedOrderCount, 1);
+  assert.equal(d16.customerTotalCents, 2000, "отменённый не входит в стоимость");
+  assert.equal(d16.orders.length, 1);
+  assert.equal(d16.orders[0].orderId, "done");
+});
+
+// 24 -------------------------------------------------------------------------
+
+test("будущие и невалидные события не создают дневную строку", () => {
+  const st = stateWith([
+    completed("future", "2026-07-17T12:00:00.001Z", { customerTotalCents: 100 }),
+    makeOrder({
+      id: "invalid",
+      status: "DELIVERED",
+      deliveryMode: "PLATFORM_DRIVER",
+      updatedAt: "не-дата",
+      history: [],
+      fin: { customerTotalCents: 200 },
+    }),
+    completed("ok", "2026-07-17T09:00:00.000Z", { customerTotalCents: 300 }),
+  ]);
+  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  assert.equal(days.length, 1);
+  assert.equal(days[0].localDate, "2026-07-17");
+  assert.equal(days[0].completedOrderCount, 1);
+  assert.equal(days[0].orders[0].orderId, "ok");
+});
+
+// 25 -------------------------------------------------------------------------
+
+test("изменение меню/тарифа/комиссии не меняет дневную сверку", () => {
+  const orders = [
+    completed("a", "2026-07-16T12:00:00.000Z", {
+      customerTotalCents: 1234,
+      restaurantNetAfterPlatformCommissionCents: 1000,
+    }),
+  ];
+  const before = buildRestaurantDailySettlement(
+    stateWith(orders),
+    RESTAURANT_ID,
+    "ALL",
+    NOW,
+    TZ,
+  );
+
+  // Меняем текущее меню, тарифы, комиссию ресторана и настройки платформы.
+  const mutated = stateWith(orders);
+  const withChanges: PrototypeState = {
+    ...mutated,
+    menuItems: mutated.menuItems.map((m) => ({ ...m, priceCents: 99999 })),
+    restaurants: mutated.restaurants.map((r) =>
+      r.id === RESTAURANT_ID ? { ...r, commissionRateBps: 5000 } : r,
+    ),
+  };
+  const after = buildRestaurantDailySettlement(
+    withChanges,
+    RESTAURANT_ID,
+    "ALL",
+    NOW,
+    TZ,
+  );
+  assert.deepEqual(after, before);
+  assert.equal(after[0].customerTotalCents, 1234);
+});
+
+// 26 -------------------------------------------------------------------------
+
+test("сортировка: дни и заказы внутри дня — по убыванию", () => {
+  const st = stateWith([
+    completed("d16-early", "2026-07-16T08:00:00.000Z", { customerTotalCents: 1 }),
+    completed("d16-late", "2026-07-16T20:00:00.000Z", { customerTotalCents: 2 }),
+    completed("d15", "2026-07-15T12:00:00.000Z", { customerTotalCents: 3 }),
+    completed("d17", "2026-07-17T09:00:00.000Z", { customerTotalCents: 4 }),
+  ]);
+  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  assert.deepEqual(
+    days.map((d) => d.localDate),
+    ["2026-07-17", "2026-07-16", "2026-07-15"],
+  );
+  const d16 = days.find((d) => d.localDate === "2026-07-16")!;
+  assert.deepEqual(
+    d16.orders.map((o) => o.orderId),
+    ["d16-late", "d16-early"],
+  );
+});
+
+// 27 -------------------------------------------------------------------------
+
+test("read-only: дневная сверка не меняет state/orders/settlements", () => {
+  const orders = [
+    completed("a", "2026-07-16T12:00:00.000Z", { customerTotalCents: 1000 }),
+  ];
+  const settlements: SettlementEntry[] = [
+    {
+      id: "s1",
+      orderId: "a",
+      restaurantId: RESTAURANT_ID,
+      type: "RESTAURANT_DELIVERY_COMMISSION",
+      amountCents: 100,
+      status: "PENDING",
+      createdAt: "2026-07-16T12:00:00.000Z",
+    },
+  ];
+  const st = stateWith(orders, settlements);
+  const snapshot = JSON.stringify(st);
+  const ordersRef = st.orders;
+  const settlementsRef = st.settlements;
+  const revBefore = st.revision;
+
+  buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  buildRestaurantDailySettlement(st, RESTAURANT_ID, "TODAY", NOW, TZ);
+
+  assert.equal(JSON.stringify(st), snapshot);
+  assert.equal(st.orders, ordersRef);
+  assert.equal(st.settlements, settlementsRef);
+  assert.equal(st.revision, revBefore);
 });

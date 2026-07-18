@@ -15,13 +15,25 @@ import {
   settlementTypeLabels,
 } from "@/prototype/selectors";
 import {
+  buildRestaurantDailySettlement,
   buildRestaurantSettlementOverview,
   RESTAURANT_SETTLEMENT_PERIOD_LABELS,
   RESTAURANT_SETTLEMENT_PERIOD_ORDER,
   SETTLEMENT_COLLECTOR_LABELS,
+  type RestaurantDailySettlementRow,
   type RestaurantSettlementPeriod,
 } from "@/prototype/restaurant-settlements";
 import styles from "./settlements.module.css";
+
+/** Вид раздела: по отдельным заказам или сводка по дням. */
+type SettlementView = "ORDERS" | "DAILY";
+
+/** Локальная дата ресторана YYYY-MM-DD → «16.07.2026» без пересчёта пояса. */
+function formatLocalDateRu(localDate: string): string {
+  const [y, m, d] = localDate.split("-");
+  if (!y || !m || !d) return localDate;
+  return `${d}.${m}.${y}`;
+}
 
 /** Дата-время завершения/отмены в часовом поясе ресторана, ru-RU. */
 function formatInZone(iso: string, timeZone: string): string {
@@ -51,6 +63,7 @@ export default function RestaurantSettlementsPage() {
     useRestaurantWorkspace();
   const nowMs = useNowMs();
   const [period, setPeriod] = useState<RestaurantSettlementPeriod>("TODAY");
+  const [view, setView] = useState<SettlementView>("ORDERS");
 
   const restaurant = getRestaurant(state, selectedRestaurantId);
   const timeZone = restaurant?.timeZone ?? "Europe/Chisinau";
@@ -65,6 +78,17 @@ export default function RestaurantSettlementsPage() {
       timeZone,
     );
   }, [isHydrated, nowMs, restaurant, state, selectedRestaurantId, period, timeZone]);
+
+  const daily = useMemo(() => {
+    if (view !== "DAILY" || !isHydrated || nowMs === 0 || !restaurant) return null;
+    return buildRestaurantDailySettlement(
+      state,
+      selectedRestaurantId,
+      period,
+      new Date(nowMs).toISOString(),
+      timeZone,
+    );
+  }, [view, isHydrated, nowMs, restaurant, state, selectedRestaurantId, period, timeZone]);
 
   const money = (cents: number) =>
     formatMoney(cents, overview?.currencyCode ?? "USD");
@@ -113,6 +137,26 @@ export default function RestaurantSettlementsPage() {
             ))}
           </div>
 
+          {/* Внутренний переключатель представления (не пункт навигации). */}
+          <div className={styles.periods} role="group" aria-label="Представление">
+            <button
+              type="button"
+              className={styles.periodButton}
+              aria-pressed={view === "ORDERS"}
+              onClick={() => setView("ORDERS")}
+            >
+              По заказам
+            </button>
+            <button
+              type="button"
+              className={styles.periodButton}
+              aria-pressed={view === "DAILY"}
+              onClick={() => setView("DAILY")}
+            >
+              По дням
+            </button>
+          </div>
+
           {/* Сводные показатели */}
           <div className={styles.summaryGrid}>
             <SummaryCard label="Завершённые заказы" value={String(overview.summary.completedOrderCount)} />
@@ -150,9 +194,32 @@ export default function RestaurantSettlementsPage() {
             </p>
           </div>
 
-          {/* Завершённые заказы */}
-          <h2 className={styles.sectionTitle}>Завершённые заказы</h2>
-          {overview.rows.length === 0 ? (
+          {view === "DAILY" ? (
+            <DailyView days={daily ?? []} money={money} />
+          ) : (
+            <OrdersView overview={overview} money={money} timeZone={timeZone} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Представление «По заказам» — существующая таблица и «Требуют внимания». */
+function OrdersView({
+  overview,
+  money,
+  timeZone,
+}: {
+  overview: NonNullable<ReturnType<typeof buildRestaurantSettlementOverview>>;
+  money: (cents: number) => string;
+  timeZone: string;
+}) {
+  return (
+    <>
+      {/* Завершённые заказы */}
+      <h2 className={styles.sectionTitle}>Завершённые заказы</h2>
+      {overview.rows.length === 0 ? (
             <div className={styles.empty}>
               За выбранный период завершённых заказов нет.
             </div>
@@ -234,8 +301,126 @@ export default function RestaurantSettlementsPage() {
               ))}
             </>
           ) : null}
+    </>
+  );
+}
+
+/** Представление «По дням» — карточки дней с раскрытием заказов. */
+function DailyView({
+  days,
+  money,
+}: {
+  days: RestaurantDailySettlementRow[];
+  money: (cents: number) => string;
+}) {
+  if (days.length === 0) {
+    return (
+      <>
+        <h2 className={styles.sectionTitle}>Сверка по дням</h2>
+        <div className={styles.empty}>
+          За выбранный период завершённых заказов нет.
         </div>
-      )}
+      </>
+    );
+  }
+  return (
+    <>
+      <h2 className={styles.sectionTitle}>Сверка по дням</h2>
+      <div className={styles.days}>
+        {days.map((day) => (
+          <DayCard key={day.localDate} day={day} money={money} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function DayCard({
+  day,
+  money,
+}: {
+  day: RestaurantDailySettlementRow;
+  money: (cents: number) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasOrders = day.orders.length > 0;
+  return (
+    <div className={styles.dayCard}>
+      <button
+        type="button"
+        className={styles.dayHeader}
+        aria-expanded={open}
+        disabled={!hasOrders}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={styles.dayDate}>{formatLocalDateRu(day.localDate)}</span>
+        <span className={styles.dayHeaderMeta}>
+          Завершённых заказов: {day.completedOrderCount} · Стоимость:{" "}
+          {money(day.customerTotalCents)}
+        </span>
+        {hasOrders ? (
+          <span className={styles.dayChevron} aria-hidden="true">
+            {open ? "▲" : "▼"}
+          </span>
+        ) : null}
+      </button>
+
+      <div className={styles.dayMetrics}>
+        <DayMetric label="Завершённые заказы" value={String(day.completedOrderCount)} />
+        <DayMetric label="Стоимость заказов" value={money(day.customerTotalCents)} />
+        <DayMetric label="Продажи блюд" value={money(day.foodSubtotalCents)} />
+        <DayMetric label="Чисто ресторану" value={money(day.restaurantNetCents)} />
+        <DayMetric label="Собрано рестораном" value={money(day.restaurantCollectedFromCustomerCents)} />
+        <DayMetric label="Собрано Direct" value={money(day.platformCollectedFromCustomerCents)} />
+        <DayMetric label="Комиссия Direct" value={money(day.platformCommissionReceivableCents)} />
+        <DayMetric
+          label="Ожидает расчёта по журналу комиссий"
+          value={money(day.pendingLedgerCents)}
+        />
+        <DayMetric label="Требуют внимания" value={String(day.paidCanceledCount)} />
+      </div>
+
+      {open && hasOrders ? (
+        <div className={`${styles.tableScroll} ${styles.dayOrders}`}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Заказ</th>
+                <th>Способ</th>
+                <th className={styles.num}>Стоимость</th>
+                <th className={styles.num}>Чисто ресторану</th>
+                <th>Комиссионное начисление</th>
+              </tr>
+            </thead>
+            <tbody>
+              {day.orders.map((row) => (
+                <tr key={row.orderId}>
+                  <td className={styles.orderNumber}>{row.publicNumber}</td>
+                  <td>{deliveryModeLabels[row.deliveryMode]}</td>
+                  <td className={styles.money}>{money(row.customerTotalCents)}</td>
+                  <td className={styles.money}>
+                    {money(row.restaurantNetAfterPlatformCommissionCents)}
+                  </td>
+                  <td>
+                    {row.ledger
+                      ? `${settlementTypeLabels[row.ledger.type]} · ${money(row.ledger.amountCents)} · ${settlementStatusLabels[row.ledger.status]}`
+                      : "Начисления нет"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DayMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className={styles.dayMetric}>
+      <span className={styles.dayMetricLabel}>{label}</span>
+      <span className={styles.dayMetricValue}>{value}</span>
     </div>
   );
 }

@@ -182,11 +182,100 @@
   border-radius: 10px;
 }
 
+/* --- Сверка по дням ------------------------------------------------------- */
+
+.days {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dayCard {
+  border: 1px solid var(--kds-border, #d0d5dd);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* Заголовок дня — кнопка раскрытия во всю ширину, переносится на узких экранах. */
+.dayHeader {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.dayDate {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.dayHeaderMeta {
+  font-size: 13px;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}
+
+.dayChevron {
+  margin-left: auto;
+  opacity: 0.6;
+  font-size: 12px;
+}
+
+/* Метрики дня: auto-fill, одна колонка на узких экранах. */
+.dayMetrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px 12px;
+  padding: 0 14px 12px;
+}
+
+.dayMetric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dayMetricLabel {
+  font-size: 11px;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+.dayMetricValue {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.dayOrders {
+  border-top: 1px solid var(--kds-border, #eceff3);
+}
+
 @media (max-width: 480px) {
   .summaryGrid {
     grid-template-columns: 1fr;
   }
+  .dayMetrics {
+    grid-template-columns: 1fr 1fr;
+  }
   .container {
     padding: 12px;
+  }
+}
+
+@media (max-width: 360px) {
+  .dayMetrics {
+    grid-template-columns: 1fr;
   }
 }
