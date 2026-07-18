@@ -209,6 +209,10 @@ export function buildRestaurantStatementMovements(
   // мутируем: читаем неизменяемый order.financials.
   const mixedOrderIds = new Set<string>();
   for (const order of state.orders) {
+    // Строго ограничиваем ВЫБРАННЫМ рестораном: mixed-заказ другого ресторана не
+    // касается этой выписки — он не создаёт MIXED-issue, не исключает записи
+    // текущего ресторана и не подавляет прочие integrity issues.
+    if (order.restaurant?.id !== restaurantId) continue;
     const f = order.financials;
     // Оба поля должны быть числами > 0. Отсутствующий/неполный снимок mixed НЕ
     // считается — противоречие фиксируем только при явном пересечении сборов.

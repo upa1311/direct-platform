@@ -39,7 +39,7 @@ function realOrderTemplate(): Order {
 
 const TEMPLATE = realOrderTemplate();
 
-/** Заказ с заданными collected-полями (остальное — из валидного шаблона). */
+/** Заказ ресторана-1 с заданными collected-полями (остальное — из шаблона). */
 function orderWith(
   id: string,
   restaurantCollectedCents: number,
@@ -55,6 +55,17 @@ function orderWith(
       platformCollectedFromCustomerCents: platformCollectedCents,
     },
   };
+}
+
+/** Тот же заказ, но привязанный к другому ресторану (order.restaurant.id). */
+function orderForRestaurant(
+  id: string,
+  restaurantId: string,
+  restaurantCollectedCents: number,
+  platformCollectedCents: number,
+): Order {
+  const base = orderWith(id, restaurantCollectedCents, platformCollectedCents);
+  return { ...base, restaurant: { ...base.restaurant, id: restaurantId } };
 }
 
 function entry(
@@ -421,4 +432,119 @@ test("orphan-запись без найденного заказа mixed не с
   // Orphan-запись обрабатывается штатно (учитывается как обычная recognition).
   assert.equal(m.recognitions.length, 1);
   assert.equal(m.recognitions[0].entryKey, "orphan");
+});
+
+// --- Регрессия: guard строго ограничен выбранным рестораном ------------------
+
+// 10 -------------------------------------------------------------------------
+
+test("mixed-заказ другого ресторана не создаёт MIXED issue в текущей выписке", () => {
+  const st = stateWith(
+    [
+      // Повреждён, но принадлежит restaurant-2 — не касается выписки restaurant-1.
+      orderForRestaurant("order-mixed-r2", "restaurant-2", 500, 500),
+    ],
+    [
+      // Запись самого restaurant-2 по этому mixed-заказу (в нашу выписку не идёт).
+      entry({
+        id: "r2-commission",
+        orderId: "order-mixed-r2",
+        restaurantId: "restaurant-2",
+        direction: "RESTAURANT_OWES_DIRECT",
+        type: "PLATFORM_COMMISSION",
+        amountCents: 100,
+      }),
+    ],
+  );
+  const m = build(st);
+  assert.equal(mixedIssues(m).length, 0, "mixed чужого ресторана не помечается у нас");
+});
+
+// 11 -------------------------------------------------------------------------
+
+test("mixed-заказ другого ресторана не исключает запись текущего ресторана", () => {
+  const st = stateWith(
+    [
+      // Повреждённый заказ restaurant-2 c тем же orderId, что и запись restaurant-1.
+      orderForRestaurant("shared-order", "restaurant-2", 500, 500),
+    ],
+    [
+      // Запись ТЕКУЩЕГО ресторана, ссылающаяся на этот orderId. Раньше глобальный
+      // guard её ошибочно исключал; теперь она должна нормально учитываться.
+      entry({
+        id: "mine",
+        orderId: "shared-order",
+        restaurantId: RESTAURANT_ID,
+        direction: "RESTAURANT_OWES_DIRECT",
+        type: "PLATFORM_COMMISSION",
+        amountCents: 800,
+      }),
+    ],
+  );
+  const m = build(st);
+  assert.equal(mixedIssues(m).length, 0, "чужой mixed не порождает issue у нас");
+  assert.equal(m.recognitions.length, 1, "запись текущего ресторана учтена");
+  assert.equal(m.recognitions[0].entryKey, "mine");
+  const usd = m.summaries.find((s) => s.currencyCode === "USD")!;
+  assert.equal(usd.recognizedRestaurantOwesDirectCents, 800);
+});
+
+// 12 -------------------------------------------------------------------------
+
+test("mixed-заказ другого ресторана не подавляет прочие integrity issues", () => {
+  const st = stateWith(
+    [orderForRestaurant("shared-order", "restaurant-2", 500, 500)],
+    [
+      // Запись текущего ресторана с невалидной датой признания. Её собственный
+      // issue INVALID_RECOGNIZED_AT не должен быть «проглочен» чужим mixed.
+      entry({
+        id: "mine-bad",
+        orderId: "shared-order",
+        restaurantId: RESTAURANT_ID,
+        recognizedAt: "не-дата",
+      }),
+    ],
+  );
+  const m = build(st);
+  assert.equal(mixedIssues(m).length, 0, "чужой mixed не помечается");
+  assert.ok(
+    m.issues.some((i) => i.kind === "INVALID_RECOGNIZED_AT" && i.entryKey === "mine-bad"),
+    "штатный integrity issue не подавлен",
+  );
+});
+
+// 13 -------------------------------------------------------------------------
+
+test("mixed текущего ресторана ловится даже при наличии одноимённого чужого", () => {
+  // Заказы разных ресторанов с одинаковыми collected>0: помечается только наш.
+  const st = stateWith(
+    [
+      orderWith("order-mine-mixed", 500, 500), // restaurant-1 (из шаблона)
+      orderForRestaurant("order-r2-mixed", "restaurant-2", 500, 500),
+    ],
+    [
+      entry({
+        id: "mine-commission",
+        orderId: "order-mine-mixed",
+        restaurantId: RESTAURANT_ID,
+        direction: "RESTAURANT_OWES_DIRECT",
+        type: "PLATFORM_COMMISSION",
+        amountCents: 100,
+      }),
+      entry({
+        id: "r2-commission",
+        orderId: "order-r2-mixed",
+        restaurantId: "restaurant-2",
+        direction: "RESTAURANT_OWES_DIRECT",
+        type: "PLATFORM_COMMISSION",
+        amountCents: 100,
+      }),
+    ],
+  );
+  const m = build(st);
+  // Ровно один MIXED — по нашему заказу; чужой не учитывается.
+  assert.equal(mixedIssues(m).length, 1);
+  // Наш mixed исключён из движений.
+  assert.equal(m.recognitions.length, 0);
+  assert.equal(m.summaries.length, 0);
 });
