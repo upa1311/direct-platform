@@ -79,6 +79,7 @@ import {
   type EtaAdjustmentIntent,
 } from "./order-eta";
 import { finalizeMutation } from "./prototype-store";
+import { computeCompletedOrderAccountingEntries } from "./restaurant-accounting";
 
 export interface ActionResult<T> {
   state: PrototypeState;
@@ -2470,6 +2471,15 @@ export function markOrderDeliveredWithResult(
       settlements: alreadySettled
         ? state.settlements
         : [...state.settlements, settlement],
+      // Двусторонний журнал: признаём обязательства завершённого заказа из его
+      // снимка, идемпотентно (без дублей по orderId+type).
+      restaurantAccountingEntries: [
+        ...state.restaurantAccountingEntries,
+        ...computeCompletedOrderAccountingEntries(
+          updatedOrder,
+          state.restaurantAccountingEntries,
+        ),
+      ],
     },
     now,
   );
@@ -2654,6 +2664,14 @@ export function completePickupWithCode(
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
       settlements: [...state.settlements, settlement],
+      // Двусторонний журнал: признаём обязательства завершённого заказа.
+      restaurantAccountingEntries: [
+        ...state.restaurantAccountingEntries,
+        ...computeCompletedOrderAccountingEntries(
+          updatedOrder,
+          state.restaurantAccountingEntries,
+        ),
+      ],
     },
     now,
   );
@@ -3819,6 +3837,14 @@ export function markOrderDeliveredByDriverWithResult(
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
       drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+      // Двусторонний журнал: признаём обязательства завершённого заказа.
+      restaurantAccountingEntries: [
+        ...state.restaurantAccountingEntries,
+        ...computeCompletedOrderAccountingEntries(
+          updatedOrder,
+          state.restaurantAccountingEntries,
+        ),
+      ],
     },
     now,
   );
@@ -4117,6 +4143,14 @@ export function issuePickupWithoutCode(
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
       settlements: [...state.settlements, settlement],
+      // Двусторонний журнал: признаём обязательства завершённого заказа.
+      restaurantAccountingEntries: [
+        ...state.restaurantAccountingEntries,
+        ...computeCompletedOrderAccountingEntries(
+          updatedOrder,
+          state.restaurantAccountingEntries,
+        ),
+      ],
     },
     now,
   );

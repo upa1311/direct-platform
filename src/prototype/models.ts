@@ -4,7 +4,7 @@ import type {
   RestaurantDeliverySettings,
 } from "./pricing-engine";
 
-export const PROTOTYPE_SCHEMA_VERSION = 7 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 8 as const;
 
 export type {
   FulfillmentChoice,
@@ -71,6 +71,45 @@ export interface SettlementEntry {
   amountCents: number;
   status: SettlementStatus;
   createdAt: string;
+}
+
+/** Кто кому должен по обязательству двустороннего журнала расчётов. */
+export type RestaurantAccountingDirection =
+  | "RESTAURANT_OWES_DIRECT"
+  | "DIRECT_OWES_RESTAURANT";
+
+/** Природа обязательства: комиссия Direct или выплата ресторану. */
+export type RestaurantAccountingType = "PLATFORM_COMMISSION" | "RESTAURANT_PAYOUT";
+
+/** Жизненный статус обязательства (взаимозачёт/выплаты пока не выполняются). */
+export type RestaurantAccountingStatus = "OPEN" | "SETTLED" | "WAIVED";
+
+/** Источник обязательства: снимок заказа или миграция старого settlement. */
+export type RestaurantAccountingSource =
+  | "ORDER_FINANCIAL_SNAPSHOT"
+  | "LEGACY_COMMISSION_SETTLEMENT";
+
+/**
+ * Запись полного ДВУСТОРОННЕГО журнала расчётов ресторана. В отличие от
+ * SettlementEntry (только комиссия «ресторан должен Direct»), фиксирует обе
+ * стороны: и долг ресторана перед Direct, и долг Direct перед рестораном. Суммы
+ * берутся ТОЛЬКО из неизменяемого order.financials и не пересчитываются.
+ */
+export interface RestaurantAccountingEntry {
+  id: string;
+  orderId: string;
+  restaurantId: string;
+  direction: RestaurantAccountingDirection;
+  type: RestaurantAccountingType;
+  amountCents: number;
+  currencyCode: CurrencyCode;
+  status: RestaurantAccountingStatus;
+  /** Момент признания — реальный completedAt заказа, не время вызова. */
+  recognizedAt: string;
+  settledAt: string | null;
+  source: RestaurantAccountingSource;
+  /** id исходного SettlementEntry для мигрированных записей, иначе null. */
+  legacySettlementId: string | null;
 }
 
 export type PromotionType = "BUY_N_GET_M_CHEAPEST_FREE";
@@ -568,6 +607,8 @@ export interface PrototypeState {
   cart: Cart;
   orders: Order[];
   settlements: SettlementEntry[];
+  /** Полный двусторонний журнал расчётов ресторана (комиссии и выплаты). */
+  restaurantAccountingEntries: RestaurantAccountingEntry[];
   cancellationRequests: CancellationRequest[];
   operationalEvents: OperationalEvent[];
 }

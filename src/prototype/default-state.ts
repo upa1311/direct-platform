@@ -530,6 +530,7 @@ export function createDefaultState(): PrototypeState {
     cart: createEmptyCart(),
     orders: [],
     settlements: [],
+    restaurantAccountingEntries: [],
     cancellationRequests: [],
     operationalEvents: [],
   };

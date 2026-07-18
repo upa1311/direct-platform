@@ -17,6 +17,7 @@ import {
   createEmptyCart,
 } from "./default-state";
 import { migrateFulfillmentChoice } from "./pricing-engine";
+import { migrateLegacySettlementsToAccounting } from "./restaurant-accounting";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
@@ -74,11 +75,24 @@ function hasPrototypeStateShape(value: unknown): boolean {
   );
 }
 
+/**
+ * Схемы, принимаемые из текущего ключа хранилища v7. v8 — надмножество v7 (одно
+ * новое поле restaurantAccountingEntries), поэтому состояние schemaVersion 7,
+ * записанное прежней версией приложения, безопасно принимается и доводится
+ * нормализацией до v8 без потери данных (settlements сохраняются и мигрируют в
+ * двусторонний журнал). Ключ хранилища не меняется.
+ */
+const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
+  7,
+  PROTOTYPE_SCHEMA_VERSION,
+]);
+
 export function isPrototypeState(value: unknown): value is PrototypeState {
+  const schemaVersion = (value as { schemaVersion?: unknown }).schemaVersion;
   return (
     hasPrototypeStateShape(value) &&
-    (value as { schemaVersion?: unknown }).schemaVersion ===
-      PROTOTYPE_SCHEMA_VERSION &&
+    typeof schemaVersion === "number" &&
+    PARSEABLE_SCHEMA_VERSIONS.has(schemaVersion) &&
     Array.isArray((value as { promotions?: unknown }).promotions) &&
     Array.isArray((value as { settlements?: unknown }).settlements)
   );
@@ -582,6 +596,32 @@ function normalizeSettlements(value: unknown): PrototypeState["settlements"] {
 }
 
 /**
+ * Записи двустороннего журнала расчётов: у состояний до v8 поля нет. Оставляем
+ * только валидные по форме записи; недостающие legacy-записи из settlements
+ * дозаполняет migrateLegacySettlementsToAccounting в normalizePrototypeState.
+ */
+function normalizeRestaurantAccountingEntries(
+  value: unknown,
+): PrototypeState["restaurantAccountingEntries"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      typeof entry.orderId !== "string" ||
+      typeof entry.amountCents !== "number"
+    ) {
+      return [];
+    }
+    return [
+      entry as unknown as PrototypeState["restaurantAccountingEntries"][number],
+    ];
+  });
+}
+
+/**
  * Запросы на отмену: у старых состояний поля нет — используем пустой массив
  * (§9). Не ломает старые snapshots и не входит в финансовые данные.
  */
@@ -653,6 +693,7 @@ export function normalizePrototypeState(
   const restaurants = Array.isArray(state.restaurants)
     ? state.restaurants.map(normalizeRestaurantV5)
     : defaults.restaurants;
+  const normalizedSettlements = normalizeSettlements(state.settlements);
   return {
     ...state,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
@@ -677,7 +718,13 @@ export function normalizePrototypeState(
     orders: Array.isArray(state.orders)
       ? state.orders.map((order) => normalizeOrder(order, restaurants))
       : [],
-    settlements: normalizeSettlements(state.settlements),
+    settlements: normalizedSettlements,
+    // Двусторонний журнал: сохраняем валидные записи и идемпотентно мигрируем
+    // существующие комиссионные settlements (без дублей по legacySettlementId).
+    restaurantAccountingEntries: migrateLegacySettlementsToAccounting(
+      normalizeRestaurantAccountingEntries(state.restaurantAccountingEntries),
+      normalizedSettlements,
+    ),
     cancellationRequests: normalizeCancellationRequests(
       state.cancellationRequests,
     ),

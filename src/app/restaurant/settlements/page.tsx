@@ -23,6 +23,11 @@ import {
   type RestaurantDailySettlementRow,
   type RestaurantSettlementPeriod,
 } from "@/prototype/restaurant-settlements";
+import {
+  getRestaurantNetPositionCents,
+  getRestaurantOpenPayableCents,
+  getRestaurantOpenReceivableCents,
+} from "@/prototype/restaurant-accounting";
 import styles from "./settlements.module.css";
 
 /** Вид раздела: по отдельным заказам или сводка по дням. */
@@ -89,6 +94,16 @@ export default function RestaurantSettlementsPage() {
       timeZone,
     );
   }, [view, isHydrated, nowMs, restaurant, state, selectedRestaurantId, period, timeZone]);
+
+  // Открытая позиция двустороннего журнала — не зависит от выбранного периода.
+  const position = useMemo(() => {
+    if (!isHydrated || !restaurant) return null;
+    return {
+      receivable: getRestaurantOpenReceivableCents(state, selectedRestaurantId),
+      payable: getRestaurantOpenPayableCents(state, selectedRestaurantId),
+      net: getRestaurantNetPositionCents(state, selectedRestaurantId),
+    };
+  }, [isHydrated, restaurant, state, selectedRestaurantId]);
 
   const money = (cents: number) =>
     formatMoney(cents, overview?.currencyCode ?? "USD");
@@ -193,6 +208,40 @@ export default function RestaurantSettlementsPage() {
               бухгалтерский учёт.
             </p>
           </div>
+
+          {/* Взаимные обязательства — открытая позиция двустороннего журнала. */}
+          {position ? (
+            <>
+              <h2 className={styles.sectionTitle}>Взаимные обязательства</h2>
+              <div className={styles.summaryGrid}>
+                <SummaryCard
+                  label="Ресторан должен Direct"
+                  value={money(position.receivable)}
+                />
+                <SummaryCard
+                  label="Direct должен ресторану"
+                  value={money(position.payable)}
+                />
+                <SummaryCard
+                  label="Чистая позиция"
+                  value={money(position.net)}
+                  hint={
+                    position.net > 0
+                      ? "Direct должен ресторану."
+                      : position.net < 0
+                        ? "Ресторан должен Direct."
+                        : "Открытые обязательства взаимно равны."
+                  }
+                />
+              </div>
+              <div className={styles.info}>
+                <p>
+                  Чистая позиция — информационная разница открытых обязательств.
+                  Автоматический взаимозачёт и фактическая выплата не выполняются.
+                </p>
+              </div>
+            </>
+          ) : null}
 
           {view === "DAILY" ? (
             <DailyView days={daily ?? []} money={money} />
