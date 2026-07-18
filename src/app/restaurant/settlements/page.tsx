@@ -49,7 +49,9 @@ import {
 } from "./statement-snapshot";
 import { buildStatementCsvExport } from "./statement-csv-export";
 import type { RestaurantStatementCsvFile } from "@/prototype/restaurant-statement-csv";
+import { buildStatementPrintModel, type StatementPrintModel } from "./statement-print";
 import styles from "./settlements.module.css";
+import "./statement-print.css";
 
 import type { PrototypeState } from "@/prototype/models";
 
@@ -159,7 +161,7 @@ export default function RestaurantSettlementsPage() {
     formatMoney(cents, overview?.currencyCode ?? "USD");
 
   return (
-    <div className={kds.screen}>
+    <div className={`${kds.screen} direct-print-root`}>
       <div className={kds.toolbar}>
         <div className={kds.toolbarLeft}>
           <span className={kds.brand}>Расчёты</span>
@@ -186,7 +188,7 @@ export default function RestaurantSettlementsPage() {
       ) : !restaurant ? (
         <div className={kds.empty}>Ресторан не найден.</div>
       ) : (
-        <div className={styles.container}>
+        <div className={`${styles.container} direct-print-screen`}>
           {/* Переключатель периода */}
           <div className={styles.periods} role="group" aria-label="Период">
             {RESTAURANT_SETTLEMENT_PERIOD_ORDER.map((p) => (
@@ -727,11 +729,16 @@ function RestaurantStatementSection({
   // Envelope виден только при точном совпадении контекста (без опоры на useEffect).
   const visible = visibleStatementSnapshot(snapshot, restaurantId, timeZone);
 
-  // CSV доступен ТОЛЬКО из зафиксированного успешного snapshot текущего контекста;
-  // при ошибке/отсутствии/смене restaurantId или timeZone helper вернёт null.
-  // asOfIso берётся из envelope — новый Date.now() не запрашивается.
+  // CSV и печать доступны ТОЛЬКО из одного и того же зафиксированного успешного
+  // snapshot текущего контекста; при ошибке/отсутствии/смене restaurantId или
+  // timeZone оба helper'а вернут null. asOfIso берётся из envelope — новый
+  // Date.now() не запрашивается, выписка не перестраивается.
   const csvFile = useMemo(
     () => buildStatementCsvExport(snapshot, restaurantId, timeZone),
+    [snapshot, restaurantId, timeZone],
+  );
+  const printModel = useMemo(
+    () => buildStatementPrintModel(snapshot, restaurantId, timeZone),
     [snapshot, restaurantId, timeZone],
   );
 
@@ -746,6 +753,7 @@ function RestaurantStatementSection({
       result={visible?.result ?? null}
       asOfIso={visible?.asOfIso ?? null}
       csvFile={csvFile}
+      printModel={printModel}
     />
   );
 }
@@ -761,6 +769,7 @@ function StatementView({
   result,
   asOfIso,
   csvFile,
+  printModel,
 }: {
   timeZone: string;
   startLocalDate: string;
@@ -771,6 +780,7 @@ function StatementView({
   result: RestaurantStatementViewResult | null;
   asOfIso: string | null;
   csvFile: RestaurantStatementCsvFile | null;
+  printModel: StatementPrintModel | null;
 }) {
   const view = result?.ok ? result.view : null;
   const noMovements =
@@ -844,18 +854,32 @@ function StatementView({
             ) : null}
           </div>
 
-          {/* Скачивание CSV: доступно только для зафиксированной успешной выписки
-              текущего контекста (csvFile !== null). Экспортирует именно её, не
-              перестраивая и не запрашивая новый момент. */}
-          {csvFile ? (
-            <div className={styles.statementForm}>
-              <button
-                type="button"
-                className={styles.generateButton}
-                onClick={() => triggerCsvDownload(csvFile)}
-              >
-                Скачать CSV
-              </button>
+          {/* Действия по зафиксированной успешной выписке текущего контекста. Обе
+              кнопки относятся к одному snapshot; экспорт/печать не перестраивают
+              выписку и не запрашивают новый момент. Кнопки переносятся на узких
+              экранах без горизонтального скролла страницы (statementActions). */}
+          {csvFile || printModel ? (
+            <div className={styles.statementActions}>
+              {csvFile ? (
+                <button
+                  type="button"
+                  className={styles.generateButton}
+                  onClick={() => triggerCsvDownload(csvFile)}
+                >
+                  Скачать CSV
+                </button>
+              ) : null}
+              {printModel ? (
+                <button
+                  type="button"
+                  className={styles.generateButton}
+                  title="Открыть печать или сохранить выписку в PDF"
+                  aria-label="Открыть печать или сохранить выписку в PDF"
+                  onClick={() => window.print()}
+                >
+                  Печать / PDF
+                </button>
+              ) : null}
             </div>
           ) : null}
 
@@ -904,9 +928,257 @@ function StatementView({
               </div>
             </>
           ) : null}
+
+          {/* Печатный документ: скрыт на экране, показывается только в @media
+              print. Данные — из зафиксированной печатной модели (тот же snapshot,
+              что и CSV), без пересчёта. */}
+          {printModel ? (
+            <StatementPrintDocument model={printModel} timeZone={timeZone} />
+          ) : null}
         </>
       )}
     </>
+  );
+}
+
+/**
+ * Печатная версия выписки. На экране скрыта (display:none), в @media print —
+ * единственный видимый блок (правила в settlements.module.css скрывают остальной
+ * интерфейс только во время печати). Рендерит ровно данные RestaurantStatementView:
+ * заголовок, метаданные, секции по валютам (opening/движения/closing + сходимость),
+ * таблицы признанных обязательств и решений, integrity-предупреждения (message +
+ * count). Внутренних ID, PII и сырых enum здесь нет — модель их не содержит.
+ */
+function StatementPrintDocument({
+  model,
+  timeZone,
+}: {
+  model: StatementPrintModel;
+  timeZone: string;
+}) {
+  const { view, asOfIso } = model;
+  return (
+    <section className="direct-print-doc" aria-hidden="true">
+      <h1 className="direct-print-title">Выписка по взаимным обязательствам</h1>
+
+      <div className="direct-print-meta">
+        <div>
+          <span className="direct-print-meta-label">Оператор:</span> Direct
+        </div>
+        <div>
+          <span className="direct-print-meta-label">Ресторан:</span>{" "}
+          {view.restaurantName}
+        </div>
+        <div>
+          <span className="direct-print-meta-label">Период:</span>{" "}
+          {formatLocalDateRu(view.startLocalDate)} —{" "}
+          {formatLocalDateRu(view.endLocalDate)}
+        </div>
+        <div>
+          <span className="direct-print-meta-label">Часовой пояс:</span>{" "}
+          {getRestaurantTimeZoneLabel(timeZone)}
+        </div>
+        <div>
+          <span className="direct-print-meta-label">Сформирована:</span>{" "}
+          {formatInZone(asOfIso, timeZone)}
+        </div>
+        <p className="direct-print-note">
+          Документ предназначен для сверки и не подтверждает банковский перевод,
+          списание со счёта или автоматический взаимозачёт.
+        </p>
+      </div>
+
+      {view.currencySections.map((section) => (
+        <div key={section.currencyCode} className="direct-print-currency">
+          <h2 className="direct-print-currency-head">Валюта: {section.currencyCode}</h2>
+          <table className="direct-print-table">
+            <tbody>
+              <tr>
+                <th colSpan={2} className="direct-print-block-head">
+                  Позиция на начало
+                </th>
+              </tr>
+              <tr>
+                <td>Ресторан должен Direct</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.openingRestaurantOwesDirectCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <td>Direct должен ресторану</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.openingDirectOwesRestaurantCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <td>Чистая позиция</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.openingNetCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <th colSpan={2} className="direct-print-block-head">
+                  Движения за период
+                </th>
+              </tr>
+              <tr>
+                <td>Признано: ресторан должен Direct</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.recognizedRestaurantOwesDirectCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <td>Признано: Direct должен ресторану</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.recognizedDirectOwesRestaurantCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <td>Подтверждено: ресторан должен Direct</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.settledRestaurantOwesDirectCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <td>Подтверждено: Direct должен ресторану</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.settledDirectOwesRestaurantCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <td>Комиссия Direct списана</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.waivedRestaurantOwesDirectCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <th colSpan={2} className="direct-print-block-head">
+                  Позиция на конец
+                </th>
+              </tr>
+              <tr>
+                <td>Ресторан должен Direct</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.closingRestaurantOwesDirectCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <td>Direct должен ресторану</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.closingDirectOwesRestaurantCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <td>Чистая позиция</td>
+                <td className="direct-print-money">
+                  {formatMoney(section.closingNetCents, section.currencyCode)}
+                </td>
+              </tr>
+              <tr>
+                <td>Сходимость</td>
+                <td className="direct-print-money">
+                  {section.isReconciled ? "Сходится" : "Не сходится"}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ))}
+
+      <h2 className="direct-print-section-head">Признанные обязательства</h2>
+      {view.recognitionRows.length === 0 ? (
+        <p>Новых обязательств за период нет.</p>
+      ) : (
+        <table className="direct-print-table">
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>Заказ</th>
+              <th>Кто кому должен</th>
+              <th>Основание</th>
+              <th className="direct-print-money">Сумма</th>
+              <th>Валюта</th>
+              <th>Источник</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.recognitionRows.map((r, index) => (
+              <tr key={index}>
+                <td>{formatInZone(r.recognizedAt, timeZone)}</td>
+                <td>{r.orderLabel}</td>
+                <td>{r.directionLabel}</td>
+                <td>{r.typeLabel}</td>
+                <td className="direct-print-money">
+                  {formatMoney(r.amountCents, r.currencyCode)}
+                </td>
+                <td>{r.currencyCode}</td>
+                <td>{r.sourceLabel}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h2 className="direct-print-section-head">Решения по обязательствам</h2>
+      {view.resolutionRows.length === 0 ? (
+        <p>Решений по обязательствам за период нет.</p>
+      ) : (
+        <table className="direct-print-table">
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>Заказ</th>
+              <th>Решение</th>
+              <th>Кто кому должен</th>
+              <th>Основание</th>
+              <th className="direct-print-money">Сумма</th>
+              <th>Валюта</th>
+              <th>Комментарий</th>
+              <th>Внешняя ссылка</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.resolutionRows.map((r, index) => (
+              <tr key={index}>
+                <td>{formatInZone(r.occurredAt, timeZone)}</td>
+                <td>{r.orderLabel}</td>
+                <td>{r.decisionLabel}</td>
+                <td>{r.directionLabel}</td>
+                <td>{r.typeLabel}</td>
+                <td className="direct-print-money">
+                  {formatMoney(r.amountCents, r.currencyCode)}
+                </td>
+                <td>{r.currencyCode}</td>
+                <td className="direct-print-wrap">{r.note}</td>
+                <td className="direct-print-wrap">{r.externalReference ?? ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {view.hasIntegrityWarnings ? (
+        <>
+          <h2 className="direct-print-section-head">Требуется проверка данных</h2>
+          <table className="direct-print-table">
+            <thead>
+              <tr>
+                <th>Предупреждение</th>
+                <th>Количество</th>
+              </tr>
+            </thead>
+            <tbody>
+              {view.integritySummary.map((g, index) => (
+                <tr key={index}>
+                  <td className="direct-print-wrap">{g.message}</td>
+                  <td>{g.count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ) : null}
+    </section>
   );
 }
 

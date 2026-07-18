@@ -1,0 +1,134 @@
+/*
+ * ПЕЧАТЬ ВЫПИСКИ — глобальные @media print правила (обычный, не-module CSS, чтобы
+ * можно было module-agnostic скрыть весь интерфейс через `body *`). Все классы с
+ * префиксом direct-print-* используются только печатным документом. На экране
+ * документ скрыт; правила печати активны исключительно во время печати, поэтому
+ * при отмене диалога печати интерфейс остаётся видимым (screen-стили не трогаются).
+ */
+
+/* Печатный документ скрыт на экране. */
+.direct-print-doc {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  /* 1) Скрыть «краску» всего интерфейса (toolbar, шапка воркспейса, навигация,
+        переключатели, показатели, форма периода, кнопки) независимо от модулей. */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* 2) Показать только печатный документ и его содержимое. */
+  .direct-print-doc,
+  .direct-print-doc * {
+    visibility: visible !important;
+  }
+
+  /* 3) Схлопнуть высоту экранного дерева, чтобы не было пустых страниц: внутри
+        страницы расчётов оставляем в потоке только печатный документ. Маркеры
+        direct-print-root (обёртка экрана) и direct-print-screen (контейнер)
+        добавлены в разметке; печатный документ — прямой потомок контейнера. */
+  .direct-print-root > * {
+    display: none !important;
+  }
+  .direct-print-root > .direct-print-screen {
+    display: block !important;
+  }
+  .direct-print-screen > * {
+    display: none !important;
+  }
+  .direct-print-doc {
+    display: block !important;
+    color: #000 !important;
+    background: #fff !important;
+    font-size: 11pt;
+  }
+
+  /* Заголовок и метаданные. */
+  .direct-print-title {
+    font-size: 16pt;
+    margin: 0 0 8px;
+  }
+  .direct-print-meta {
+    margin: 0 0 12px;
+    line-height: 1.5;
+  }
+  .direct-print-meta-label {
+    font-weight: 700;
+  }
+  .direct-print-note {
+    margin: 8px 0 0;
+    font-style: italic;
+  }
+
+  /* Валютная секция — по возможности не разрывать между страницами. */
+  .direct-print-currency {
+    margin: 10px 0;
+    break-inside: avoid;
+  }
+  .direct-print-currency-head {
+    font-size: 13pt;
+    margin: 0 0 4px;
+  }
+  .direct-print-section-head {
+    font-size: 13pt;
+    margin: 14px 0 4px;
+  }
+
+  /* Таблицы полностью раскрыты, без scroll-контейнеров и sticky. */
+  .direct-print-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: auto;
+  }
+  .direct-print-table th,
+  .direct-print-table td {
+    border: 1px solid #000;
+    padding: 4px 6px;
+    text-align: left;
+    vertical-align: top;
+    position: static !important; /* убрать любой sticky */
+  }
+  /* Повтор заголовка таблицы на каждой новой странице. */
+  .direct-print-table thead {
+    display: table-header-group;
+  }
+  /* Строки не разрываются между страницами. */
+  .direct-print-table tr {
+    break-inside: avoid;
+  }
+  .direct-print-block-head {
+    background: #eee !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* Суммы и номера не обрезаются. */
+  .direct-print-money {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Длинные note и внешние ссылки переносятся. */
+  .direct-print-wrap {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-width: 60mm;
+  }
+
+  /* Ссылки печатаются как обычный текст, без автодобавления URL браузером. */
+  .direct-print-doc a[href]::after {
+    content: "" !important;
+  }
+}

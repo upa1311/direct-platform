@@ -224,6 +224,15 @@
   white-space: nowrap;
 }
 
+/* Кнопки действий по выписке (CSV, печать) — переносятся на узких экранах без
+   горизонтального скролла страницы. */
+.statementActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
 .sectionSubTitle {
   font-size: 14px;
   font-weight: 700;
