@@ -78,8 +78,8 @@ test("legacy v2 → v6: paymentMethods ['QR','CASH'] → ['ONLINE'], ресто�
   // НЕ затронуты нормализацией delivery paymentMethods.
   assert.deepStrictEqual(restaurant.pickupPaymentMethods, ["CASH", "CARD"]);
 
-  // Схема поднята до текущей (v8).
-  assert.equal(migrated.schemaVersion, 8);
+  // Схема поднята до текущей (v9).
+  assert.equal(migrated.schemaVersion, 9);
   // Legacy-ресторан получает режим работы по умолчанию (Этап 2).
   assert.equal(migrated.restaurants[0].orderWorkflowMode, "COMBINED");
 

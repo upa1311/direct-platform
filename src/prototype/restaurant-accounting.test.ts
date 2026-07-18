@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  ACCOUNTING_RESOLUTION_NOTE_MAX,
+  ACCOUNTING_RESOLUTION_REFERENCE_MAX,
   buildRestaurantAccountingJournal,
   computeCompletedOrderAccountingEntries,
   getRestaurantOpenPayableCents,
@@ -9,6 +11,7 @@ import {
   getRestaurantNetPositionCents,
   migrateLegacySettlementsToAccounting,
   recognizeCompletedOrderAccounting,
+  resolveRestaurantAccountingEntry,
 } from "./restaurant-accounting.ts";
 import {
   addCartItem,
@@ -601,7 +604,7 @@ test("настоящий v7 legacy state: parse создаёт ровно одн
 
   const parsed = parseStoredState(JSON.stringify(raw));
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 8);
+  assert.equal(parsed.schemaVersion, 9);
   const migrated = parsed.restaurantAccountingEntries.filter(
     (e) => e.orderId === "o-v7",
   );
@@ -896,4 +899,224 @@ test("journal: read-only, state/orders/accounting/settlements не меняют�
   assert.equal(st.restaurantAccountingEntries, entriesRef);
   assert.equal(st.settlements, settlementsRef);
   assert.equal(st.revision, revBefore);
+});
+
+// --- Административное закрытие обязательства ---------------------------------
+
+const RES_NOW = "2026-07-18T09:00:00.000Z";
+
+function legacySettlement(orderId: string, amount = 800): SettlementEntry {
+  return {
+    id: `settlement-${orderId}`,
+    orderId,
+    restaurantId: RESTAURANT_ID,
+    type: "PICKUP_COMMISSION",
+    amountCents: amount,
+    status: "PENDING",
+    createdAt: DELIVERED_AT,
+  };
+}
+
+// 33 -------------------------------------------------------------------------
+
+test("SETTLED комиссии: запись закрыта, один аудит, legacy SettlementEntry → PAID", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const st = stateWith([], [legacySettlement("o")], [e]);
+  const res = resolveRestaurantAccountingEntry(st, "c", "SETTLED", "Сверка №12", "BANK-777", RES_NOW);
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+
+  const updated = res.state.restaurantAccountingEntries.find((x) => x.id === "c")!;
+  assert.equal(updated.status, "SETTLED");
+  assert.equal(updated.settledAt, RES_NOW);
+  assert.equal(res.state.restaurantAccountingResolutionEvents.length, 1);
+  const ev = res.state.restaurantAccountingResolutionEvents[0];
+  assert.equal(ev.accountingEntryId, "c");
+  assert.equal(ev.previousStatus, "OPEN");
+  assert.equal(ev.nextStatus, "SETTLED");
+  assert.equal(ev.actor, "ADMIN");
+  assert.equal(ev.externalReference, "BANK-777");
+  // Старый журнал комиссий синхронизирован.
+  assert.equal(res.state.settlements.find((s) => s.orderId === "o")!.status, "PAID");
+  assert.equal(res.state.revision, st.revision + 1);
+});
+
+// 34 -------------------------------------------------------------------------
+
+test("SETTLED выплаты ресторану: закрыта, аудит есть, SettlementEntry не создаётся", () => {
+  const e = jentry({ id: "p", orderId: "op", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 5100 });
+  const st = stateWith([], [], [e]);
+  const res = resolveRestaurantAccountingEntry(st, "p", "SETTLED", "Выплата проведена", "TRX-9", RES_NOW);
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+  assert.equal(res.state.restaurantAccountingEntries.find((x) => x.id === "p")!.status, "SETTLED");
+  assert.equal(res.state.restaurantAccountingResolutionEvents.length, 1);
+  assert.equal(res.state.settlements.length, 0, "новый SettlementEntry не создан");
+});
+
+// 35 -------------------------------------------------------------------------
+
+test("WAIVED комиссии: статус WAIVED, note обязателен, legacy SettlementEntry → WAIVED", () => {
+  const e = jentry({ id: "w", orderId: "ow", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const st = stateWith([], [legacySettlement("ow")], [e]);
+
+  // Без основания — отказ.
+  const noNote = resolveRestaurantAccountingEntry(st, "w", "WAIVED", "   ", null, RES_NOW);
+  assert.equal(noNote.result.ok, false);
+  assert.equal(noNote.state, st);
+
+  const res = resolveRestaurantAccountingEntry(st, "w", "WAIVED", "Списано по решению Direct", null, RES_NOW);
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+  assert.equal(res.state.restaurantAccountingEntries.find((x) => x.id === "w")!.status, "WAIVED");
+  assert.equal(res.state.restaurantAccountingResolutionEvents[0].nextStatus, "WAIVED");
+  assert.equal(res.state.settlements.find((s) => s.orderId === "ow")!.status, "WAIVED");
+});
+
+// 36 -------------------------------------------------------------------------
+
+test("WAIVED выплаты ресторану запрещён (Direct должен ресторану)", () => {
+  const e = jentry({ id: "p", orderId: "op", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 5100 });
+  const st = stateWith([], [], [e]);
+  const res = resolveRestaurantAccountingEntry(st, "p", "WAIVED", "нельзя", null, RES_NOW);
+  assert.equal(res.result.ok, false);
+  assert.equal(res.state, st, "исходный state тем же объектом");
+  assert.equal(res.state.restaurantAccountingResolutionEvents.length, 0);
+});
+
+// 37 -------------------------------------------------------------------------
+
+test("повторное закрытие: отказ, нет второго события, revision не растёт", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const first = resolveRestaurantAccountingEntry(stateWith([], [], [e]), "c", "SETTLED", "ok", "R1", RES_NOW);
+  assert.equal(first.result.ok, true);
+
+  const second = resolveRestaurantAccountingEntry(first.state, "c", "SETTLED", "again", "R2", "2026-07-18T10:00:00.000Z");
+  assert.equal(second.result.ok, false);
+  assert.equal(second.state, first.state, "тот же state reference");
+  assert.equal(second.state.revision, first.state.revision);
+  assert.equal(second.state.restaurantAccountingResolutionEvents.length, 1);
+});
+
+// 38 -------------------------------------------------------------------------
+
+test("race двух вкладок после rebase: один event, одна смена статуса", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const base = stateWith([], [], [e]);
+  const first = resolveRestaurantAccountingEntry(base, "c", "SETTLED", "первая", "R1", RES_NOW);
+  assert.equal(first.result.ok, true);
+  // Вторая вкладка после rebase работает на закоммиченном state.
+  const second = resolveRestaurantAccountingEntry(first.state, "c", "WAIVED", "вторая", null, "2026-07-18T11:00:00.000Z");
+  assert.equal(second.result.ok, false);
+  assert.equal(second.state.restaurantAccountingResolutionEvents.length, 1);
+  assert.equal(second.state.restaurantAccountingEntries.find((x) => x.id === "c")!.status, "SETTLED");
+});
+
+// 39 -------------------------------------------------------------------------
+
+test("невалидные entryId/nowIso/outcome/note/reference → fail same-state", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const st = stateWith([], [], [e]);
+  const cases: Array<() => ReturnType<typeof resolveRestaurantAccountingEntry>> = [
+    () => resolveRestaurantAccountingEntry(st, "нет", "SETTLED", "x", "r", RES_NOW),
+    () => resolveRestaurantAccountingEntry(st, "c", "SETTLED", "x", "r", "не-дата"),
+    () => resolveRestaurantAccountingEntry(st, "c", "PAID" as "SETTLED", "x", "r", RES_NOW),
+    () => resolveRestaurantAccountingEntry(st, "c", "SETTLED", "n".repeat(ACCOUNTING_RESOLUTION_NOTE_MAX + 1), null, RES_NOW),
+    () => resolveRestaurantAccountingEntry(st, "c", "SETTLED", "ok", "r".repeat(ACCOUNTING_RESOLUTION_REFERENCE_MAX + 1), RES_NOW),
+    () => resolveRestaurantAccountingEntry(st, "c", "SETTLED", "   ", null, RES_NOW), // ни note, ни ссылки
+  ];
+  for (const run of cases) {
+    const res = run();
+    assert.equal(res.result.ok, false);
+    assert.equal(res.state, st);
+    assert.equal(res.state.revision, st.revision);
+    assert.equal(res.state.restaurantAccountingResolutionEvents.length, 0);
+  }
+});
+
+// 40 -------------------------------------------------------------------------
+
+test("закрытие не меняет сумму, direction, type, source, recognizedAt", () => {
+  const e = jentry({
+    id: "c",
+    orderId: "o",
+    direction: "RESTAURANT_OWES_DIRECT",
+    type: "PLATFORM_COMMISSION",
+    amountCents: 800,
+    source: "LEGACY_COMMISSION_SETTLEMENT",
+    legacySettlementId: "s-old",
+    recognizedAt: DELIVERED_AT,
+  });
+  const st = stateWith([], [], [e]);
+  const res = resolveRestaurantAccountingEntry(st, "c", "SETTLED", "ok", "R", RES_NOW);
+  const after = res.state.restaurantAccountingEntries.find((x) => x.id === "c")!;
+  assert.equal(after.amountCents, 800);
+  assert.equal(after.direction, "RESTAURANT_OWES_DIRECT");
+  assert.equal(after.type, "PLATFORM_COMMISSION");
+  assert.equal(after.source, "LEGACY_COMMISSION_SETTLEMENT");
+  assert.equal(after.recognizedAt, DELIVERED_AT);
+  assert.equal(after.legacySettlementId, "s-old");
+});
+
+// 41 -------------------------------------------------------------------------
+
+test("после SETTLED: open receivable/payable и net пересчитываются", () => {
+  const st = stateWith([], [], [
+    jentry({ id: "r1", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 }),
+    jentry({ id: "p1", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 5100 }),
+  ]);
+  assert.equal(getRestaurantOpenReceivableCents(st, RESTAURANT_ID), 800);
+  assert.equal(getRestaurantOpenPayableCents(st, RESTAURANT_ID), 5100);
+
+  const res = resolveRestaurantAccountingEntry(st, "p1", "SETTLED", "ok", "R", RES_NOW);
+  assert.equal(getRestaurantOpenPayableCents(res.state, RESTAURANT_ID), 0);
+  assert.equal(getRestaurantOpenReceivableCents(res.state, RESTAURANT_ID), 800);
+  assert.equal(getRestaurantNetPositionCents(res.state, RESTAURANT_ID), -800);
+});
+
+// 42 -------------------------------------------------------------------------
+
+test("после WAIVED: комиссия исчезает из open receivable, payout не затронут", () => {
+  const st = stateWith([], [], [
+    jentry({ id: "r1", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 }),
+    jentry({ id: "p1", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 5100 }),
+  ]);
+  const res = resolveRestaurantAccountingEntry(st, "r1", "WAIVED", "списано", null, RES_NOW);
+  assert.equal(getRestaurantOpenReceivableCents(res.state, RESTAURANT_ID), 0);
+  assert.equal(getRestaurantOpenPayableCents(res.state, RESTAURANT_ID), 5100);
+});
+
+// 43 -------------------------------------------------------------------------
+
+test("journal показывает закрытую запись с settledAt и остаётся в истории", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const res = resolveRestaurantAccountingEntry(stateWith([], [], [e]), "c", "SETTLED", "ok", "R", RES_NOW);
+  const rows = buildRestaurantAccountingJournal(res.state, RESTAURANT_ID);
+  const row = rows.find((r) => r.entryId === "c")!;
+  assert.ok(row, "запись осталась в истории журнала");
+  assert.equal(row.status, "SETTLED");
+  assert.equal(row.settledAt, RES_NOW);
+});
+
+// 44 -------------------------------------------------------------------------
+
+test("миграция schema: старое состояние получает пустой resolutionEvents, без дублей", () => {
+  const settlement: SettlementEntry = legacySettlement("o-v8", 640);
+  // Состояние прежней версии без поля resolution events.
+  const raw = JSON.parse(JSON.stringify(stateWith([], [settlement], [
+    jentry({ id: "keep", orderId: "o-v8" }),
+  ]))) as Record<string, unknown>;
+  raw.schemaVersion = 8;
+  delete raw.restaurantAccountingResolutionEvents;
+
+  const parsed = parseStoredState(JSON.stringify(raw));
+  assert.ok(parsed);
+  assert.equal(parsed.schemaVersion, 9);
+  assert.deepEqual(parsed.restaurantAccountingResolutionEvents, []);
+  // Существующие accounting-записи не потеряны.
+  assert.ok(parsed.restaurantAccountingEntries.some((e) => e.id === "keep"));
+
+  // Закрываем и проверяем, что повторный parse не дублирует событие.
+  const resolved = resolveRestaurantAccountingEntry(parsed, "keep", "SETTLED", "ok", "R", RES_NOW).state;
+  assert.equal(resolved.restaurantAccountingResolutionEvents.length, 1);
+  const reparsed = parseStoredState(JSON.stringify(resolved));
+  assert.ok(reparsed);
+  assert.equal(reparsed.restaurantAccountingResolutionEvents.length, 1);
 });

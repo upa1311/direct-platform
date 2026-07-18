@@ -4,7 +4,7 @@ import type {
   RestaurantDeliverySettings,
 } from "./pricing-engine";
 
-export const PROTOTYPE_SCHEMA_VERSION = 8 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 9 as const;
 
 export type {
   FulfillmentChoice,
@@ -110,6 +110,24 @@ export interface RestaurantAccountingEntry {
   source: RestaurantAccountingSource;
   /** id исходного SettlementEntry для мигрированных записей, иначе null. */
   legacySettlementId: string | null;
+}
+
+/**
+ * Append-only аудит закрытия обязательства администратором Direct. Фиксирует
+ * решение (исполнено/списано) — реального движения денег система не выполняет.
+ * На одну accounting entry существует не более одного успешного события.
+ */
+export interface RestaurantAccountingResolutionEvent {
+  id: string;
+  accountingEntryId: string;
+  restaurantId: string;
+  previousStatus: "OPEN";
+  nextStatus: "SETTLED" | "WAIVED";
+  occurredAt: string;
+  actor: "ADMIN";
+  note: string;
+  /** Внешняя ссылка (банковская операция/кассовый документ/сверка) либо null. */
+  externalReference: string | null;
 }
 
 export type PromotionType = "BUY_N_GET_M_CHEAPEST_FREE";
@@ -609,6 +627,8 @@ export interface PrototypeState {
   settlements: SettlementEntry[];
   /** Полный двусторонний журнал расчётов ресторана (комиссии и выплаты). */
   restaurantAccountingEntries: RestaurantAccountingEntry[];
+  /** Append-only аудит административного закрытия обязательств. */
+  restaurantAccountingResolutionEvents: RestaurantAccountingResolutionEvent[];
   cancellationRequests: CancellationRequest[];
   operationalEvents: OperationalEvent[];
 }

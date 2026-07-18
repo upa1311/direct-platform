@@ -3,6 +3,7 @@ import type {
   Order,
   PrototypeState,
   RestaurantAccountingEntry,
+  RestaurantAccountingResolutionEvent,
   RestaurantAccountingStatus,
   RestaurantAccountingType,
   SettlementEntry,
@@ -289,6 +290,143 @@ export function getRestaurantNetPositionCents(
     getRestaurantOpenPayableCents(state, restaurantId) -
     getRestaurantOpenReceivableCents(state, restaurantId)
   );
+}
+
+// --- Административное закрытие обязательства (append-only аудит) --------------
+
+/** Исход закрытия: внешний расчёт подтверждён либо требование Direct списано. */
+export type RestaurantAccountingOutcome = "SETTLED" | "WAIVED";
+
+export const ACCOUNTING_RESOLUTION_NOTE_MAX = 300;
+export const ACCOUNTING_RESOLUTION_REFERENCE_MAX = 120;
+
+/** Результат административного закрытия обязательства. */
+export interface RestaurantAccountingResolutionResult {
+  ok: boolean;
+  error: string | null;
+}
+
+/**
+ * Администратор Direct фиксирует закрытие обязательства: SETTLED (внешний расчёт
+ * подтверждён) или WAIVED (Direct списывает собственное комиссионное требование).
+ * Реального перевода/выплаты/взаимозачёта система НЕ выполняет.
+ *
+ * Все проверки — до мутации; при любой ошибке возвращается исходный state ТЕМ ЖЕ
+ * объектом (повторное закрытие идемпотентно: не-OPEN запись → fail без нового
+ * события и без роста revision). При успехе атомарно: статус записи → outcome и
+ * settledAt = nowIso; добавляется ровно одно append-only resolution event;
+ * для PLATFORM_COMMISSION синхронизируется старый SettlementEntry того же
+ * (restaurantId, orderId): SETTLED→PAID, WAIVED→WAIVED (новый SettlementEntry не
+ * создаётся). amountCents, direction, type, source, recognizedAt,
+ * legacySettlementId и order.financials не меняются.
+ */
+export function resolveRestaurantAccountingEntry(
+  state: PrototypeState,
+  entryId: string,
+  outcome: RestaurantAccountingOutcome,
+  note: string,
+  externalReference: string | null,
+  nowIso: string = new Date().toISOString(),
+): { state: PrototypeState; result: RestaurantAccountingResolutionResult } {
+  const fail = (error: string) => ({ state, result: { ok: false, error } });
+
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return fail("Некорректное время операции.");
+  }
+  if (outcome !== "SETTLED" && outcome !== "WAIVED") {
+    return fail("Неизвестный исход закрытия.");
+  }
+  const entry = state.restaurantAccountingEntries.find((e) => e.id === entryId);
+  if (!entry) {
+    return fail("Обязательство не найдено.");
+  }
+  if (entry.status !== "OPEN") {
+    return fail("Обязательство уже закрыто.");
+  }
+  if (entry.amountCents <= 0) {
+    return fail("Некорректная сумма обязательства.");
+  }
+
+  const normalizedNote = (note ?? "").trim();
+  const normalizedRef =
+    externalReference == null ? null : externalReference.trim();
+  if (normalizedNote.length > ACCOUNTING_RESOLUTION_NOTE_MAX) {
+    return fail("Комментарий слишком длинный.");
+  }
+  if (
+    normalizedRef !== null &&
+    normalizedRef.length > ACCOUNTING_RESOLUTION_REFERENCE_MAX
+  ) {
+    return fail("Внешняя ссылка слишком длинная.");
+  }
+
+  if (outcome === "WAIVED") {
+    // Списать можно только собственное комиссионное требование Direct.
+    if (
+      entry.direction !== "RESTAURANT_OWES_DIRECT" ||
+      entry.type !== "PLATFORM_COMMISSION"
+    ) {
+      return fail("Списать можно только комиссионное требование Direct к ресторану.");
+    }
+    if (!normalizedNote) {
+      return fail("Для списания укажите основание.");
+    }
+  } else {
+    // SETTLED: пустая внешняя ссылка допустима, но тогда основание — в note.
+    if (!normalizedRef && !normalizedNote) {
+      return fail("Укажите основание расчёта или внешнюю ссылку.");
+    }
+  }
+
+  const now = nowIso;
+  const resolvedEntry: RestaurantAccountingEntry = {
+    ...entry,
+    status: outcome,
+    settledAt: now,
+  };
+
+  // Синхронизация старого журнала комиссий: только для комиссии, только если
+  // settlement того же заказа существует; новый settlement не создаётся.
+  let settlements = state.settlements;
+  if (entry.type === "PLATFORM_COMMISSION") {
+    const legacyStatus = outcome === "SETTLED" ? "PAID" : "WAIVED";
+    settlements = state.settlements.map((s) =>
+      s.restaurantId === entry.restaurantId && s.orderId === entry.orderId
+        ? { ...s, status: legacyStatus }
+        : s,
+    );
+  }
+
+  // Ровно одно append-only событие; id привязан к записи, поэтому второго
+  // успешного закрытия одной entry не возникает (статус-guard выше это гарантирует).
+  const event: RestaurantAccountingResolutionEvent = {
+    id: `accounting-resolution-${entry.id}`,
+    accountingEntryId: entry.id,
+    restaurantId: entry.restaurantId,
+    previousStatus: "OPEN",
+    nextStatus: outcome,
+    occurredAt: now,
+    actor: "ADMIN",
+    note: normalizedNote,
+    externalReference: normalizedRef,
+  };
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      restaurantAccountingEntries: state.restaurantAccountingEntries.map((e) =>
+        e.id === entry.id ? resolvedEntry : e,
+      ),
+      restaurantAccountingResolutionEvents: [
+        ...state.restaurantAccountingResolutionEvents,
+        event,
+      ],
+      settlements,
+    },
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
 }
 
 // --- Русские подписи для UI (сырой enum наружу не выводится) -----------------

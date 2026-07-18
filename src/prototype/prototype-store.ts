@@ -76,16 +76,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
 }
 
 /**
- * Схемы, принимаемые из текущего ключа хранилища v7. v8 — надмножество v7 (одно
- * новое поле restaurantAccountingEntries), поэтому состояние schemaVersion 7,
- * записанное прежней версией приложения, безопасно принимается и доводится
- * нормализацией до v8 без потери данных (settlements сохраняются и мигрируют в
- * двусторонний журнал). Ключ хранилища не меняется.
+ * Схемы, принимаемые из текущего ключа хранилища v7. Каждая следующая версия —
+ * надмножество предыдущей (v8 добавил restaurantAccountingEntries, v9 —
+ * restaurantAccountingResolutionEvents), поэтому состояние прежней версии
+ * безопасно принимается и доводится нормализацией до текущей без потери данных.
+ * Ключ хранилища не меняется.
  */
-const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7,
-  PROTOTYPE_SCHEMA_VERSION,
-]);
+const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([7, 8, 9]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
   const schemaVersion = (value as { schemaVersion?: unknown }).schemaVersion;
@@ -622,6 +619,31 @@ function normalizeRestaurantAccountingEntries(
 }
 
 /**
+ * Append-only аудит закрытия обязательств: у состояний до v9 поля нет — пустой
+ * массив. Оставляем только валидные по форме события; повторная нормализация
+ * идемпотентна (события не дублируются и не пересоздаются).
+ */
+function normalizeRestaurantAccountingResolutionEvents(
+  value: unknown,
+): PrototypeState["restaurantAccountingResolutionEvents"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((event) => {
+    if (
+      !isRecord(event) ||
+      typeof event.id !== "string" ||
+      typeof event.accountingEntryId !== "string"
+    ) {
+      return [];
+    }
+    return [
+      event as unknown as PrototypeState["restaurantAccountingResolutionEvents"][number],
+    ];
+  });
+}
+
+/**
  * Запросы на отмену: у старых состояний поля нет — используем пустой массив
  * (§9). Не ломает старые snapshots и не входит в финансовые данные.
  */
@@ -725,6 +747,10 @@ export function normalizePrototypeState(
       normalizeRestaurantAccountingEntries(state.restaurantAccountingEntries),
       normalizedSettlements,
     ),
+    restaurantAccountingResolutionEvents:
+      normalizeRestaurantAccountingResolutionEvents(
+        state.restaurantAccountingResolutionEvents,
+      ),
     cancellationRequests: normalizeCancellationRequests(
       state.cancellationRequests,
     ),
