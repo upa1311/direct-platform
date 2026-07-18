@@ -466,3 +466,254 @@ test("event и entry корректно относятся выбранному 
   const usd = m.summaries.find((s) => s.currencyCode === "USD")!;
   assert.equal(usd.settledRestaurantOwesDirectCents, 500);
 });
+
+// --- Opening / closing позиции (исторический replay) ------------------------
+
+const PERIOD = () => range("2026-07-10", "2026-07-20"); // start=07-09T21:00Z, endExcl=07-20T21:00Z
+const BEFORE = "2026-07-01T10:00:00.000Z";
+const INSIDE = "2026-07-15T10:00:00.000Z";
+const AFTER = "2026-07-25T10:00:00.000Z";
+const START_CUTOFF = "2026-07-09T21:00:00.000Z"; // ровно локальная полночь 10 июля
+const END_EXCLUSIVE = "2026-07-20T21:00:00.000Z"; // ровно локальная полночь 21 июля
+
+function usdOf(m: NonNullable<ReturnType<typeof buildRestaurantStatementMovements>["movements"]>) {
+  return m.summaries.find((s) => s.currencyCode === "USD")!;
+}
+
+// 23 -------------------------------------------------------------------------
+
+test("признано до периода и не закрыто → входит в opening и closing", () => {
+  const st = stateWith([entry({ id: "c", recognizedAt: BEFORE, amountCents: 800 })]);
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.equal(s.openingRestaurantOwesDirectCents, 800);
+  assert.equal(s.closingRestaurantOwesDirectCents, 800);
+  assert.equal(s.recognizedRestaurantOwesDirectCents, 0);
+});
+
+// 24 -------------------------------------------------------------------------
+
+test("признано и закрыто до периода → не в opening и не в closing", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: BEFORE, amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: "2026-07-05T10:00:00.000Z" })],
+  );
+  const s = usdOf(build(st, PERIOD()));
+  assert.equal(s.openingRestaurantOwesDirectCents, 0);
+  assert.equal(s.closingRestaurantOwesDirectCents, 0);
+});
+
+// 25 -------------------------------------------------------------------------
+
+test("признано до периода, закрыто внутри → opening, resolution-движение, не closing", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: BEFORE, amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: INSIDE })],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.equal(s.openingRestaurantOwesDirectCents, 800);
+  assert.equal(s.closingRestaurantOwesDirectCents, 0);
+  assert.equal(s.settledRestaurantOwesDirectCents, 800);
+  assert.equal(m.resolutions.length, 1);
+});
+
+// 26 -------------------------------------------------------------------------
+
+test("признано внутри периода и не закрыто → opening=0, recognized и closing", () => {
+  const st = stateWith([entry({ id: "c", recognizedAt: INSIDE, amountCents: 800 })]);
+  const s = usdOf(build(st, PERIOD()));
+  assert.equal(s.openingRestaurantOwesDirectCents, 0);
+  assert.equal(s.recognizedRestaurantOwesDirectCents, 800);
+  assert.equal(s.closingRestaurantOwesDirectCents, 800);
+});
+
+// 27 -------------------------------------------------------------------------
+
+test("признано и закрыто внутри периода → recognition и resolution, closing=0", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: "2026-07-12T10:00:00.000Z", amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: INSIDE })],
+  );
+  const s = usdOf(build(st, PERIOD()));
+  assert.equal(s.recognizedRestaurantOwesDirectCents, 800);
+  assert.equal(s.settledRestaurantOwesDirectCents, 800);
+  assert.equal(s.closingRestaurantOwesDirectCents, 0);
+});
+
+// 28 -------------------------------------------------------------------------
+
+test("оба направления: opening/closing для receivable и payable", () => {
+  const st = stateWith([
+    entry({ id: "rod", recognizedAt: BEFORE, direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 }),
+    entry({ id: "dor", recognizedAt: BEFORE, direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 5100 }),
+  ]);
+  const s = usdOf(build(st, PERIOD()));
+  assert.equal(s.openingRestaurantOwesDirectCents, 800);
+  assert.equal(s.openingDirectOwesRestaurantCents, 5100);
+  assert.equal(s.openingNetCents, 5100 - 800);
+  assert.equal(s.closingRestaurantOwesDirectCents, 800);
+  assert.equal(s.closingDirectOwesRestaurantCents, 5100);
+  assert.equal(s.closingNetCents, 5100 - 800);
+});
+
+// 29 -------------------------------------------------------------------------
+
+test("WAIVED закрывает только receivable-позицию", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: BEFORE, direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "WAIVED", occurredAt: INSIDE })],
+  );
+  const s = usdOf(build(st, PERIOD()));
+  assert.equal(s.openingRestaurantOwesDirectCents, 800);
+  assert.equal(s.waivedRestaurantOwesDirectCents, 800);
+  assert.equal(s.closingRestaurantOwesDirectCents, 0);
+});
+
+// 30 -------------------------------------------------------------------------
+
+test("resolution после endExclusive не влияет на closing исторического периода", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: BEFORE, amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: AFTER })],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.equal(s.openingRestaurantOwesDirectCents, 800);
+  assert.equal(s.closingRestaurantOwesDirectCents, 800, "всё ещё открыто");
+  assert.equal(m.resolutions.length, 0, "resolution вне окна периода");
+});
+
+// 31 -------------------------------------------------------------------------
+
+test("resolution после asOfIso не влияет на closing", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: BEFORE, amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: INSIDE })],
+  );
+  const m = build(st, range("2026-07-10", "2026-07-20", "2026-07-14T00:00:00.000Z"));
+  const s = usdOf(m);
+  assert.equal(s.closingRestaurantOwesDirectCents, 800, "закрытие после asOf не считается");
+  assert.ok(m.issues.some((i) => i.kind === "FUTURE_EVENT_EXCLUDED" && i.entryKey === "c"));
+});
+
+// 32 -------------------------------------------------------------------------
+
+test("current entry.status=SETTLED, но event после конца периода → closing открыт", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: BEFORE, status: "SETTLED", settledAt: AFTER, amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: AFTER })],
+  );
+  const s = usdOf(build(st, PERIOD()));
+  // Историческая позиция не зависит от текущего status.
+  assert.equal(s.closingRestaurantOwesDirectCents, 800);
+});
+
+// 33 -------------------------------------------------------------------------
+
+test("recognition ровно в startCutoff: не в opening, но в period movement", () => {
+  const st = stateWith([entry({ id: "c", recognizedAt: START_CUTOFF, amountCents: 800 })]);
+  const s = usdOf(build(st, PERIOD()));
+  assert.equal(s.openingRestaurantOwesDirectCents, 0, "событие в startCutoff не в opening");
+  assert.equal(s.recognizedRestaurantOwesDirectCents, 800, "но входит в движения периода");
+  assert.equal(s.closingRestaurantOwesDirectCents, 800);
+});
+
+// 34 -------------------------------------------------------------------------
+
+test("resolution ровно в endExclusive: не в period и не закрывает closing", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: BEFORE, amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: END_EXCLUSIVE })],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.equal(m.resolutions.length, 0);
+  assert.equal(s.closingRestaurantOwesDirectCents, 800, "закрытие ровно в endExclusive не считается");
+});
+
+// 35 -------------------------------------------------------------------------
+
+test("дубликат resolution: учитывается один раз, DUPLICATE_RESOLUTION_EVENT, closing не отрицателен", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: "2026-07-12T10:00:00.000Z", amountCents: 800 })],
+    [
+      event({ id: "e2", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: "2026-07-16T10:00:00.000Z" }),
+      event({ id: "e1", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: "2026-07-15T10:00:00.000Z" }),
+    ],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.equal(m.resolutions.length, 1, "только canonical (самый ранний)");
+  assert.equal(m.resolutions[0].occurredAt, "2026-07-15T10:00:00.000Z");
+  assert.equal(s.settledRestaurantOwesDirectCents, 800, "закрытие учтено один раз");
+  assert.equal(s.closingRestaurantOwesDirectCents, 0);
+  assert.ok(s.closingRestaurantOwesDirectCents >= 0, "closing не отрицателен");
+  assert.ok(m.issues.some((i) => i.kind === "DUPLICATE_RESOLUTION_EVENT" && i.entryKey === "c"));
+});
+
+// 36 -------------------------------------------------------------------------
+
+test("resolution до recognition: не закрывает, RESOLUTION_BEFORE_RECOGNITION", () => {
+  const st = stateWith(
+    [entry({ id: "c", recognizedAt: INSIDE, amountCents: 800 })],
+    [event({ id: "e", accountingEntryId: "c", nextStatus: "SETTLED", occurredAt: "2026-07-12T10:00:00.000Z" })],
+  );
+  const m = build(st, PERIOD());
+  const s = usdOf(m);
+  assert.equal(m.resolutions.length, 0);
+  assert.equal(s.recognizedRestaurantOwesDirectCents, 800);
+  assert.equal(s.closingRestaurantOwesDirectCents, 800, "запись остаётся открытой");
+  assert.ok(m.issues.some((i) => i.kind === "RESOLUTION_BEFORE_RECOGNITION" && i.entryKey === "c"));
+});
+
+// 37 -------------------------------------------------------------------------
+
+test("две валюты дают независимые opening/closing buckets", () => {
+  const st = stateWith([
+    entry({ id: "usd", recognizedAt: BEFORE, currencyCode: "USD", amountCents: 800 }),
+    entry({ id: "eur", recognizedAt: BEFORE, currencyCode: "EUR" as CurrencyCode, amountCents: 700 }),
+  ]);
+  const m = build(st, PERIOD());
+  assert.equal(m.summaries.length, 2);
+  assert.equal(usdOf(m).openingRestaurantOwesDirectCents, 800);
+  const eur = m.summaries.find((s) => s.currencyCode === ("EUR" as CurrencyCode))!;
+  assert.equal(eur.openingRestaurantOwesDirectCents, 700);
+  assert.equal(eur.closingRestaurantOwesDirectCents, 700);
+});
+
+// 38 -------------------------------------------------------------------------
+
+test("reconciliation выполняется для обеих сторон", () => {
+  const st = stateWith(
+    [
+      // Receivable: opening (закрыт внутри), in-period recognized (waived внутри).
+      entry({ id: "rOpen", recognizedAt: BEFORE, direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 }),
+      entry({ id: "rInWaive", recognizedAt: "2026-07-12T10:00:00.000Z", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 300 }),
+      // Payable: opening (остаётся), in-period recognized (settled внутри).
+      entry({ id: "pOpen", recognizedAt: BEFORE, direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 5100 }),
+      entry({ id: "pInSettle", recognizedAt: "2026-07-12T10:00:00.000Z", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 2000 }),
+    ],
+    [
+      event({ id: "eR", accountingEntryId: "rOpen", nextStatus: "SETTLED", occurredAt: INSIDE }),
+      event({ id: "eW", accountingEntryId: "rInWaive", nextStatus: "WAIVED", occurredAt: "2026-07-16T10:00:00.000Z" }),
+      event({ id: "eP", accountingEntryId: "pInSettle", nextStatus: "SETTLED", occurredAt: "2026-07-16T10:00:00.000Z" }),
+    ],
+  );
+  const s = usdOf(build(st, PERIOD()));
+  // closingReceivable = openingR + recognizedR - settledR - waivedR
+  assert.equal(
+    s.closingRestaurantOwesDirectCents,
+    s.openingRestaurantOwesDirectCents +
+      s.recognizedRestaurantOwesDirectCents -
+      s.settledRestaurantOwesDirectCents -
+      s.waivedRestaurantOwesDirectCents,
+  );
+  // closingPayable = openingP + recognizedP - settledP
+  assert.equal(
+    s.closingDirectOwesRestaurantCents,
+    s.openingDirectOwesRestaurantCents +
+      s.recognizedDirectOwesRestaurantCents -
+      s.settledDirectOwesRestaurantCents,
+  );
+});
