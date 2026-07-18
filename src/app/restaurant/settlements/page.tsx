@@ -128,12 +128,12 @@ export default function RestaurantSettlementsPage() {
             <SummaryCard
               label="Комиссия Direct по финансовым снимкам"
               value={money(overview.summary.platformCommissionReceivableCents)}
-              hint="Из FinancialSnapshot заказов."
+              hint="По финансовым снимкам заказов."
             />
             <SummaryCard
-              label="Ожидает расчёта по ledger"
+              label="Ожидает расчёта по журналу комиссий"
               value={money(overview.summary.pendingLedgerCents)}
-              hint="Только PENDING в существующем комиссионном ledger."
+              hint="Только начисления со статусом „Ожидает расчёта“ в журнале комиссий."
             />
           </div>
 
@@ -141,8 +141,8 @@ export default function RestaurantSettlementsPage() {
           <div className={styles.info}>
             <p>
               Расчёты построены по финансовым снимкам заказов. Статус начисления
-              относится только к существующему комиссионному ledger. Выплаты
-              Direct ресторану отдельным ledger пока не отслеживаются.
+              относится только к существующему журналу комиссий. Выплаты Direct
+              ресторану пока не отслеживаются в отдельном журнале.
             </p>
             <p className={styles.footnote}>
               Раздел предназначен для операционной сверки, а не заменяет
@@ -172,7 +172,7 @@ export default function RestaurantSettlementsPage() {
                     <th className={styles.num}>Собрал Direct</th>
                     <th className={styles.num}>Комиссия Direct</th>
                     <th className={styles.num}>Чисто ресторану</th>
-                    <th>Начисление ledger</th>
+                    <th>Комиссионное начисление</th>
                   </tr>
                 </thead>
                 <tbody>
