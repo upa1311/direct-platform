@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
@@ -10,6 +10,7 @@ import {
   deliveryModeLabels,
   formatMoney,
   getRestaurant,
+  getRestaurantTimeZoneLabel,
   paymentStatusLabels,
   settlementStatusLabels,
   settlementTypeLabels,
@@ -34,10 +35,18 @@ import {
   getRestaurantOpenReceivableCents,
   type RestaurantAccountingJournalRow,
 } from "@/prototype/restaurant-accounting";
+import {
+  buildRestaurantStatementView,
+  type RestaurantStatementCurrencySection,
+  type RestaurantStatementRecognitionViewRow,
+  type RestaurantStatementResolutionViewRow,
+  type RestaurantStatementViewResult,
+} from "@/prototype/restaurant-statement-view";
+import { defaultStatementRange } from "./statement-range";
 import styles from "./settlements.module.css";
 
-/** Вид раздела: по заказам, по дням или журнал обязательств. */
-type SettlementView = "ORDERS" | "DAILY" | "OBLIGATIONS";
+/** Вид раздела: по заказам, по дням, журнал обязательств или выписка. */
+type SettlementView = "ORDERS" | "DAILY" | "OBLIGATIONS" | "STATEMENT";
 
 /** Локальная дата ресторана YYYY-MM-DD → «16.07.2026» без пересчёта пояса. */
 function formatLocalDateRu(localDate: string): string {
@@ -117,6 +126,43 @@ export default function RestaurantSettlementsPage() {
     return buildRestaurantAccountingJournal(state, selectedRestaurantId);
   }, [view, isHydrated, restaurant, state, selectedRestaurantId]);
 
+  // --- Выписка: собственный период, результат фиксируется по кнопке ---
+  const [stmtStart, setStmtStart] = useState("");
+  const [stmtEnd, setStmtEnd] = useState("");
+  const [stmtResult, setStmtResult] =
+    useState<RestaurantStatementViewResult | null>(null);
+  const [stmtAsOf, setStmtAsOf] = useState<string | null>(null);
+  // Ресторан, для чьего часового пояса рассчитан текущий дефолтный диапазон.
+  const rangeRestaurantRef = useRef<string | null>(null);
+
+  // Дефолтный диапазон (30 локальных дней) — один раз на выбранный ресторан. При
+  // смене ресторана диапазон пересчитывается из его пояса, а выписка сбрасывается.
+  useEffect(() => {
+    if (!isHydrated || !restaurant || nowMs === 0) return;
+    if (rangeRestaurantRef.current === selectedRestaurantId) return;
+    const range = defaultStatementRange(nowMs, timeZone);
+    setStmtStart(range.startLocalDate);
+    setStmtEnd(range.endLocalDate);
+    setStmtResult(null);
+    setStmtAsOf(null);
+    rangeRestaurantRef.current = selectedRestaurantId;
+  }, [isHydrated, restaurant, nowMs, selectedRestaurantId, timeZone]);
+
+  const generateStatement = () => {
+    if (nowMs === 0) return;
+    // Один зафиксированный момент формирования; результат не меняется сам по себе.
+    const asOf = new Date(nowMs).toISOString();
+    setStmtAsOf(asOf);
+    setStmtResult(
+      buildRestaurantStatementView(state, selectedRestaurantId, {
+        startLocalDate: stmtStart,
+        endLocalDate: stmtEnd,
+        timeZone,
+        asOfIso: asOf,
+      }),
+    );
+  };
+
   const money = (cents: number) =>
     formatMoney(cents, overview?.currencyCode ?? "USD");
 
@@ -189,6 +235,14 @@ export default function RestaurantSettlementsPage() {
               onClick={() => setView("OBLIGATIONS")}
             >
               Обязательства
+            </button>
+            <button
+              type="button"
+              className={styles.periodButton}
+              aria-pressed={view === "STATEMENT"}
+              onClick={() => setView("STATEMENT")}
+            >
+              Выписка
             </button>
           </div>
 
@@ -280,6 +334,18 @@ export default function RestaurantSettlementsPage() {
             <DailyView days={daily ?? []} money={money} />
           ) : view === "OBLIGATIONS" ? (
             <ObligationsView rows={journal ?? []} money={money} timeZone={timeZone} />
+          ) : view === "STATEMENT" ? (
+            <StatementView
+              restaurantName={restaurant.name}
+              timeZone={timeZone}
+              startLocalDate={stmtStart}
+              endLocalDate={stmtEnd}
+              onStartChange={setStmtStart}
+              onEndChange={setStmtEnd}
+              onGenerate={generateStatement}
+              result={stmtResult}
+              asOfIso={stmtAsOf}
+            />
           ) : (
             <OrdersView overview={overview} money={money} timeZone={timeZone} />
           )}
@@ -625,6 +691,285 @@ function ObligationsView({
         </div>
       )}
     </>
+  );
+}
+
+/** Представление «Выписка» — read-only, полностью из presentation-model. */
+function StatementView({
+  restaurantName,
+  timeZone,
+  startLocalDate,
+  endLocalDate,
+  onStartChange,
+  onEndChange,
+  onGenerate,
+  result,
+  asOfIso,
+}: {
+  restaurantName: string;
+  timeZone: string;
+  startLocalDate: string;
+  endLocalDate: string;
+  onStartChange: (value: string) => void;
+  onEndChange: (value: string) => void;
+  onGenerate: () => void;
+  result: RestaurantStatementViewResult | null;
+  asOfIso: string | null;
+}) {
+  const view = result?.ok ? result.view : null;
+  const noMovements =
+    view !== null &&
+    view.currencySections.length === 0 &&
+    view.recognitionRows.length === 0 &&
+    view.resolutionRows.length === 0;
+
+  return (
+    <>
+      <h2 className={styles.sectionTitle}>Выписка по взаимным обязательствам</h2>
+      <div className={styles.info}>
+        <p>
+          Выписка показывает историческую позицию и движения между Direct и
+          рестораном за выбранный период. Она предназначена для сверки и не
+          подтверждает банковский перевод, списание со счёта или автоматический
+          взаимозачёт.
+        </p>
+      </div>
+
+      {/* Форма периода */}
+      <div className={styles.statementForm}>
+        <label className={styles.field}>
+          <span>Дата начала</span>
+          <input
+            type="date"
+            value={startLocalDate}
+            onChange={(e) => onStartChange(e.target.value)}
+          />
+        </label>
+        <label className={styles.field}>
+          <span>Дата окончания</span>
+          <input
+            type="date"
+            value={endLocalDate}
+            onChange={(e) => onEndChange(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          className={styles.generateButton}
+          onClick={onGenerate}
+        >
+          Сформировать выписку
+        </button>
+      </div>
+
+      {result === null ? (
+        <div className={styles.empty}>
+          Задайте период и сформируйте выписку.
+        </div>
+      ) : !result.ok || !view ? (
+        <div className={styles.attentionCard} role="alert">
+          <div className={styles.attentionRow}>{result.error}</div>
+        </div>
+      ) : (
+        <>
+          {/* Мета */}
+          <div className={styles.info}>
+            <p>
+              Ресторан: <strong>{restaurantName}</strong>. Период:{" "}
+              {formatLocalDateRu(view.startLocalDate)} —{" "}
+              {formatLocalDateRu(view.endLocalDate)}. Часовой пояс:{" "}
+              {getRestaurantTimeZoneLabel(timeZone)}.
+            </p>
+            {asOfIso ? (
+              <p className={styles.footnote}>
+                Сформирована: {formatInZone(asOfIso, timeZone)}.
+              </p>
+            ) : null}
+          </div>
+
+          {noMovements ? (
+            <div className={styles.empty}>
+              За выбранный период финансовых движений не найдено.
+            </div>
+          ) : null}
+
+          {/* Секции по валютам */}
+          {view.currencySections.map((section) => (
+            <StatementCurrencySection
+              key={section.currencyCode}
+              section={section}
+            />
+          ))}
+
+          {/* Признанные обязательства */}
+          <h3 className={styles.sectionSubTitle}>Признанные обязательства</h3>
+          {view.recognitionRows.length === 0 ? (
+            <div className={styles.empty}>Новых обязательств за период нет.</div>
+          ) : (
+            <StatementRecognitionTable rows={view.recognitionRows} timeZone={timeZone} />
+          )}
+
+          {/* Решения по обязательствам */}
+          <h3 className={styles.sectionSubTitle}>Решения по обязательствам</h3>
+          {view.resolutionRows.length === 0 ? (
+            <div className={styles.empty}>
+              Решений по обязательствам за период нет.
+            </div>
+          ) : (
+            <StatementResolutionTable rows={view.resolutionRows} timeZone={timeZone} />
+          )}
+
+          {/* Предупреждения о данных */}
+          {view.hasIntegrityWarnings ? (
+            <>
+              <h3 className={styles.sectionSubTitle}>Требуется проверка данных</h3>
+              <div className={styles.attentionCard} role="status">
+                {view.integritySummary.map((g, index) => (
+                  <div className={styles.attentionRow} key={index}>
+                    {g.message} — {g.count}
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </>
+      )}
+    </>
+  );
+}
+
+function StatementCurrencySection({
+  section,
+}: {
+  section: RestaurantStatementCurrencySection;
+}) {
+  const m = (cents: number) => formatMoney(cents, section.currencyCode);
+  return (
+    <div className={styles.currencySection}>
+      <div className={styles.currencyHead}>Валюта: {section.currencyCode}</div>
+
+      <div className={styles.statementBlock}>
+        <span className={styles.blockTitle}>Позиция на начало</span>
+        <div className={styles.summaryGrid}>
+          <SummaryCard label="Ресторан должен Direct" value={m(section.openingRestaurantOwesDirectCents)} />
+          <SummaryCard label="Direct должен ресторану" value={m(section.openingDirectOwesRestaurantCents)} />
+          <SummaryCard label="Чистая позиция" value={m(section.openingNetCents)} />
+        </div>
+      </div>
+
+      <div className={styles.statementBlock}>
+        <span className={styles.blockTitle}>Движения за период</span>
+        <div className={styles.summaryGrid}>
+          <SummaryCard label="Признано: ресторан должен Direct" value={m(section.recognizedRestaurantOwesDirectCents)} />
+          <SummaryCard label="Признано: Direct должен ресторану" value={m(section.recognizedDirectOwesRestaurantCents)} />
+          <SummaryCard label="Подтверждено: ресторан должен Direct" value={m(section.settledRestaurantOwesDirectCents)} />
+          <SummaryCard label="Подтверждено: Direct должен ресторану" value={m(section.settledDirectOwesRestaurantCents)} />
+          <SummaryCard label="Комиссия Direct списана" value={m(section.waivedRestaurantOwesDirectCents)} />
+        </div>
+      </div>
+
+      <div className={styles.statementBlock}>
+        <span className={styles.blockTitle}>Позиция на конец</span>
+        <div className={styles.summaryGrid}>
+          <SummaryCard label="Ресторан должен Direct" value={m(section.closingRestaurantOwesDirectCents)} />
+          <SummaryCard label="Direct должен ресторану" value={m(section.closingDirectOwesRestaurantCents)} />
+          <SummaryCard label="Чистая позиция" value={m(section.closingNetCents)} />
+        </div>
+      </div>
+
+      {section.isReconciled ? (
+        <p className={styles.footnote}>Позиции сходятся с движениями периода.</p>
+      ) : (
+        <div className={styles.attentionCard} role="status">
+          <div className={styles.attentionRow}>
+            Позиции не сходятся с движениями периода. Требуется проверка
+            администратором.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatementRecognitionTable({
+  rows,
+  timeZone,
+}: {
+  rows: RestaurantStatementRecognitionViewRow[];
+  timeZone: string;
+}) {
+  return (
+    <div className={styles.tableScroll}>
+      <table className={styles.table}>
+        <thead>
+          <tr>
+            <th>Дата</th>
+            <th>Заказ</th>
+            <th>Кто кому должен</th>
+            <th>Основание</th>
+            <th className={styles.num}>Сумма</th>
+            <th>Источник</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              <td>{formatInZone(row.recognizedAt, timeZone)}</td>
+              <td className={styles.orderNumber}>{row.orderLabel}</td>
+              <td>{row.directionLabel}</td>
+              <td>{row.typeLabel}</td>
+              <td className={styles.money}>
+                {formatMoney(row.amountCents, row.currencyCode)}
+              </td>
+              <td>{row.sourceLabel}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function StatementResolutionTable({
+  rows,
+  timeZone,
+}: {
+  rows: RestaurantStatementResolutionViewRow[];
+  timeZone: string;
+}) {
+  return (
+    <div className={styles.tableScroll}>
+      <table className={styles.table}>
+        <thead>
+          <tr>
+            <th>Дата</th>
+            <th>Заказ</th>
+            <th>Решение</th>
+            <th>Кто кому должен</th>
+            <th>Основание</th>
+            <th className={styles.num}>Сумма</th>
+            <th>Комментарий</th>
+            <th>Внешняя ссылка</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              <td>{formatInZone(row.occurredAt, timeZone)}</td>
+              <td className={styles.orderNumber}>{row.orderLabel}</td>
+              <td>{row.decisionLabel}</td>
+              <td>{row.directionLabel}</td>
+              <td>{row.typeLabel}</td>
+              <td className={styles.money}>
+                {formatMoney(row.amountCents, row.currencyCode)}
+              </td>
+              <td>{row.note}</td>
+              <td>{row.externalReference ?? "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

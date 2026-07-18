@@ -182,6 +182,82 @@
   border-radius: 10px;
 }
 
+/* --- Выписка -------------------------------------------------------------- */
+
+/* Форма периода: поля дат и кнопка; переносится на узких экранах. */
+.statementForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.field input {
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--kds-border, #d0d5dd);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+}
+
+.generateButton {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sectionSubTitle {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 4px 0 0;
+  opacity: 0.9;
+}
+
+/* Валютная секция — визуально обособлена, валюты не смешиваются. */
+.currencySection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--kds-border, #d0d5dd);
+  border-radius: 10px;
+}
+
+.currencyHead {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.statementBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.blockTitle {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.72;
+}
+
 /* --- Сверка по дням ------------------------------------------------------- */
 
 .days {
