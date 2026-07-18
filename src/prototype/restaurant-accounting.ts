@@ -311,10 +311,14 @@ export interface RestaurantAccountingResolutionResult {
  * подтверждён) или WAIVED (Direct списывает собственное комиссионное требование).
  * Реального перевода/выплаты/взаимозачёта система НЕ выполняет.
  *
+ * Человекочитаемое основание (note) обязательно для ОБОИХ исходов;
+ * externalReference — лишь дополнительный реквизит, пустая ссылка нормализуется
+ * в null. Fail-closed: повторное решение блокируется и по статусу (не-OPEN), и по
+ * наличию существующего audit-события для этой entry (несогласованное состояние).
+ *
  * Все проверки — до мутации; при любой ошибке возвращается исходный state ТЕМ ЖЕ
- * объектом (повторное закрытие идемпотентно: не-OPEN запись → fail без нового
- * события и без роста revision). При успехе атомарно: статус записи → outcome и
- * settledAt = nowIso; добавляется ровно одно append-only resolution event;
+ * объектом (без нового события и без роста revision). При успехе атомарно: статус
+ * записи → outcome и settledAt = nowIso; добавляется ровно одно append-only event;
  * для PLATFORM_COMMISSION синхронизируется старый SettlementEntry того же
  * (restaurantId, orderId): SETTLED→PAID, WAIVED→WAIVED (новый SettlementEntry не
  * создаётся). amountCents, direction, type, source, recognizedAt,
@@ -343,13 +347,25 @@ export function resolveRestaurantAccountingEntry(
   if (entry.status !== "OPEN") {
     return fail("Обязательство уже закрыто.");
   }
+  // Fail-closed поверх статус-guard: одно успешное resolution event на entry.
+  // Защищает от несогласованного импортированного состояния, где entry ещё OPEN,
+  // но audit-событие уже существует — второе решение не создаётся.
+  if (
+    state.restaurantAccountingResolutionEvents.some(
+      (event) => event.accountingEntryId === entry.id,
+    )
+  ) {
+    return fail("Обязательство уже закрыто.");
+  }
   if (entry.amountCents <= 0) {
     return fail("Некорректная сумма обязательства.");
   }
 
   const normalizedNote = (note ?? "").trim();
-  const normalizedRef =
+  // Пустая ссылка / только пробелы после trim → null (не ""). Непустая — trimmed.
+  const trimmedRef =
     externalReference == null ? null : externalReference.trim();
+  const normalizedRef = trimmedRef ? trimmedRef : null;
   if (normalizedNote.length > ACCOUNTING_RESOLUTION_NOTE_MAX) {
     return fail("Комментарий слишком длинный.");
   }
@@ -359,6 +375,11 @@ export function resolveRestaurantAccountingEntry(
   ) {
     return fail("Внешняя ссылка слишком длинная.");
   }
+  // Человекочитаемое основание обязательно для ОБОИХ исходов: externalReference —
+  // только дополнительный реквизит и не заменяет note.
+  if (!normalizedNote) {
+    return fail("Укажите основание решения.");
+  }
 
   if (outcome === "WAIVED") {
     // Списать можно только собственное комиссионное требование Direct.
@@ -367,14 +388,6 @@ export function resolveRestaurantAccountingEntry(
       entry.type !== "PLATFORM_COMMISSION"
     ) {
       return fail("Списать можно только комиссионное требование Direct к ресторану.");
-    }
-    if (!normalizedNote) {
-      return fail("Для списания укажите основание.");
-    }
-  } else {
-    // SETTLED: пустая внешняя ссылка допустима, но тогда основание — в note.
-    if (!normalizedRef && !normalizedNote) {
-      return fail("Укажите основание расчёта или внешнюю ссылку.");
     }
   }
 

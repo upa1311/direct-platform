@@ -1120,3 +1120,109 @@ test("миграция schema: старое состояние получает 
   assert.ok(reparsed);
   assert.equal(reparsed.restaurantAccountingResolutionEvents.length, 1);
 });
+
+// --- Усиленные audit-инварианты ---------------------------------------------
+
+// 45 -------------------------------------------------------------------------
+
+test("SETTLED с пустым note но валидной ссылкой → fail same-state", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const st = stateWith([], [], [e]);
+  const res = resolveRestaurantAccountingEntry(st, "c", "SETTLED", "", "BANK-777", RES_NOW);
+  assert.equal(res.result.ok, false);
+  assert.equal(res.state, st, "исходный state тем же объектом");
+  assert.equal(res.state.revision, st.revision);
+  assert.equal(res.state.restaurantAccountingResolutionEvents.length, 0);
+  assert.equal(res.state.restaurantAccountingEntries.find((x) => x.id === "c")!.status, "OPEN");
+});
+
+// 46 -------------------------------------------------------------------------
+
+test("SETTLED с непустым note и externalReference=null → успех", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const res = resolveRestaurantAccountingEntry(
+    stateWith([], [], [e]),
+    "c",
+    "SETTLED",
+    "Оплата подтверждена по банковской выписке",
+    null,
+    RES_NOW,
+  );
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+  const ev = res.state.restaurantAccountingResolutionEvents[0];
+  assert.equal(ev.note, "Оплата подтверждена по банковской выписке");
+  assert.equal(ev.externalReference, null);
+});
+
+// 47 -------------------------------------------------------------------------
+
+test("SETTLED: reference из одних пробелов нормализуется в null", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const res = resolveRestaurantAccountingEntry(
+    stateWith([], [], [e]),
+    "c",
+    "SETTLED",
+    "Основание есть",
+    "   ",
+    RES_NOW,
+  );
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+  assert.equal(res.state.restaurantAccountingResolutionEvents[0].externalReference, null);
+});
+
+// 48 -------------------------------------------------------------------------
+
+test("существующее audit-событие блокирует закрытие даже при OPEN-записи", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const settlement = legacySettlement("o");
+  // Несогласованное состояние: entry ещё OPEN, но audit-событие уже есть.
+  const st: PrototypeState = {
+    ...stateWith([], [settlement], [e]),
+    restaurantAccountingResolutionEvents: [
+      {
+        id: "accounting-resolution-c",
+        accountingEntryId: "c",
+        restaurantId: RESTAURANT_ID,
+        previousStatus: "OPEN",
+        nextStatus: "SETTLED",
+        occurredAt: DELIVERED_AT,
+        actor: "ADMIN",
+        note: "прежнее решение",
+        externalReference: null,
+      },
+    ],
+  };
+  const res = resolveRestaurantAccountingEntry(st, "c", "SETTLED", "повтор", "R", RES_NOW);
+  assert.equal(res.result.ok, false);
+  assert.equal(res.state, st, "тот же state reference");
+  assert.equal(res.state.revision, st.revision);
+  assert.equal(res.state.restaurantAccountingResolutionEvents.length, 1);
+  assert.equal(res.state.settlements.find((s) => s.orderId === "o")!.status, "PENDING");
+  assert.equal(res.state.restaurantAccountingEntries.find((x) => x.id === "c")!.status, "OPEN");
+});
+
+// 49 -------------------------------------------------------------------------
+
+test("событие для другой entry не блокирует закрытие текущей", () => {
+  const target = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const st: PrototypeState = {
+    ...stateWith([], [], [target]),
+    restaurantAccountingResolutionEvents: [
+      {
+        id: "accounting-resolution-other",
+        accountingEntryId: "other-entry",
+        restaurantId: RESTAURANT_ID,
+        previousStatus: "OPEN",
+        nextStatus: "WAIVED",
+        occurredAt: DELIVERED_AT,
+        actor: "ADMIN",
+        note: "чужое решение",
+        externalReference: null,
+      },
+    ],
+  };
+  const res = resolveRestaurantAccountingEntry(st, "c", "SETTLED", "закрываем", "R", RES_NOW);
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+  assert.equal(res.state.restaurantAccountingEntries.find((x) => x.id === "c")!.status, "SETTLED");
+  assert.equal(res.state.restaurantAccountingResolutionEvents.length, 2);
+});
