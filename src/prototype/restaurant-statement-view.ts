@@ -108,6 +108,8 @@ const ISSUE_MESSAGES: Record<RestaurantStatementIssueKind, string> = {
   INVALID_RESOLUTION_OUTCOME: "Обнаружен недопустимый результат решения.",
   DUPLICATE_RESOLUTION_EVENT:
     "Обнаружено несколько решений по одному обязательству.",
+  MIXED_COLLECTION_SNAPSHOT:
+    "Обнаружен заказ с противоречивыми данными о получателе оплаты.",
   FUTURE_EVENT_EXCLUDED:
     "Событие после момента формирования выписки исключено.",
 };
@@ -121,6 +123,7 @@ const ISSUE_ORDER: readonly RestaurantStatementIssueKind[] = [
   "RESOLUTION_BEFORE_RECOGNITION",
   "INVALID_RESOLUTION_OUTCOME",
   "DUPLICATE_RESOLUTION_EVENT",
+  "MIXED_COLLECTION_SNAPSHOT",
   "FUTURE_EVENT_EXCLUDED",
 ];
 

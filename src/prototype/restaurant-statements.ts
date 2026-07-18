@@ -72,6 +72,7 @@ export type RestaurantStatementIssueKind =
   | "RESOLUTION_BEFORE_RECOGNITION"
   | "INVALID_RESOLUTION_OUTCOME"
   | "DUPLICATE_RESOLUTION_EVENT"
+  | "MIXED_COLLECTION_SNAPSHOT"
   | "FUTURE_EVENT_EXCLUDED";
 
 export interface RestaurantStatementIntegrityIssue {
@@ -198,6 +199,29 @@ export function buildRestaurantStatementMovements(
     state.restaurantAccountingEntries.map((e) => [e.id, e]),
   );
 
+  // Повреждённый MIXED-снимок: заказ, в котором ОБЕ стороны одновременно собрали
+  // деньги клиента (restaurantCollected>0 И platformCollected>0). Штатный builder
+  // такой снимок не производит (collector взаимоисключающий); он мог возникнуть
+  // только из повреждённого/ручного состояния. Все accounting entries такого
+  // заказа полностью исключаются из выписки, а сам заказ фиксируется ровно одним
+  // integrity issue. Набор содержит только реальные order.id, поэтому orphan-
+  // записи без найденного заказа mixed не считаются (правило 5). Ничего не
+  // мутируем: читаем неизменяемый order.financials.
+  const mixedOrderIds = new Set<string>();
+  for (const order of state.orders) {
+    const f = order.financials;
+    // Оба поля должны быть числами > 0. Отсутствующий/неполный снимок mixed НЕ
+    // считается — противоречие фиксируем только при явном пересечении сборов.
+    if (
+      typeof f?.restaurantCollectedFromCustomerCents === "number" &&
+      typeof f?.platformCollectedFromCustomerCents === "number" &&
+      f.restaurantCollectedFromCustomerCents > 0 &&
+      f.platformCollectedFromCustomerCents > 0
+    ) {
+      mixedOrderIds.add(order.id);
+    }
+  }
+
   const recognitions: RestaurantStatementRecognitionRow[] = [];
   const resolutions: RestaurantStatementResolutionRow[] = [];
   const issues: RestaurantStatementIntegrityIssue[] = [];
@@ -218,9 +242,28 @@ export function buildRestaurantStatementMovements(
   const inWindow = (ms: number): boolean =>
     ms >= startMs && ms < endExclusiveMs;
 
+  // --- MIXED-заказы: ровно один issue на повреждённый заказ ---
+  // Фиксируем структурно (как невалидные даты), независимо от окна периода: сам
+  // факт противоречивых данных о получателе оплаты важен всегда. Один issue на
+  // mixed-заказ выбранного ресторана, у которого есть хотя бы одна его accounting
+  // entry (нечего исключать — нечего и предупреждать). entryKey хранит orderId
+  // только как ВНУТРЕННИЙ диагностический ключ; в публичную модель он не выводится.
+  const mixedOrderIdsWithEntries = new Set<string>();
+  for (const entry of state.restaurantAccountingEntries) {
+    if (entry.restaurantId !== restaurantId) continue;
+    if (mixedOrderIds.has(entry.orderId)) {
+      mixedOrderIdsWithEntries.add(entry.orderId);
+    }
+  }
+  for (const orderId of [...mixedOrderIdsWithEntries].sort()) {
+    issues.push({ kind: "MIXED_COLLECTION_SNAPSHOT", entryKey: orderId });
+  }
+
   // --- Признанные движения ---
   for (const entry of state.restaurantAccountingEntries) {
     if (entry.restaurantId !== restaurantId) continue;
+    // Записи mixed-заказа полностью исключены из recognition rows и totals.
+    if (mixedOrderIds.has(entry.orderId)) continue;
     const ms = Date.parse(entry.recognizedAt);
     if (Number.isNaN(ms)) {
       issues.push({ kind: "INVALID_RECOGNIZED_AT", entryKey: entry.id });
@@ -275,6 +318,9 @@ export function buildRestaurantStatementMovements(
   >();
   for (const event of state.restaurantAccountingResolutionEvents) {
     const entry = entryById.get(event.accountingEntryId);
+    // Resolution записей mixed-заказа тоже исключены: не создают строк, не
+    // участвуют в totals и не порождают других issue по этому заказу.
+    if (entry && mixedOrderIds.has(entry.orderId)) continue;
     const eventSelected = event.restaurantId === restaurantId;
     const entrySelected = entry?.restaurantId === restaurantId;
 
@@ -380,6 +426,8 @@ export function buildRestaurantStatementMovements(
   // --- Исторические позиции opening/closing (replay, не текущий status) ---
   for (const entry of state.restaurantAccountingEntries) {
     if (entry.restaurantId !== restaurantId) continue;
+    // Записи mixed-заказа исключены из opening и closing позиций.
+    if (mixedOrderIds.has(entry.orderId)) continue;
     const recMs = Date.parse(entry.recognizedAt);
     if (Number.isNaN(recMs)) continue; // невалидная дата признания — уже помечена
     if (recMs > asOfMs) continue; // не признано на момент asOf
