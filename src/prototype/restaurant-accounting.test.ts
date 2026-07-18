@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   ACCOUNTING_RESOLUTION_NOTE_MAX,
   ACCOUNTING_RESOLUTION_REFERENCE_MAX,
+  buildAdminAccountingView,
   buildRestaurantAccountingJournal,
   computeCompletedOrderAccountingEntries,
   getRestaurantOpenPayableCents,
@@ -13,6 +14,7 @@ import {
   recognizeCompletedOrderAccounting,
   resolveRestaurantAccountingEntry,
 } from "./restaurant-accounting.ts";
+import { executeSerializedPrototypeMutation } from "./prototype-store.ts";
 import {
   addCartItem,
   completePickupWithCode,
@@ -1225,4 +1227,211 @@ test("событие для другой entry не блокирует закр�
   assert.equal(res.result.ok, true, res.result.error ?? "");
   assert.equal(res.state.restaurantAccountingEntries.find((x) => x.id === "c")!.status, "SETTLED");
   assert.equal(res.state.restaurantAccountingResolutionEvents.length, 2);
+});
+
+// --- Provider serialized путь и admin view-model ----------------------------
+
+function settleMutation(entryId: string, note: string, ref: string | null) {
+  return (baseState: PrototypeState) =>
+    resolveRestaurantAccountingEntry(baseState, entryId, "SETTLED", note, ref, RES_NOW);
+}
+
+// 50 -------------------------------------------------------------------------
+
+test("serialized мутация закрытия: успех коммитит новое состояние", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const st = stateWith([], [legacySettlement("o")], [e]);
+  let persisted: PrototypeState | null = null;
+  const out = executeSerializedPrototypeMutation({
+    localState: st,
+    storedState: null,
+    mutation: settleMutation("c", "Сверка", "BANK-1"),
+    persist: (s) => {
+      persisted = s;
+    },
+  });
+  assert.equal(out.committed, true);
+  assert.equal(out.result.ok, true, out.result.error ?? "");
+  assert.ok(persisted);
+  assert.equal(persisted!.restaurantAccountingResolutionEvents.length, 1);
+  assert.equal(persisted!.restaurantAccountingEntries.find((x) => x.id === "c")!.status, "SETTLED");
+});
+
+// 51 -------------------------------------------------------------------------
+
+test("serialized мутация: domain error не коммитит и не считается успехом", () => {
+  const st = stateWith([], [], [jentry({ id: "c" })]);
+  let persistCalled = false;
+  const out = executeSerializedPrototypeMutation({
+    localState: st,
+    storedState: null,
+    mutation: settleMutation("нет-такой", "x", null),
+    persist: () => {
+      persistCalled = true;
+    },
+  });
+  assert.equal(out.committed, false);
+  assert.equal(out.result.ok, false);
+  assert.equal(persistCalled, false, "persist не вызывается при ошибке домена");
+  assert.equal(out.nextState.restaurantAccountingResolutionEvents.length, 0);
+});
+
+// 52 -------------------------------------------------------------------------
+
+test("serialized мутация на самом свежем state; повтор после rebase не даёт 2-е событие", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const st = stateWith([], [], [e]);
+  const first = executeSerializedPrototypeMutation({
+    localState: st,
+    storedState: null,
+    mutation: settleMutation("c", "первая", "R1"),
+    persist: () => {},
+  });
+  assert.equal(first.committed, true);
+  const committed = first.nextState;
+
+  // Вторая вкладка: её localState устарел (st), но persisted свежее (committed) —
+  // мутация выполняется на самом свежем state и не создаёт второе событие.
+  const second = executeSerializedPrototypeMutation({
+    localState: st,
+    storedState: committed,
+    mutation: settleMutation("c", "вторая", "R2"),
+    persist: () => {},
+  });
+  assert.equal(second.result.ok, false);
+  assert.equal(second.committed, false);
+  assert.equal(second.nextState.restaurantAccountingResolutionEvents.length, 1);
+});
+
+// 53 -------------------------------------------------------------------------
+
+test("admin view-model: только выбранный ресторан, publicNumber, orphan, audit, без внутренних id", () => {
+  const order = completed("linked", "PICKUP", RESTAURANT_COLLECTED, "PICKED_UP");
+  const st = stateWith([order], [], [
+    jentry({ id: "mine", orderId: "linked", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION" }),
+    jentry({ id: "orphan", orderId: "нет-заказа", source: "LEGACY_COMMISSION_SETTLEMENT", legacySettlementId: "s-x" }),
+    jentry({ id: "other", restaurantId: "restaurant-2" }),
+  ]);
+  const view = buildAdminAccountingView(st, RESTAURANT_ID);
+
+  assert.equal(view.rows.length, 2, "только записи выбранного ресторана");
+  const mine = view.rows.find((r) => r.entryId === "mine")!;
+  assert.equal(mine.publicNumber, order.publicNumber);
+  assert.equal(mine.restaurantName, "Ресторан 1");
+  const orphan = view.rows.find((r) => r.entryId === "orphan")!;
+  assert.equal(orphan.publicNumber, null);
+  assert.equal(orphan.hasOrder, false);
+  // Внутренние идентификаторы не входят в публичную view-model.
+  for (const row of view.rows) {
+    assert.ok(!("orderId" in row));
+    assert.ok(!("restaurantId" in row));
+    assert.ok(!("legacySettlementId" in row));
+  }
+
+  // Audit связывается по entryId и не содержит служебных полей события.
+  const resolved = resolveRestaurantAccountingEntry(st, "mine", "SETTLED", "готово", "R", RES_NOW).state;
+  const resolvedView = buildAdminAccountingView(resolved, RESTAURANT_ID);
+  const closed = resolvedView.rows.find((r) => r.entryId === "mine")!;
+  assert.ok(closed.resolution);
+  assert.equal(closed.resolution!.outcome, "SETTLED");
+  assert.equal(closed.resolution!.note, "готово");
+  assert.ok(!("id" in closed.resolution!));
+  assert.ok(!("accountingEntryId" in closed.resolution!));
+  assert.ok(!("actor" in closed.resolution!));
+});
+
+// 54 -------------------------------------------------------------------------
+
+test("admin view-model: canSettle для обоих типов; canWaive только для комиссии Direct", () => {
+  const st = stateWith([], [], [
+    jentry({ id: "com", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION" }),
+    jentry({ id: "pay", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT" }),
+  ]);
+  const view = buildAdminAccountingView(st, RESTAURANT_ID);
+  const com = view.rows.find((r) => r.entryId === "com")!;
+  const pay = view.rows.find((r) => r.entryId === "pay")!;
+  assert.equal(com.canSettle, true);
+  assert.equal(pay.canSettle, true);
+  assert.equal(com.canWaive, true);
+  assert.equal(pay.canWaive, false, "выплату ресторану списать нельзя");
+
+  // Закрытая запись больше не предлагает действий.
+  const resolved = resolveRestaurantAccountingEntry(st, "com", "SETTLED", "ok", "R", RES_NOW).state;
+  const closed = buildAdminAccountingView(resolved, RESTAURANT_ID).rows.find((r) => r.entryId === "com")!;
+  assert.equal(closed.canSettle, false);
+  assert.equal(closed.canWaive, false);
+});
+
+// 55 -------------------------------------------------------------------------
+
+test("admin view-model после SETTLED: закрыто, событие, позиция уменьшилась, legacy синхронизирован", () => {
+  const e = jentry({ id: "c", orderId: "o", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 });
+  const st = stateWith([], [legacySettlement("o")], [e]);
+  const before = buildAdminAccountingView(st, RESTAURANT_ID);
+  assert.equal(before.openReceivableCents, 800);
+  assert.equal(before.openCount, 1);
+
+  const resolved = resolveRestaurantAccountingEntry(st, "c", "SETTLED", "ok", "R", RES_NOW).state;
+  const after = buildAdminAccountingView(resolved, RESTAURANT_ID);
+  assert.equal(after.openReceivableCents, 0);
+  assert.equal(after.closedCount, 1);
+  const row = after.rows.find((r) => r.entryId === "c")!;
+  assert.equal(row.status, "SETTLED");
+  assert.ok(row.resolution);
+  assert.equal(resolved.settlements.find((s) => s.orderId === "o")!.status, "PAID");
+});
+
+// 56 -------------------------------------------------------------------------
+
+test("admin view-model после WAIVED: комиссия списана, payout не затронут", () => {
+  const st = stateWith([], [], [
+    jentry({ id: "com", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION", amountCents: 800 }),
+    jentry({ id: "pay", direction: "DIRECT_OWES_RESTAURANT", type: "RESTAURANT_PAYOUT", amountCents: 5100 }),
+  ]);
+  const resolved = resolveRestaurantAccountingEntry(st, "com", "WAIVED", "списано", null, RES_NOW).state;
+  const view = buildAdminAccountingView(resolved, RESTAURANT_ID);
+  assert.equal(view.openReceivableCents, 0);
+  assert.equal(view.openPayableCents, 5100, "выплата не затронута");
+  const com = view.rows.find((r) => r.entryId === "com")!;
+  assert.equal(com.status, "WAIVED");
+  assert.equal(com.resolution!.outcome, "WAIVED");
+});
+
+// 57 -------------------------------------------------------------------------
+
+test("note/reference передаются trimmed через domain result", () => {
+  const e = jentry({ id: "c", direction: "RESTAURANT_OWES_DIRECT", type: "PLATFORM_COMMISSION" });
+  const resolved = resolveRestaurantAccountingEntry(
+    stateWith([], [], [e]),
+    "c",
+    "SETTLED",
+    "   основание   ",
+    "  BANK-9  ",
+    RES_NOW,
+  ).state;
+  const ev = resolved.restaurantAccountingResolutionEvents[0];
+  assert.equal(ev.note, "основание");
+  assert.equal(ev.externalReference, "BANK-9");
+});
+
+// 58 -------------------------------------------------------------------------
+
+test("построение admin view-model не мутирует state", () => {
+  const st = stateWith([], [legacySettlement("o")], [
+    jentry({ id: "c", orderId: "o" }),
+  ]);
+  const snapshot = JSON.stringify(st);
+  const ordersRef = st.orders;
+  const entriesRef = st.restaurantAccountingEntries;
+  const settlementsRef = st.settlements;
+  const revBefore = st.revision;
+
+  buildAdminAccountingView(st, RESTAURANT_ID);
+  buildAdminAccountingView(st, RESTAURANT_ID);
+
+  assert.equal(JSON.stringify(st), snapshot);
+  assert.equal(st.orders, ordersRef);
+  assert.equal(st.restaurantAccountingEntries, entriesRef);
+  assert.equal(st.settlements, settlementsRef);
+  assert.equal(st.revision, revBefore);
 });

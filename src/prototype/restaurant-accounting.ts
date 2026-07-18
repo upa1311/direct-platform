@@ -549,3 +549,89 @@ export function buildRestaurantAccountingJournal(
 
   return rows;
 }
+
+// --- Admin view-model расчётов ----------------------------------------------
+
+/** Безопасное решение по обязательству для админ-истории (без внутренних id). */
+export interface AdminAccountingResolutionView {
+  outcome: "SETTLED" | "WAIVED";
+  occurredAt: string;
+  note: string;
+  externalReference: string | null;
+}
+
+/** Строка админ-журнала: безопасные поля + доступные действия и решение. */
+export interface AdminAccountingRow extends RestaurantAccountingJournalRow {
+  restaurantName: string;
+  /** Подтвердить исполнение (SETTLED) доступно для любой открытой записи. */
+  canSettle: boolean;
+  /** Списание (WAIVED) — только для открытого требования Direct к ресторану. */
+  canWaive: boolean;
+  /** Существующее решение по этой записи либо null. */
+  resolution: AdminAccountingResolutionView | null;
+}
+
+export interface AdminAccountingView {
+  restaurantName: string;
+  openReceivableCents: number;
+  openPayableCents: number;
+  netPositionCents: number;
+  openCount: number;
+  closedCount: number;
+  rows: AdminAccountingRow[];
+}
+
+/**
+ * Read-only presentation-model экрана расчётов администратора. Композиция
+ * существующих чистых selectors — нового финансового domain не вводит и state не
+ * мутирует. Возможность списания (canWaive) вычисляется здесь, чтобы UI не
+ * повторял доменное правило. Решение по записи связывается с audit-событием по
+ * entryId и отдаётся без внутренних идентификаторов/enum actor/статусов события.
+ */
+export function buildAdminAccountingView(
+  state: PrototypeState,
+  restaurantId: string,
+): AdminAccountingView {
+  const restaurantName =
+    state.restaurants.find((r) => r.id === restaurantId)?.name ?? "Ресторан";
+
+  const resolutionByEntryId = new Map<
+    string,
+    AdminAccountingResolutionView
+  >();
+  for (const event of state.restaurantAccountingResolutionEvents) {
+    if (!resolutionByEntryId.has(event.accountingEntryId)) {
+      resolutionByEntryId.set(event.accountingEntryId, {
+        outcome: event.nextStatus,
+        occurredAt: event.occurredAt,
+        note: event.note,
+        externalReference: event.externalReference,
+      });
+    }
+  }
+
+  const journalRows = buildRestaurantAccountingJournal(state, restaurantId);
+  const rows: AdminAccountingRow[] = journalRows.map((row) => {
+    const isOpen = row.status === "OPEN";
+    return {
+      ...row,
+      restaurantName,
+      canSettle: isOpen,
+      canWaive:
+        isOpen &&
+        row.direction === "RESTAURANT_OWES_DIRECT" &&
+        row.type === "PLATFORM_COMMISSION",
+      resolution: resolutionByEntryId.get(row.entryId) ?? null,
+    };
+  });
+
+  return {
+    restaurantName,
+    openReceivableCents: getRestaurantOpenReceivableCents(state, restaurantId),
+    openPayableCents: getRestaurantOpenPayableCents(state, restaurantId),
+    netPositionCents: getRestaurantNetPositionCents(state, restaurantId),
+    openCount: rows.filter((r) => r.status === "OPEN").length,
+    closedCount: rows.filter((r) => r.status !== "OPEN").length,
+    rows,
+  };
+}

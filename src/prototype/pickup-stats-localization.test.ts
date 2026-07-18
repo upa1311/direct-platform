@@ -228,16 +228,17 @@ test("§6.6: PickupAdminDetails не выводит сырой PENDING (чере
   assert.ok(src.includes("formatSettlementStatus"));
 });
 
-test("§6.7: страница расчётов не использует raw fallback entry.status", () => {
+test("§6.7: страница расчётов локализует статус через label map, без raw enum", () => {
   const src = readFileSync("src/app/admin/settlements/page.tsx", "utf8");
   assert.ok(!src.includes("?? entry.status"));
-  assert.ok(src.includes("formatSettlementStatus"));
+  // Новый экран двусторонних расчётов переводит статус через ACCOUNTING_STATUS_LABELS.
+  assert.ok(src.includes("ACCOUNTING_STATUS_LABELS"));
 });
 
-test("§6.8: страница расчётов не использует raw fallback entry.type", () => {
+test("§6.8: страница расчётов локализует основание через label map, без raw enum", () => {
   const src = readFileSync("src/app/admin/settlements/page.tsx", "utf8");
   assert.ok(!src.includes("?? entry.type"));
-  assert.ok(src.includes("formatSettlementType"));
+  assert.ok(src.includes("ACCOUNTING_TYPE_LABELS"));
 });
 
 test("§6.9: существующие label maps остаются полными", () => {

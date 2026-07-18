@@ -85,6 +85,11 @@ import {
   type RestaurantFormInput,
   type UpdateRestaurantResult,
 } from "./actions";
+import {
+  resolveRestaurantAccountingEntry,
+  type RestaurantAccountingOutcome,
+  type RestaurantAccountingResolutionResult,
+} from "./restaurant-accounting";
 import type { EtaAdjustmentIntent } from "./order-eta";
 import {
   closePrototypeChannel,
@@ -257,6 +262,12 @@ export interface PrototypeContextValue {
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
   ) => Promise<RequestCancellationResult>;
+  resolveAccountingEntry: (
+    entryId: string,
+    outcome: RestaurantAccountingOutcome,
+    note: string,
+    externalReference: string | null,
+  ) => Promise<RestaurantAccountingResolutionResult>;
   completePickup: (
     orderId: string,
     code: string,
@@ -1090,6 +1101,30 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  const resolveAccountingEntry = useCallback(
+    (
+      entryId: string,
+      outcome: RestaurantAccountingOutcome,
+      note: string,
+      externalReference: string | null,
+    ) => {
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          resolveRestaurantAccountingEntry(
+            baseState,
+            entryId,
+            outcome,
+            note,
+            externalReference,
+            nowIso,
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      });
+    },
+    [runSerializedActionMutation],
+  );
+
   const requestRestaurantCancellation = useCallback(
     (
       orderId: string,
@@ -1424,6 +1459,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       reportPreparationProblem,
       resolvePreparationProblem,
       requestRestaurantCancellation,
+      resolveAccountingEntry,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
@@ -1478,6 +1514,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       reportPreparationProblem,
       resolvePreparationProblem,
       requestRestaurantCancellation,
+      resolveAccountingEntry,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
