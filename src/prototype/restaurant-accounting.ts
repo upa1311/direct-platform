@@ -635,3 +635,28 @@ export function buildAdminAccountingView(
     rows,
   };
 }
+
+/** Данные для спокойного подтверждения закрытия (без внутренних id). */
+export interface AccountingResolutionConfirmation {
+  outcome: "SETTLED" | "WAIVED";
+  /** Публичный номер заказа или null (тогда «Старое начисление»). */
+  publicNumber: string | null;
+  /** Уже отформатированная сумма (например «$8.00»). */
+  amountText: string;
+}
+
+/**
+ * Русский текст спокойного подтверждения успешного закрытия обязательства.
+ * Чистая функция без внутренних идентификаторов: для orphan-записи вместо номера
+ * используется «Старое начисление». Явно сообщает, что реального движения денег
+ * не было (SETTLED) и что списание — не возврат/выплата (WAIVED).
+ */
+export function formatAccountingResolutionMessage(
+  confirmation: AccountingResolutionConfirmation,
+): string {
+  const orderLabel = confirmation.publicNumber ?? "Старое начисление";
+  if (confirmation.outcome === "SETTLED") {
+    return `Расчёт по заказу ${orderLabel} на сумму ${confirmation.amountText} зафиксирован. Денежный перевод системой не выполнялся.`;
+  }
+  return `Комиссия Direct по заказу ${orderLabel} на сумму ${confirmation.amountText} списана. Это не возврат и не выплата ресторану.`;
+}

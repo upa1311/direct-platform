@@ -14,6 +14,8 @@ import {
   ACCOUNTING_STATUS_LABELS,
   ACCOUNTING_TYPE_LABELS,
   buildAdminAccountingView,
+  formatAccountingResolutionMessage,
+  type AccountingResolutionConfirmation,
   type AdminAccountingRow,
 } from "@/prototype/restaurant-accounting";
 import styles from "./admin-settlements.module.css";
@@ -34,10 +36,20 @@ export default function AdminSettlementsPage() {
   );
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("OPEN");
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>("ALL");
+  // Спокойное подтверждение остаётся видимым, даже когда закрытая строка уходит
+  // из фильтра «Открытые». Живёт в родителе, не внутри строки.
+  const [confirmation, setConfirmation] =
+    useState<AccountingResolutionConfirmation | null>(null);
 
   const activeRestaurantId = restaurants.some((r) => r.id === selectedRestaurantId)
     ? selectedRestaurantId
     : (restaurants[0]?.id ?? "");
+
+  const selectRestaurant = (id: string) => {
+    setSelectedRestaurantId(id);
+    // Подтверждение одного ресторана не должно показываться под другим.
+    setConfirmation(null);
+  };
 
   const view = useMemo(
     () =>
@@ -86,7 +98,7 @@ export default function AdminSettlementsPage() {
               className={styles.select}
               aria-label="Выбрать ресторан"
               value={activeRestaurantId}
-              onChange={(e) => setSelectedRestaurantId(e.target.value)}
+              onChange={(e) => selectRestaurant(e.target.value)}
             >
               {restaurants.map((r) => (
                 <option value={r.id} key={r.id}>
@@ -117,6 +129,25 @@ export default function AdminSettlementsPage() {
                 банковскую выплату.
               </p>
             </div>
+
+            {/* Спокойное подтверждение результата — остаётся видимым, когда
+                закрытая строка уходит из фильтра «Открытые». */}
+            {confirmation ? (
+              <div
+                className={styles.confirmBanner}
+                role="status"
+                aria-live="polite"
+              >
+                <span>{formatAccountingResolutionMessage(confirmation)}</span>
+                <button
+                  type="button"
+                  className={styles.confirmClose}
+                  onClick={() => setConfirmation(null)}
+                >
+                  Закрыть сообщение
+                </button>
+              </div>
+            ) : null}
 
             {/* Фильтры журнала */}
             <h2 className={styles.sectionTitle}>Обязательства</h2>
@@ -182,7 +213,11 @@ export default function AdminSettlementsPage() {
                   </thead>
                   <tbody>
                     {visibleRows.map((row) => (
-                      <AccountingRow key={row.entryId} row={row} />
+                      <AccountingRow
+                        key={row.entryId}
+                        row={row}
+                        onResolved={setConfirmation}
+                      />
                     ))}
                   </tbody>
                 </table>
@@ -238,7 +273,13 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function AccountingRow({ row }: { row: AdminAccountingRow }) {
+function AccountingRow({
+  row,
+  onResolved,
+}: {
+  row: AdminAccountingRow;
+  onResolved: (confirmation: AccountingResolutionConfirmation) => void;
+}) {
   const { resolveAccountingEntry } = usePrototype();
   const { error, pending, run, clearError } = useMutationGuard();
   const [open, setOpen] = useState(false);
@@ -258,10 +299,16 @@ function AccountingRow({ row }: { row: AdminAccountingRow }) {
       );
       return { ok: r.ok, error: r.error, changed: r.ok };
     });
+    // Подтверждение — только при реальном успехе; при domain/infra error нет.
     if (res.ok) {
       setOpen(false);
       setNote("");
       setReference("");
+      onResolved({
+        outcome,
+        publicNumber: row.publicNumber,
+        amountText: formatMoney(row.amountCents),
+      });
     }
   };
 

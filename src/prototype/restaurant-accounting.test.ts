@@ -7,6 +7,7 @@ import {
   buildAdminAccountingView,
   buildRestaurantAccountingJournal,
   computeCompletedOrderAccountingEntries,
+  formatAccountingResolutionMessage,
   getRestaurantOpenPayableCents,
   getRestaurantOpenReceivableCents,
   getRestaurantNetPositionCents,
@@ -1434,4 +1435,64 @@ test("построение admin view-model не мутирует state", () => 
   assert.equal(st.restaurantAccountingEntries, entriesRef);
   assert.equal(st.settlements, settlementsRef);
   assert.equal(st.revision, revBefore);
+});
+
+// --- Текст подтверждения закрытия -------------------------------------------
+
+// 59 -------------------------------------------------------------------------
+
+test("подтверждение SETTLED: номер, сумма, отметка об отсутствии перевода", () => {
+  const msg = formatAccountingResolutionMessage({
+    outcome: "SETTLED",
+    publicNumber: "DIR-1042",
+    amountText: "$8.00",
+  });
+  assert.ok(msg.includes("DIR-1042"));
+  assert.ok(msg.includes("$8.00"));
+  assert.ok(msg.includes("зафиксирован"));
+  assert.ok(msg.includes("Денежный перевод системой не выполнялся"));
+});
+
+// 60 -------------------------------------------------------------------------
+
+test("подтверждение WAIVED: списание, не возврат и не выплата", () => {
+  const msg = formatAccountingResolutionMessage({
+    outcome: "WAIVED",
+    publicNumber: "DIR-1042",
+    amountText: "$8.00",
+  });
+  assert.ok(msg.includes("DIR-1042"));
+  assert.ok(msg.includes("$8.00"));
+  assert.ok(msg.includes("списана"));
+  assert.ok(msg.includes("не возврат и не выплата ресторану"));
+  assert.ok(!msg.includes("зафиксирован"));
+});
+
+// 61 -------------------------------------------------------------------------
+
+test("подтверждение orphan: «Старое начисление», без внутренних id", () => {
+  const settled = formatAccountingResolutionMessage({
+    outcome: "SETTLED",
+    publicNumber: null,
+    amountText: "$3.00",
+  });
+  assert.ok(settled.includes("Старое начисление"));
+  assert.ok(!settled.includes("null"));
+  // Внутренние идентификаторы недоступны формуле — она принимает только
+  // publicNumber/amountText/outcome, поэтому entryId/orderId попасть не могут.
+  const waived = formatAccountingResolutionMessage({
+    outcome: "WAIVED",
+    publicNumber: null,
+    amountText: "$3.00",
+  });
+  assert.ok(waived.includes("Старое начисление"));
+});
+
+// 62 -------------------------------------------------------------------------
+
+test("подтверждение: SETTLED и WAIVED дают разный текст", () => {
+  const base = { publicNumber: "DIR-1", amountText: "$1.00" } as const;
+  const settled = formatAccountingResolutionMessage({ ...base, outcome: "SETTLED" });
+  const waived = formatAccountingResolutionMessage({ ...base, outcome: "WAIVED" });
+  assert.notEqual(settled, waived);
 });

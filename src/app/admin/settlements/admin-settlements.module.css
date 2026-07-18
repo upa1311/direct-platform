@@ -80,6 +80,36 @@
   margin: 4px 0 0;
 }
 
+/* Спокойное подтверждение результата — без тревожного цвета/редизайна. */
+.confirmBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--kds-border, #d0d5dd);
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.confirmBanner > span {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.confirmClose {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--kds-border, #d0d5dd);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 /* Фильтры — переносятся на узких экранах. */
 .filters {
   display: flex;
