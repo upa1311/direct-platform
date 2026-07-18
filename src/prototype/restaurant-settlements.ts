@@ -6,6 +6,11 @@ import type {
   SettlementStatus,
   SettlementType,
 } from "./models";
+import {
+  getLocalDateParts,
+  localMidnightToUtcMs,
+  shiftCalendarDate,
+} from "./local-calendar";
 
 /**
  * Чистый модуль ресторанной сверки (первый этап RESTAURANT SETTLEMENTS).
@@ -162,104 +167,6 @@ function collectorOf(
 }
 
 // --- Границы периода в часовом поясе ресторана ------------------------------
-
-/** Смещение часового пояса (мс) для момента utcMs. */
-function tzOffsetMs(utcMs: number, timeZone: string): number {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(utcMs));
-    const map: Record<string, string> = {};
-    for (const p of parts) map[p.type] = p.value;
-    const asIfUtc = Date.UTC(
-      Number(map.year),
-      Number(map.month) - 1,
-      Number(map.day),
-      Number(map.hour),
-      Number(map.minute),
-      Number(map.second),
-    );
-    return asIfUtc - utcMs;
-  } catch {
-    return 0;
-  }
-}
-
-/** Календарная дата (год-месяц-день) без времени и часового пояса. */
-interface LocalDateParts {
-  year: number;
-  month: number;
-  day: number;
-}
-
-/** Календарная дата момента utcMs в часовом поясе ресторана. */
-function getLocalDateParts(utcMs: number, timeZone: string): LocalDateParts {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(new Date(utcMs));
-    const map: Record<string, string> = {};
-    for (const p of parts) map[p.type] = p.value;
-    return {
-      year: Number(map.year),
-      month: Number(map.month),
-      day: Number(map.day),
-    };
-  } catch {
-    const dt = new Date(utcMs);
-    return {
-      year: dt.getUTCFullYear(),
-      month: dt.getUTCMonth() + 1,
-      day: dt.getUTCDate(),
-    };
-  }
-}
-
-/**
- * Сдвиг КАЛЕНДАРНОЙ даты на deltaDays. Date.UTC используется только для
- * нормализации переполнения дня через границы месяца/года — локальные сутки НЕ
- * считаются фиксированными 24 часами (мы оперируем номерами дат, а не мс).
- */
-function shiftCalendarDate(
-  parts: LocalDateParts,
-  deltaDays: number,
-): LocalDateParts {
-  const normalized = new Date(
-    Date.UTC(parts.year, parts.month - 1, parts.day + deltaDays),
-  );
-  return {
-    year: normalized.getUTCFullYear(),
-    month: normalized.getUTCMonth() + 1,
-    day: normalized.getUTCDate(),
-  };
-}
-
-/**
- * UTC-инстант локальной полуночи заданной календарной даты в часовом поясе
- * ресторана. Двухпроходное разрешение offset: устойчиво к смене UTC-offset
- * (DST), когда полночь целевой даты и «догадка» лежат по разные стороны перехода.
- */
-function localMidnightToUtcMs(
-  parts: LocalDateParts,
-  timeZone: string,
-): number {
-  const guess = Date.UTC(parts.year, parts.month - 1, parts.day, 0, 0);
-  const off1 = tzOffsetMs(guess, timeZone);
-  let instant = guess - off1;
-  const off2 = tzOffsetMs(instant, timeZone);
-  if (off2 !== off1) instant = guess - off2;
-  return instant;
-}
 
 /**
  * Нижняя граница периода (включительно) в мс, либо null для ALL. «7 дней» и
