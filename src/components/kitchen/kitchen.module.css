@@ -530,25 +530,6 @@
   text-align: center;
 }
 
-/* --- Toolbar status chip (§8) -------------------------------------------- */
-.statusChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 40px;
-  padding: 0 12px;
-  border: 1px solid var(--kds-border);
-  border-radius: 7px;
-  background: var(--kds-surface);
-  font-size: 13px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.dotWarn {
-  background: var(--kds-warning);
-}
-
 /* --- Pause control layout (§5) ------------------------------------------- */
 .pauseWrap {
   margin-bottom: 16px;

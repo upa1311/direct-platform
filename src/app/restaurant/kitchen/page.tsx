@@ -53,7 +53,6 @@ import {
   getRestaurantCancellationUiState,
   getOrderReadySince,
   getOrderStatusSince,
-  getKitchenAcceptanceState,
   getPendingCancellationRequestsForRestaurant,
   getPickupNoShowEligibleAtIso,
   getRestaurant,
@@ -1075,10 +1074,6 @@ export default function RestaurantKitchenPage() {
   const restaurant = getRestaurant(state, selectedRestaurantId);
   // Этап 8: в SPLIT кухня не видит приватные данные и не выполняет выдачу.
   const isSplit = restaurant?.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN";
-  // Единое состояние приёма для toolbar (тот же helper, что и в pause-контроле).
-  const acceptanceState = restaurant
-    ? getKitchenAcceptanceState(restaurant, nowMs)
-    : null;
   // В SPLIT селектор возвращает пусто: решение по новому заказу — у оператора,
   // непринятый заказ до кухни не доходит ни карточкой, ни звуком, ни таймером.
   const newOrders = getKitchenNewOrders(state, selectedRestaurantId);
@@ -1125,23 +1120,8 @@ export default function RestaurantKitchenPage() {
           <span className={kds.restaurantName}>{restaurant?.name ?? "—"}</span>
         </div>
         <div className={kds.toolbarRight}>
-          <span className={kds.statusChip}>
-            <span
-              className={`${kds.dot} ${
-                acceptanceState === "ACCEPTING"
-                  ? kds.dotOk
-                  : acceptanceState === "OPERATIONAL_PAUSE"
-                    ? kds.dotWarn
-                    : kds.dotOff
-              }`}
-              aria-hidden="true"
-            />
-            {acceptanceState === "ACCEPTING"
-              ? "Приём включён"
-              : acceptanceState === "OPERATIONAL_PAUSE"
-                ? "Приём на паузе"
-                : "Приём отключён"}
-          </span>
+          {/* Единый источник статуса приёма — RestaurantPauseControl ниже.
+              Дублирующий toolbar-chip убран, чтобы состояние показывалось один раз. */}
           <select
             className={kds.restaurantSelect}
             aria-label="Сменить ресторан"
