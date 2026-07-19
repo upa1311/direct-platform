@@ -7,8 +7,9 @@ import styles from "./kitchen-production-ticket.module.css";
  * Order, ни к state, поэтому напечатать имя клиента, адрес, телефон, код выдачи
  * или финансы физически нечем.
  *
- * Порядок макета: заголовок → способ получения → номер → ресторан → готовность
- * → первоначальная оценка → позиции → количество.
+ * Порядок макета сверху вниз: заголовок → способ получения → номер заказа →
+ * позиции (с комментариями) → количество → первоначальная оценка → и строго в
+ * самом низу крупный блок с рамкой «ОЖИДАЕМАЯ ГОТОВНОСТЬ» (последний элемент).
  */
 export function KitchenProductionTicket({
   data,
@@ -19,15 +20,10 @@ export function KitchenProductionTicket({
     <div className={styles.ticket}>
       <div className={styles.header}>ПРОИЗВОДСТВЕННЫЙ ЗАКАЗ</div>
       <div className={styles.delivery}>{data.deliveryLabel}</div>
-      <div className={styles.number}>{data.publicNumber}</div>
-      <div className={styles.line}>{data.restaurantName}</div>
-      <div className={styles.ready}>{data.readyLine}</div>
-      {/* Пустую оценку не печатаем, чтобы не оставлять пустую строку. */}
-      {data.preparationMinutes != null ? (
-        <div className={styles.estimate}>
-          Первоначальная оценка: {data.preparationMinutes} мин
-        </div>
-      ) : null}
+      <div className={styles.numberRow}>
+        <span className={styles.numberLabel}>Номер заказа:</span>
+        <span className={styles.number}>{data.publicNumber}</span>
+      </div>
 
       <ul className={styles.items}>
         {data.items.map((item, index) => (
@@ -44,6 +40,15 @@ export function KitchenProductionTicket({
       </ul>
 
       <div className={styles.counts}>{data.countsLine}</div>
+      {/* Пустую оценку не печатаем, чтобы не оставлять пустую строку. */}
+      {data.preparationMinutes != null ? (
+        <div className={styles.estimate}>
+          Первоначальная оценка: {data.preparationMinutes} мин
+        </div>
+      ) : null}
+
+      {/* Последний элемент тикета: крупная рамка с временем готовности. */}
+      <div className={styles.readyFrame}>{data.readyLine}</div>
     </div>
   );
 }

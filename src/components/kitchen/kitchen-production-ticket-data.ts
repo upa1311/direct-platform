@@ -53,21 +53,28 @@ const DELIVERY_LABELS: Record<DeliveryMode, string> = {
 };
 
 /**
- * Строка готовности. Для готового заказа (READY / READY_FOR_PICKUP) — «ЗАКАЗ
- * ГОТОВ». Для PREPARING — ожидаемое время в часовом поясе ресторана существующим
- * форматтером; если время не задано — явная подпись «не задана».
+ * Содержимое нижней рамки готовности. Порядок:
+ * - READY / READY_FOR_PICKUP → «ЗАКАЗ ГОТОВ»;
+ * - есть канонический expectedReadyAt → «ОЖИДАЕМАЯ ГОТОВНОСТЬ: К HH:MM» в часовом
+ *   поясе ресторана;
+ * - иначе (напр. AWAITING_PAYMENT после принятия, время ещё не задано), но есть
+ *   первоначальная оценка → «ПРИГОТОВЛЕНИЕ ПОСЛЕ ОПЛАТЫ · N МИН».
+ * Никогда не выводим «не задана»: рамка всегда содержательна.
  */
 export function getTicketReadyLine(order: Order, timeZone: string): string {
   if (order.status === "READY" || order.status === "READY_FOR_PICKUP") {
     return TICKET_READY;
   }
-  if (!order.expectedReadyAt) {
-    return "Ожидаемая готовность: не задана";
+  if (order.expectedReadyAt) {
+    return `ОЖИДАЕМАЯ ГОТОВНОСТЬ: К ${formatClock24(
+      order.expectedReadyAt,
+      timeZone || DEFAULT_TIME_ZONE,
+    )}`;
   }
-  return `Ожидаемая готовность: ${formatClock24(
-    order.expectedReadyAt,
-    timeZone || DEFAULT_TIME_ZONE,
-  )}`;
+  if (order.preparationMinutes != null) {
+    return `ПРИГОТОВЛЕНИЕ ПОСЛЕ ОПЛАТЫ · ${order.preparationMinutes} МИН`;
+  }
+  return "ПРИГОТОВЛЕНИЕ ПОСЛЕ ОПЛАТЫ";
 }
 
 /**

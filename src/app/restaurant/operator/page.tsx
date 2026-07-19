@@ -19,6 +19,7 @@ import {
   useNewOrderSound,
 } from "@/components/kitchen/new-order-sound";
 import { useOperatorOrderReadySound } from "@/components/operator/use-operator-order-ready-sound";
+import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
@@ -178,9 +179,11 @@ function OperatorOrderItems({ order }: { order: Order }) {
 function OperatorAcceptPanel({
   order,
   nowMs,
+  onRequestPrint,
 }: {
   order: Order;
   nowMs: number;
+  onRequestPrint: (orderId: string) => void;
 }) {
   const { state, acceptOrder } = usePrototype();
   const { error, pending, run, clearError } = useMutationGuard();
@@ -195,6 +198,18 @@ function OperatorAcceptPanel({
       const response = await acceptOrder(order.id, prep, "RESTAURANT", "OPERATOR");
       return { ok: response.ok, error: response.error, changed: response.ok };
     });
+  };
+
+  // «Принять и распечатать»: тот же приём/guard/actor; печать только после
+  // подтверждённого успеха и по каноническим данным принятого заказа.
+  const doAcceptAndPrint = async () => {
+    const result = await run(async () => {
+      const response = await acceptOrder(order.id, prep, "RESTAURANT", "OPERATOR");
+      return { ok: response.ok, error: response.error, changed: response.ok };
+    });
+    if (result.ok) {
+      onRequestPrint(order.id);
+    }
   };
 
   return (
@@ -233,6 +248,14 @@ function OperatorAcceptPanel({
             onClick={doAccept}
           >
             {pending ? "Принимаем…" : "Принять"}
+          </button>
+          <button
+            className={`${kds.btn} ${kds.btnOutline}`}
+            type="button"
+            disabled={pending}
+            onClick={doAcceptAndPrint}
+          >
+            Принять и распечатать
           </button>
           <OperatorRejectPanel order={order} />
         </div>
@@ -728,7 +751,15 @@ function OperatorPreparingTiming({
   );
 }
 
-function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
+function OperatorOrderCard({
+  order,
+  nowMs,
+  onRequestPrint,
+}: {
+  order: Order;
+  nowMs: number;
+  onRequestPrint: (orderId: string) => void;
+}) {
   const { state } = usePrototype();
   const request = getCancellationRequestForOrder(state, order.id);
   // Просрочку считает тот же helper, что на кухне; вторую формулу не вводим.
@@ -769,7 +800,11 @@ function OperatorOrderCard({ order, nowMs }: { order: Order; nowMs: number }) {
         <OperatorPreparingTiming order={order} nowMs={nowMs} overdue={overdue} />
       ) : null}
       {order.status === "RESTAURANT_REVIEW" ? (
-        <OperatorAcceptPanel order={order} nowMs={nowMs} />
+        <OperatorAcceptPanel
+          order={order}
+          nowMs={nowMs}
+          onRequestPrint={onRequestPrint}
+        />
       ) : null}
       {order.status === "READY_FOR_PICKUP" ? (
         <OperatorPickupHandoff order={order} nowMs={nowMs} />
@@ -839,6 +874,16 @@ export default function RestaurantOperatorPage() {
     nowMs,
   });
 
+  // Печать производственного листа при принятии нового заказа (SPLIT-оператор).
+  // Хук на уровне страницы и до раннего return — печатает канонический принятый
+  // заказ. Вызывается всегда (правила хуков); requestPrint используется только на
+  // операторском board.
+  const operatorTimeZone = restaurant?.timeZone ?? "Europe/Chisinau";
+  const { requestPrint, printPortal } = useKitchenProductionTicketPrint(
+    state.orders,
+    operatorTimeZone,
+  );
+
   // До гидратации и при redirect не показываем операторский board даже коротко.
   if (!isHydrated || isCombined) {
     return (
@@ -872,6 +917,7 @@ export default function RestaurantOperatorPage() {
 
   return (
     <div className={kds.screen}>
+      {printPortal}
       <div className={kds.toolbar}>
         <div className={kds.toolbarLeft}>
           <span className={kds.brand}>Оператор заказов</span>
@@ -915,7 +961,7 @@ export default function RestaurantOperatorPage() {
               <div className={kds.empty}>Новых заказов нет.</div>
             ) : (
               waiting.map((order) => (
-                <OperatorOrderCard order={order} nowMs={nowMs} key={order.id} />
+                <OperatorOrderCard order={order} nowMs={nowMs} onRequestPrint={requestPrint} key={order.id} />
               ))
             )}
           </section>
@@ -928,7 +974,7 @@ export default function RestaurantOperatorPage() {
               <div className={kds.empty}>Сейчас ничего не готовится.</div>
             ) : (
               preparing.map((order) => (
-                <OperatorOrderCard order={order} nowMs={nowMs} key={order.id} />
+                <OperatorOrderCard order={order} nowMs={nowMs} onRequestPrint={requestPrint} key={order.id} />
               ))
             )}
           </section>
@@ -941,7 +987,7 @@ export default function RestaurantOperatorPage() {
               <div className={kds.empty}>Заказов на выдачу нет.</div>
             ) : (
               handoff.map((order) => (
-                <OperatorOrderCard order={order} nowMs={nowMs} key={order.id} />
+                <OperatorOrderCard order={order} nowMs={nowMs} onRequestPrint={requestPrint} key={order.id} />
               ))
             )}
           </section>

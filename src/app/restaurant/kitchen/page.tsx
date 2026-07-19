@@ -6,7 +6,7 @@ import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
-import { KitchenProductionTicketPrintButton } from "@/components/kitchen/kitchen-production-ticket-print";
+import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
 import { OperatorPackageLabelPrintButton } from "@/components/operator/operator-package-label-print";
 import {
   defaultPrep,
@@ -356,10 +356,12 @@ function NewOrderCard({
   order,
   nowMs,
   isSplit,
+  onRequestPrint,
 }: {
   order: Order;
   nowMs: number;
   isSplit: boolean;
+  onRequestPrint: (orderId: string) => void;
 }) {
   const { state, acceptOrder, rejectOrder } = usePrototype();
   // Приём и отклонение — взаимоисключающие решения по одному заказу, поэтому у
@@ -401,6 +403,28 @@ function NewOrderCard({
         changed: response.ok,
       };
     });
+  };
+
+  // «Принять и распечатать»: тот же приём и guard; печать открывается ТОЛЬКО
+  // после подтверждённого успеха и по каноническим данным принятого заказа. При
+  // ошибке приёма ничего не печатается.
+  const doAcceptAndPrint = async () => {
+    const result = await runDecision(async () => {
+      const response = await acceptOrder(
+        order.id,
+        prep,
+        "RESTAURANT",
+        "KITCHEN",
+      );
+      return {
+        ok: response.ok,
+        error: response.error,
+        changed: response.ok,
+      };
+    });
+    if (result.ok) {
+      onRequestPrint(order.id);
+    }
   };
 
   // Исправление 8: отклонение в COMBINED идёт через тот же guard; форма не
@@ -472,6 +496,14 @@ function NewOrderCard({
               onClick={doAccept}
             >
               {decisionPending ? "Принимаем…" : "Принять"}
+            </button>
+            <button
+              className={`${kds.btn} ${kds.btnOutline}`}
+              type="button"
+              disabled={decisionPending}
+              onClick={doAcceptAndPrint}
+            >
+              Принять и распечатать
             </button>
             {/* Этап 8: в SPLIT кухня не отклоняет заказ (это отмена — зона
                 оператора), а сообщает о проблеме приготовления. */}
@@ -641,7 +673,6 @@ function PreparingCard({
         >
           Изменить время
         </button>
-        <KitchenProductionTicketPrintButton order={order} timeZone={timeZone} />
       </div>
       {openProblem ? (
         <p className={kds.units} role="status">
@@ -1039,15 +1070,13 @@ function ReadyCard({
         Готов {formatElapsed(getOrderReadySince(order), nowMs)} назад
       </p>
       <div className={kds.btnRow}>
-        <KitchenProductionTicketPrintButton
+        {/* Пакетная наклейка — документ ГОТОВОГО пакета. Доступна и на общем
+            экране (COMBINED), и на кухне в SPLIT (роль KITCHEN). Производственного
+            листа здесь уже нет: он печатается при принятии нового заказа. */}
+        <OperatorPackageLabelPrintButton
           order={order}
-          timeZone={getRestaurant(state, order.restaurant.id)?.timeZone ?? "Europe/Chisinau"}
+          workspaceRole={isSplit ? "KITCHEN" : "COMBINED"}
         />
-        {/* Пакетная наклейка — только на общем экране COMBINED. В SPLIT KITCHEN
-            компонент не создаётся вовсе: кухня печатает лишь production ticket. */}
-        {!isSplit ? (
-          <OperatorPackageLabelPrintButton order={order} workspaceRole="COMBINED" />
-        ) : null}
       </div>
       {/* Этап 8: выдачу в SPLIT выполняет оператор — кухня без формы и кода. */}
       {isPickup && isSplit ? (
@@ -1114,8 +1143,18 @@ export default function RestaurantKitchenPage() {
     nowMs,
   });
 
+  // Печать производственного листа при принятии нового заказа (COMBINED). Хук на
+  // уровне страницы: печатает канонический принятый заказ, даже когда карточка
+  // «Нового» уже ушла из колонки.
+  const kitchenTimeZone = restaurant?.timeZone ?? "Europe/Chisinau";
+  const { requestPrint, printPortal } = useKitchenProductionTicketPrint(
+    state.orders,
+    kitchenTimeZone,
+  );
+
   return (
     <div className={kds.screen}>
+      {printPortal}
       <div className={kds.toolbar}>
         <div className={kds.toolbarLeft}>
           {/* В COMBINED экран ведёт заказ целиком, а не только готовит. */}
@@ -1205,7 +1244,13 @@ export default function RestaurantKitchenPage() {
                   <div className={kds.empty}>Новых заказов нет.</div>
                 ) : (
                   newOrders.map((order) => (
-                    <NewOrderCard order={order} nowMs={nowMs} isSplit={isSplit} key={order.id} />
+                    <NewOrderCard
+                      order={order}
+                      nowMs={nowMs}
+                      isSplit={isSplit}
+                      onRequestPrint={requestPrint}
+                      key={order.id}
+                    />
                   ))
                 )}
               </section>

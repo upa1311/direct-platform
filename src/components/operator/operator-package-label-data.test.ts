@@ -249,7 +249,7 @@ test("payment marker: оплачено → ОПЛАЧЕНО, остальное 
 
 // 7 --------------------------------------------------------------------------
 
-test("visibility helper: только OPERATOR/COMBINED и только готовый заказ", () => {
+test("visibility helper: OPERATOR/COMBINED/KITCHEN и только готовый заказ", () => {
   const base = acceptedOrder();
   const at = (status: OrderStatus, role: RestaurantWorkspaceRole) =>
     canPrintOperatorPackageLabel(
@@ -257,17 +257,14 @@ test("visibility helper: только OPERATOR/COMBINED и только гото
       role,
     );
 
-  assert.equal(at("READY", "OPERATOR"), true);
-  assert.equal(at("READY_FOR_PICKUP", "OPERATOR"), true);
-  assert.equal(at("READY", "COMBINED"), true);
-  assert.equal(at("READY_FOR_PICKUP", "COMBINED"), true);
-
-  // Кухня — никогда, при любом статусе.
-  for (const status of ["READY", "READY_FOR_PICKUP", "PREPARING"] as const) {
-    assert.equal(at(status, "KITCHEN"), false, `KITCHEN ${status}`);
+  // READY / READY_FOR_PICKUP доступны всем трём ролям (в SPLIT наклейку печатает
+  // и оператор, и кухня; в COMBINED — общий экран).
+  for (const role of ["OPERATOR", "COMBINED", "KITCHEN"] as const) {
+    assert.equal(at("READY", role), true, `READY ${role}`);
+    assert.equal(at("READY_FOR_PICKUP", role), true, `READY_FOR_PICKUP ${role}`);
   }
 
-  // До готовности и после выдачи/в доставке — нет.
+  // До готовности и после выдачи/в доставке — нет ни одной роли (включая KITCHEN).
   for (const status of [
     "RESTAURANT_REVIEW",
     "AWAITING_PAYMENT",
@@ -278,8 +275,9 @@ test("visibility helper: только OPERATOR/COMBINED и только гото
     "PICKED_UP",
     "CANCELED",
   ] as const) {
-    assert.equal(at(status, "OPERATOR"), false, `OPERATOR ${status}`);
-    assert.equal(at(status, "COMBINED"), false, `COMBINED ${status}`);
+    for (const role of ["OPERATOR", "COMBINED", "KITCHEN"] as const) {
+      assert.equal(at(status, role), false, `${role} ${status}`);
+    }
   }
 });
 

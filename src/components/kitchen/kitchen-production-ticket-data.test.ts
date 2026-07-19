@@ -80,7 +80,7 @@ test("тикет содержит номер, способ, ресторан, г
   assert.match(data.publicNumber, /^DIR-\d+$/);
   assert.equal(data.deliveryLabel, "САМОВЫВОЗ DIRECT");
   assert.equal(data.restaurantName, order.restaurant.name);
-  assert.match(data.readyLine, /^Ожидаемая готовность: /);
+  assert.match(data.readyLine, /^ОЖИДАЕМАЯ ГОТОВНОСТЬ: К /);
   assert.equal(data.preparationMinutes, 25);
   assert.equal(data.items.length, 1);
   assert.equal(data.items[0].quantity, 2);
@@ -187,7 +187,7 @@ test("в модели тикета нет запрещённых ключей", 
 
 // 5 --------------------------------------------------------------------------
 
-test("PREPARING: время в часовом поясе ресторана + первоначальная оценка", () => {
+test("PREPARING: нижняя рамка «ОЖИДАЕМАЯ ГОТОВНОСТЬ: К HH:MM» в поясе ресторана", () => {
   const base = acceptedOrder();
   const { order } = withOrder(base.state, base.order, {
     status: "PREPARING",
@@ -198,7 +198,7 @@ test("PREPARING: время в часовом поясе ресторана + п
   const data = buildKitchenProductionTicketData(order, TZ);
   assert.equal(
     data.readyLine,
-    `Ожидаемая готовность: ${formatClock24("2026-07-17T15:40:00.000Z", TZ)}`,
+    `ОЖИДАЕМАЯ ГОТОВНОСТЬ: К ${formatClock24("2026-07-17T15:40:00.000Z", TZ)}`,
   );
   assert.equal(data.preparationMinutes, 25);
   // Другой часовой пояс даёт другое отображаемое время.
@@ -206,10 +206,21 @@ test("PREPARING: время в часовом поясе ресторана + п
     getTicketReadyLine(order, "America/New_York"),
     getTicketReadyLine(order, TZ),
   );
+});
 
-  // Нет expectedReadyAt — явная подпись «не задана».
-  const noEta = withOrder(base.state, order, { expectedReadyAt: null }).order;
-  assert.equal(getTicketReadyLine(noEta, TZ), "Ожидаемая готовность: не задана");
+// 5b -------------------------------------------------------------------------
+
+test("AWAITING_PAYMENT без expectedReadyAt: рамка «ПРИГОТОВЛЕНИЕ ПОСЛЕ ОПЛАТЫ · N МИН»", () => {
+  const base = acceptedOrder("DELIVERY");
+  const { order } = withOrder(base.state, base.order, {
+    status: "AWAITING_PAYMENT",
+    expectedReadyAt: null,
+    preparationMinutes: 25,
+  });
+  const data = buildKitchenProductionTicketData(order, TZ);
+  assert.equal(data.readyLine, "ПРИГОТОВЛЕНИЕ ПОСЛЕ ОПЛАТЫ · 25 МИН");
+  // Никогда не выводим «не задана».
+  assert.ok(!data.readyLine.includes("не задана"));
 });
 
 // 6 --------------------------------------------------------------------------

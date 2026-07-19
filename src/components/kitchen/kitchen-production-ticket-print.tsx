@@ -1,16 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Printer } from "lucide-react";
 
 import type { Order } from "@/prototype/models";
 import { KitchenProductionTicket } from "./kitchen-production-ticket";
-import {
-  buildKitchenProductionTicketData,
-  type KitchenProductionTicketData,
-} from "./kitchen-production-ticket-data";
-import kds from "./kitchen.module.css";
+import { buildKitchenProductionTicketData } from "./kitchen-production-ticket-data";
 
 /** Устойчивый id корня печати; на него ссылается print CSS в globals.css. */
 const PRINT_ROOT_ID = "kitchen-production-print-root";
@@ -31,30 +26,37 @@ function ensurePrintRoot(): HTMLElement {
 }
 
 /**
- * Печать одного производственного тикета на весь заказ через штатный диалог
- * браузера. Тикет не содержит PII и финансов — модель это гарантирует.
+ * Печать производственного тикета при принятии заказа. Печать выполняется на
+ * уровне страницы (а не карточки, которая после принятия уходит из «Новых»),
+ * поэтому используются КАНОНИЧЕСКИЕ данные уже принятого заказа, а не устаревшее
+ * pre-accept состояние.
  *
- * Печать НЕ является бизнес-мутацией: доменных действий здесь нет, статус,
- * история, revision и финансы не меняются, счётчик печати не сохраняется.
- * Повторная печать — повторное нажатие той же кнопки.
- *
- * Порядок: локальный print state → реальный рендер portal → ровно один
- * window.print() (ref-guard от повторного вызова) → очистка по afterprint.
- * Отмена системного диалога тоже приводит к afterprint и ничего не меняет.
+ * `requestPrint(orderId)` ставит заказ в очередь на печать. Тикет строится ТОЛЬКО
+ * когда этот заказ в актуальном state перешёл из RESTAURANT_REVIEW (успешно
+ * принят); при неуспешном/отсутствующем приёме тикета и печати нет. Ровно один
+ * window.print() на запрос (ref-guard); отмена диалога приводит к afterprint и
+ * ничего не меняет. Печать НЕ бизнес-мутация: статус, история, revision и финансы
+ * не трогаются. setState вызывается только в обработчиках событий, не в effect.
  */
-export function KitchenProductionTicketPrintButton({
-  order,
-  timeZone,
-}: {
-  order: Order;
-  timeZone: string;
-}) {
-  const [ticket, setTicket] = useState<KitchenProductionTicketData | null>(null);
+export function useKitchenProductionTicketPrint(
+  orders: readonly Order[],
+  timeZone: string,
+): { requestPrint: (orderId: string) => void; printPortal: ReactNode } {
+  const [pendingId, setPendingId] = useState<string | null>(null);
   const [printRoot, setPrintRoot] = useState<HTMLElement | null>(null);
   const printedRef = useRef(false);
 
-  // Печатаем только когда тикет уже в DOM: effect выполняется после коммита
-  // portal, поэтому window.print() не может напечатать пустой или прошлый заказ.
+  // Каноническое принятое состояние: тикет строим в фазе render (без setState),
+  // только когда заказ уже НЕ в review.
+  const pendingOrder = pendingId
+    ? orders.find((order) => order.id === pendingId)
+    : undefined;
+  const ticket =
+    pendingOrder && pendingOrder.status !== "RESTAURANT_REVIEW"
+      ? buildKitchenProductionTicketData(pendingOrder, timeZone)
+      : null;
+
+  // Печатаем ровно один раз, когда тикет уже в DOM. Ref-guard, без setState.
   useEffect(() => {
     if (!ticket || !printRoot || printedRef.current) return;
     printedRef.current = true;
@@ -66,36 +68,22 @@ export function KitchenProductionTicketPrintButton({
     const handleAfterPrint = () => {
       document.body.removeAttribute(PRINT_MARKER);
       printedRef.current = false;
-      setTicket(null);
+      setPendingId(null);
     };
     window.addEventListener("afterprint", handleAfterPrint);
     return () => window.removeEventListener("afterprint", handleAfterPrint);
   }, []);
 
-  // Если карточка исчезла прямо во время печати — маркер не должен остаться.
-  useEffect(() => {
-    return () => {
-      if (printedRef.current) document.body.removeAttribute(PRINT_MARKER);
-    };
-  }, []);
+  // Корень печати и запрос ставятся в обработчике события (не в effect).
+  const requestPrint = (orderId: string) => {
+    setPrintRoot(ensurePrintRoot());
+    setPendingId(orderId);
+  };
 
-  return (
-    <>
-      <button
-        className={`${kds.btn} ${kds.btnOutline} ${kds.printLabelButton}`}
-        type="button"
-        aria-label={`Печать кухонного заказа ${order.publicNumber}`}
-        onClick={() => {
-          setPrintRoot(ensurePrintRoot());
-          setTicket(buildKitchenProductionTicketData(order, timeZone));
-        }}
-      >
-        <Printer size={16} aria-hidden="true" />
-        Печать заказа
-      </button>
-      {ticket && printRoot
-        ? createPortal(<KitchenProductionTicket data={ticket} />, printRoot)
-        : null}
-    </>
-  );
+  const printPortal =
+    ticket && printRoot
+      ? createPortal(<KitchenProductionTicket data={ticket} />, printRoot)
+      : null;
+
+  return { requestPrint, printPortal };
 }

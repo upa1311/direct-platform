@@ -64,14 +64,20 @@ export function getPackagePaymentLabel(order: Order): string {
 
 /**
  * Единый источник видимости пакетной наклейки (presentation-level, не domain:
- * печать не бизнес-мутация). Разрешена только оператору и общему экрану и только
- * для готового заказа. Кухне (в т.ч. SPLIT KITCHEN) — никогда.
+ * печать не бизнес-мутация). Наклейка — документ ГОТОВОГО пакета, поэтому доступна
+ * только для READY / READY_FOR_PICKUP. Роли OPERATOR, COMBINED и KITCHEN печатают
+ * её на готовом заказе (в SPLIT наклейку печатает и оператор, и кухня). До
+ * готовности (новый заказ, AWAITING_PAYMENT, PREPARING) — недоступна ни одной роли.
  */
 export function canPrintOperatorPackageLabel(
   order: Order,
   workspaceRole: RestaurantWorkspaceRole,
 ): boolean {
-  if (workspaceRole !== "OPERATOR" && workspaceRole !== "COMBINED") {
+  if (
+    workspaceRole !== "OPERATOR" &&
+    workspaceRole !== "COMBINED" &&
+    workspaceRole !== "KITCHEN"
+  ) {
     return false;
   }
   return order.status === "READY" || order.status === "READY_FOR_PICKUP";

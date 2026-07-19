@@ -39,38 +39,49 @@
   overflow-wrap: anywhere;
 }
 
-/* Номер заказа — самый крупный элемент тикета. */
-.number {
+/* Строка номера: небольшая подпись + крупный номер (номер хорошо сканируется). */
+.numberRow {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 1mm 2mm;
   margin: 1mm 0 2mm;
-  font-size: 30px;
+}
+
+.numberLabel {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.number {
+  font-size: 26px;
   font-weight: 800;
   line-height: 1.05;
   letter-spacing: -0.02em;
   overflow-wrap: anywhere;
 }
 
-/* Ресторан — обычный читаемый текст. */
-.line {
-  font-size: 13px;
-  overflow-wrap: anywhere;
+/* Первоначальная оценка — компактная строка над рамкой готовности. */
+.estimate {
+  margin-top: 1mm;
+  font-size: 12px;
+  font-weight: 600;
 }
 
-/* Готовность — заметная строка с чёрной рамкой. */
-.ready {
-  margin: 2mm 0 1mm;
-  padding: 1mm;
-  border: 1.5px solid #000;
-  font-size: 15px;
+/*
+ * Нижняя рамка готовности — последний элемент тикета: крупный жирный текст в
+ * заметной сплошной рамке по центру. Рамку не разрываем между страницами.
+ */
+.readyFrame {
+  margin-top: 3mm;
+  padding: 2mm;
+  border: 2px solid #000;
+  font-size: 17px;
   font-weight: 800;
   text-align: center;
   overflow-wrap: anywhere;
-}
-
-/* Первоначальная оценка — компактная строка под готовностью. */
-.estimate {
-  margin-bottom: 1mm;
-  font-size: 12px;
-  font-weight: 600;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
 .items {
