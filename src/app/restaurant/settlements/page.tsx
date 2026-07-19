@@ -541,20 +541,30 @@ function DayCard({
         ) : null}
       </button>
 
-      <div className={styles.dayMetrics}>
-        <DayMetric label="Завершённые заказы" value={String(day.completedOrderCount)} />
-        <DayMetric label="Стоимость заказов" value={money(day.customerTotalCents)} />
-        <DayMetric label="Продажи блюд" value={money(day.foodSubtotalCents)} />
-        <DayMetric label="Чисто ресторану" value={money(day.restaurantNetCents)} />
-        <DayMetric label="Собрано рестораном" value={money(day.restaurantCollectedFromCustomerCents)} />
-        <DayMetric label="Собрано Direct" value={money(day.platformCollectedFromCustomerCents)} />
-        <DayMetric label="Комиссия Direct" value={money(day.platformCommissionReceivableCents)} />
-        <DayMetric
-          label="Ожидает расчёта по журналу комиссий"
-          value={money(day.pendingLedgerCents)}
-        />
-        <DayMetric label="Требуют внимания" value={String(day.paidCanceledCount)} />
+      {/* Основные показатели дня: четыре главных значения, всегда видимы. */}
+      <div className={styles.summaryGrid}>
+        <SummaryCard label="Заказов" value={String(day.completedOrderCount)} />
+        <SummaryCard label="Продажи блюд" value={money(day.foodSubtotalCents)} />
+        <SummaryCard label="Ресторану после комиссии" value={money(day.restaurantNetCents)} />
+        <SummaryCard label="Комиссия Direct" value={money(day.platformCommissionReceivableCents)} />
       </div>
+
+      {/* Остальные показатели дня скрыты по умолчанию (нативный details). */}
+      <details className={styles.reconDetails}>
+        <summary className={styles.reconSummary}>Подробности дня</summary>
+        <div className={styles.reconDetailsBody}>
+          <div className={styles.summaryGrid}>
+            <SummaryCard label="Стоимость заказов" value={money(day.customerTotalCents)} />
+            <SummaryCard label="Собрано рестораном с клиентов" value={money(day.restaurantCollectedFromCustomerCents)} />
+            <SummaryCard label="Собрано Direct с клиентов" value={money(day.platformCollectedFromCustomerCents)} />
+            <SummaryCard
+              label="Ожидает расчёта по журналу комиссий"
+              value={money(day.pendingLedgerCents)}
+            />
+            <SummaryCard label="Требуют внимания" value={String(day.paidCanceledCount)} />
+          </div>
+        </div>
+      </details>
 
       {open && hasOrders ? (
         <div className={`${styles.tableScroll} ${styles.dayOrders}`}>
@@ -588,15 +598,6 @@ function DayCard({
           </table>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function DayMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className={styles.dayMetric}>
-      <span className={styles.dayMetricLabel}>{label}</span>
-      <span className={styles.dayMetricValue}>{value}</span>
     </div>
   );
 }
