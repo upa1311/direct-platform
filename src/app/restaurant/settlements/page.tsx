@@ -42,6 +42,7 @@ import {
   type RestaurantStatementResolutionViewRow,
   type RestaurantStatementViewResult,
 } from "@/prototype/restaurant-statement-view";
+import { describeOpenPosition } from "./open-position";
 import { defaultStatementRange } from "./statement-range";
 import {
   visibleStatementSnapshot,
@@ -165,6 +166,9 @@ export default function RestaurantSettlementsPage() {
 
   const money = (cents: number) =>
     formatMoney(cents, overview?.currencyCode ?? "USD");
+
+  // Однозначный результат открытой позиции (интерпретация готового net).
+  const positionMain = position ? describeOpenPosition(position, money) : null;
 
   return (
     <div className={`${kds.screen} direct-print-root`}>
@@ -303,42 +307,54 @@ export default function RestaurantSettlementsPage() {
           {/* Взаимные обязательства — открытая позиция за всё время (не зависит
               от переключателя периода). Показывается только в представлении
               «Обязательства»; отчёты по заказам/дням и выписка её не показывают. */}
-          {isObligations && position ? (
+          {isObligations && position && positionMain ? (
             <>
               <h2 className={styles.sectionTitle}>
                 Взаимные обязательства · за всё время
               </h2>
-              <div className={styles.summaryGrid}>
-                <SummaryCard
-                  label="Ресторан должен Direct"
-                  value={money(position.receivable)}
-                />
-                <SummaryCard
-                  label="Direct должен ресторану"
-                  value={money(position.payable)}
-                />
-                <SummaryCard
-                  label="Чистая позиция"
-                  value={money(position.net)}
-                  hint={
-                    position.net > 0
-                      ? "Direct должен ресторану."
-                      : position.net < 0
-                        ? "Ресторан должен Direct."
-                        : "Открытые обязательства взаимно равны."
-                  }
-                />
+              {/* Один крупный однозначный результат вместо трёх карточек и знака
+                  «Чистой позиции». Значение всегда положительное (или 0). */}
+              <div className={styles.positionMain}>
+                <span className={styles.positionMainLabel}>
+                  {positionMain.label}
+                </span>
+                <span className={styles.positionMainValue}>
+                  {positionMain.value}
+                </span>
               </div>
               <div className={styles.info}>
                 <p>
-                  Эти суммы показывают все открытые обязательства и не зависят от
-                  выбранного периода отчёта.
-                </p>
-                <p>
-                  Чистая позиция — информационная разница открытых обязательств.
-                  Автоматический взаимозачёт и фактическая выплата не выполняются.
+                  Это разница открытых обязательств. Автоматический взаимозачёт и
+                  банковская выплата не выполняются.
                 </p>
               </div>
+
+              {/* Исходные суммы за всё время скрыты по умолчанию (нативный details). */}
+              <details className={styles.reconDetails}>
+                <summary className={styles.reconSummary}>Показать расчёт</summary>
+                <div className={styles.reconDetailsBody}>
+                  <div className={styles.summaryGrid}>
+                    <SummaryCard
+                      label="Ресторан должен Direct"
+                      value={money(position.receivable)}
+                    />
+                    <SummaryCard
+                      label="Direct должен ресторану"
+                      value={money(position.payable)}
+                    />
+                  </div>
+                  <div className={styles.info}>
+                    <p>
+                      Эти суммы показывают все открытые обязательства за всё время
+                      и не зависят от выбранного периода отчёта.
+                    </p>
+                    <p>
+                      Автоматический взаимозачёт и фактическая выплата не
+                      выполняются.
+                    </p>
+                  </div>
+                </div>
+              </details>
             </>
           ) : null}
 

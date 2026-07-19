@@ -100,6 +100,28 @@
   margin: 4px 0 0;
 }
 
+/* Главный результат открытой позиции — заметнее двух исходных карточек. */
+.positionMain {
+  border: 1px solid var(--kds-border, #d0d5dd);
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.positionMainLabel {
+  font-size: 14px;
+  opacity: 0.72;
+  overflow-wrap: anywhere;
+}
+
+.positionMainValue {
+  font-size: 28px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 /* «Подробности сверки»: только курсор summary и отступ до раскрытых карточек. */
 .reconSummary {
   cursor: pointer;
