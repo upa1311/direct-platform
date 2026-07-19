@@ -583,7 +583,9 @@ function MenuAvailabilityRow({
   return (
     <div className={`${styles.menuRow} ${available ? "" : styles.menuRowOff}`}>
       <div className={styles.menuName}>{item.name}</div>
-      <div className={styles.menuCategory}>{item.category}</div>
+      {/* Категория необязательна: во внутреннем списке показываем понятную
+          подпись вместо пустоты. */}
+      <div className={styles.menuCategory}>{item.category ?? "Без категории"}</div>
       <div className={styles.menuStatus}>
         <span
           className={`${styles.dot} ${available ? styles.statusOk : styles.statusOff}`}
@@ -672,8 +674,17 @@ export function MenuAvailabilitySection({
   const [bulkError, setBulkError] = useState<string | null>(null);
 
   const menu = getRestaurantMenu(state, restaurant.id);
+  // Категория необязательна: блюда без категории в список фильтра не попадают
+  // (и уж точно не как строка «null»).
   const categories = useMemo(
-    () => Array.from(new Set(menu.map((m) => m.category))),
+    () =>
+      Array.from(
+        new Set(
+          menu
+            .map((m) => m.category)
+            .filter((value): value is string => value !== null),
+        ),
+      ),
     [menu],
   );
 
@@ -691,7 +702,14 @@ export function MenuAvailabilitySection({
         const av = isMenuItemAvailableAt(a, nowMs) ? 1 : 0;
         const bv = isMenuItemAvailableAt(b, nowMs) ? 1 : 0;
         if (av !== bv) return av - bv; // недоступные (0) сверху
-        if (a.category !== b.category) return a.category.localeCompare(b.category);
+        // Блюда без категории идут последними и не ломают сортировку.
+        const ac = a.category ?? "";
+        const bc = b.category ?? "";
+        if (ac !== bc) {
+          if (!ac) return 1;
+          if (!bc) return -1;
+          return ac.localeCompare(bc);
+        }
         return a.name.localeCompare(b.name);
       });
   }, [menu, search, category, statusFilter, nowMs]);

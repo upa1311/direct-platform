@@ -14,7 +14,11 @@ import type {
   DriverProfile,
   DriverStatus,
   FulfillmentChoice,
+  MenuItemSubmission,
+  MenuItemSubmissionStatus,
+  MenuItemSubmissionVariant,
   MenuItemVariant,
+  MenuPortion,
   OperationalActor,
   OperationalEvent,
   OperationalEventAction,
@@ -80,6 +84,13 @@ import {
   type EtaAdjustmentIntent,
 } from "./order-eta";
 import { finalizeMutation } from "./prototype-store";
+import {
+  buildPublishedMenuItemFromSubmission,
+  effectiveMenuItemVariantPortion,
+  normalizeOptionalCategory,
+  validateMenuItemSubmission,
+  validateMenuItemSubmissionDraft,
+} from "./menu-catalog";
 import { computeCompletedOrderAccountingEntries } from "./restaurant-accounting";
 
 export interface ActionResult<T> {
@@ -518,6 +529,13 @@ export function createOrderFromCart(
     finalLineTotalCents: view.lineTotalCents - view.promotionDiscountCents,
     currencyCode: view.menuItem.currencyCode,
     cookingComment: view.cartItem.cookingComment,
+    // Канонический снимок порции: порция выбранного варианта важнее базовой,
+    // иначе базовая порция блюда, иначе порции нет. Будущее изменение
+    // граммовки в меню уже оформленный заказ не меняет.
+    portionSnapshot: effectiveMenuItemVariantPortion(
+      view.menuItem.portion ?? null,
+      view.variant?.portion ?? null,
+    ),
     unitPriceCents: view.finalUnitPriceCents,
     lineTotalCents: view.lineTotalCents - view.promotionDiscountCents,
   }));
@@ -4723,4 +4741,418 @@ export function setPromotionEnabled(
 
 export function resetPrototypeState(state: PrototypeState): PrototypeState {
   return finalizeMutation(state, createDefaultState());
+}
+
+/* --- Каталог блюд: заявки ресторана и модерация Direct --------------------- */
+
+export interface MenuItemSubmissionResult {
+  ok: boolean;
+  error: string | null;
+  /** id заявки (для create — вновь созданной); при ошибке null. */
+  submissionId: string | null;
+}
+
+/** Поля черновика, которые ресторан может изменить. */
+export interface MenuItemSubmissionDraftPatch {
+  name?: string;
+  description?: string;
+  priceCents?: number | null;
+  category?: string | null;
+  imageMediaId?: string | null;
+  portion?: MenuPortion | null;
+  variants?: MenuItemSubmissionVariant[];
+}
+
+/** Статусы заявки, в которых ресторан ещё может её править. */
+const EDITABLE_SUBMISSION_STATUSES: readonly MenuItemSubmissionStatus[] = [
+  "DRAFT",
+  "REJECTED",
+];
+
+function submissionFail(
+  state: PrototypeState,
+  error: string,
+): ActionResult<MenuItemSubmissionResult> {
+  return { state, result: { ok: false, error, submissionId: null } };
+}
+
+/** Свободный id заявки: детерминированный, без коллизий с существующими. */
+function nextSubmissionId(state: PrototypeState): string {
+  let index = state.menuItemSubmissions.length + 1;
+  let id = `menu-submission-${index}`;
+  while (state.menuItemSubmissions.some((s) => s.id === id)) {
+    index += 1;
+    id = `menu-submission-${index}`;
+  }
+  return id;
+}
+
+/**
+ * Право вести каталог блюд: только ресторан и только роль, которой это
+ * разрешено матрицей (COMBINED и кухня в SPLIT). ADMIN ресторанный черновик не
+ * создаёт — у него отдельные действия review.
+ */
+function canManageMenuCatalog(
+  state: PrototypeState,
+  restaurantId: string,
+  actor: OrderActionActor,
+  workspaceRole?: RestaurantWorkspaceRole,
+): boolean {
+  if (actor !== "RESTAURANT") return false;
+  return checkRestaurantWorkspaceForRestaurant(
+    state,
+    restaurantId,
+    "RESTAURANT",
+    "MANAGE_MENU_CATALOG",
+    workspaceRole,
+  );
+}
+
+/** Нормализованная необязательная media-ссылка. */
+function normalizeMediaId(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function replaceSubmission(
+  state: PrototypeState,
+  submissionId: string,
+  update: (submission: MenuItemSubmission) => MenuItemSubmission,
+  timestamp: string,
+): PrototypeState {
+  return finalizeMutation(
+    state,
+    {
+      ...state,
+      menuItemSubmissions: state.menuItemSubmissions.map((submission) =>
+        submission.id === submissionId ? update(submission) : submission,
+      ),
+    },
+    timestamp,
+  );
+}
+
+/**
+ * Создаёт пустой черновик нового блюда. Опубликованное меню не меняется: до
+ * одобрения Direct блюда в menuItems физически нет.
+ */
+export function createMenuItemSubmissionDraft(
+  state: PrototypeState,
+  restaurantId: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+  nowIso: string = new Date().toISOString(),
+): ActionResult<MenuItemSubmissionResult> {
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return submissionFail(state, "Некорректное время операции.");
+  }
+  if (!state.restaurants.some((r) => r.id === restaurantId)) {
+    return submissionFail(state, "Ресторан не найден.");
+  }
+  if (!canManageMenuCatalog(state, restaurantId, actor, workspaceRole)) {
+    return submissionFail(state, "Недостаточно прав для работы с каталогом блюд.");
+  }
+
+  const submission: MenuItemSubmission = {
+    id: nextSubmissionId(state),
+    restaurantId,
+    status: "DRAFT",
+    name: "",
+    description: "",
+    priceCents: null,
+    currencyCode: state.platformSettings.currencyCode,
+    category: null,
+    imageMediaId: null,
+    portion: null,
+    variants: [],
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    submittedAt: null,
+    reviewedAt: null,
+    reviewedBy: null,
+    rejectionReason: null,
+    publishedMenuItemId: null,
+    reviewHistory: [],
+  };
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      menuItemSubmissions: [...state.menuItemSubmissions, submission],
+    },
+    nowIso,
+  );
+  return {
+    state: nextState,
+    result: { ok: true, error: null, submissionId: submission.id },
+  };
+}
+
+/**
+ * Правка черновика (или отклонённой заявки) рестораном-владельцем. Нормализует
+ * строки и проверяет структуру; полная валидация — при отправке. Опубликованный
+ * MenuItem не создаётся.
+ */
+export function updateMenuItemSubmissionDraft(
+  state: PrototypeState,
+  submissionId: string,
+  patch: MenuItemSubmissionDraftPatch,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+  nowIso: string = new Date().toISOString(),
+): ActionResult<MenuItemSubmissionResult> {
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return submissionFail(state, "Некорректное время операции.");
+  }
+  const current = state.menuItemSubmissions.find((s) => s.id === submissionId);
+  if (!current) {
+    return submissionFail(state, "Заявка не найдена.");
+  }
+  if (!canManageMenuCatalog(state, current.restaurantId, actor, workspaceRole)) {
+    return submissionFail(state, "Недостаточно прав для работы с каталогом блюд.");
+  }
+  if (!EDITABLE_SUBMISSION_STATUSES.includes(current.status)) {
+    return submissionFail(
+      state,
+      "Заявку на проверке или уже одобренную изменить нельзя.",
+    );
+  }
+
+  const candidate: MenuItemSubmission = {
+    ...current,
+    name: patch.name !== undefined ? patch.name.trim() : current.name,
+    description:
+      patch.description !== undefined
+        ? patch.description.trim()
+        : current.description,
+    priceCents:
+      patch.priceCents !== undefined ? patch.priceCents : current.priceCents,
+    category:
+      patch.category !== undefined
+        ? normalizeOptionalCategory(patch.category)
+        : current.category,
+    imageMediaId:
+      patch.imageMediaId !== undefined
+        ? normalizeMediaId(patch.imageMediaId)
+        : current.imageMediaId,
+    portion: patch.portion !== undefined ? patch.portion : current.portion,
+    variants:
+      patch.variants !== undefined
+        ? patch.variants.map((variant) => ({
+            ...variant,
+            name: variant.name.trim(),
+            isDefault: variant.isDefault === true,
+            portion: variant.portion ?? null,
+          }))
+        : current.variants,
+    updatedAt: nowIso,
+  };
+
+  const draftError = validateMenuItemSubmissionDraft(candidate);
+  if (draftError !== null) {
+    return submissionFail(state, draftError);
+  }
+
+  const nextState = replaceSubmission(
+    state,
+    submissionId,
+    () => candidate,
+    nowIso,
+  );
+  return { state: nextState, result: { ok: true, error: null, submissionId } };
+}
+
+/**
+ * Отправка заявки на модерацию Direct. Полная валидация; при успехе статус
+ * становится PENDING_REVIEW, а опубликованное меню не меняется. Повторная
+ * отправка отклонённой заявки очищает прошлый вердикт: причина отклонения
+ * переезжает в reviewHistory, чтобы заявка на проверке не выглядела отклонённой.
+ */
+export function submitMenuItemSubmission(
+  state: PrototypeState,
+  submissionId: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+  nowIso: string = new Date().toISOString(),
+): ActionResult<MenuItemSubmissionResult> {
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return submissionFail(state, "Некорректное время операции.");
+  }
+  const current = state.menuItemSubmissions.find((s) => s.id === submissionId);
+  if (!current) {
+    return submissionFail(state, "Заявка не найдена.");
+  }
+  if (!canManageMenuCatalog(state, current.restaurantId, actor, workspaceRole)) {
+    return submissionFail(state, "Недостаточно прав для работы с каталогом блюд.");
+  }
+  if (!EDITABLE_SUBMISSION_STATUSES.includes(current.status)) {
+    return submissionFail(state, "Заявка уже отправлена или обработана.");
+  }
+
+  const validationError = validateMenuItemSubmission(current);
+  if (validationError !== null) {
+    return submissionFail(state, validationError);
+  }
+
+  const nextState = replaceSubmission(
+    state,
+    submissionId,
+    (submission) => ({
+      ...submission,
+      status: "PENDING_REVIEW",
+      submittedAt: nowIso,
+      updatedAt: nowIso,
+      // Прошлый вердикт больше не действует.
+      reviewedAt: null,
+      reviewedBy: null,
+      rejectionReason: null,
+      publishedMenuItemId: null,
+      reviewHistory: [
+        ...submission.reviewHistory,
+        {
+          id: `${submission.id}-review-${submission.reviewHistory.length + 1}`,
+          occurredAt: nowIso,
+          action: "SUBMITTED",
+          by: "RESTAURANT",
+          reason: null,
+        },
+      ],
+    }),
+    nowIso,
+  );
+  return { state: nextState, result: { ok: true, error: null, submissionId } };
+}
+
+/**
+ * Одобрение заявки администратором Direct. Атомарно: заявка ещё раз валидируется,
+ * создаётся ровно один опубликованный MenuItem (доступный, без паузы), статус
+ * становится APPROVED и запоминается publishedMenuItemId. Повторный approve
+ * невозможен — заявка уже не PENDING_REVIEW.
+ */
+export function approveMenuItemSubmission(
+  state: PrototypeState,
+  submissionId: string,
+  actor: OrderActionActor = "ADMIN",
+  nowIso: string = new Date().toISOString(),
+): ActionResult<MenuItemSubmissionResult> {
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return submissionFail(state, "Некорректное время операции.");
+  }
+  if (actor !== "ADMIN") {
+    return submissionFail(state, "Одобрить заявку может только Direct.");
+  }
+  const current = state.menuItemSubmissions.find((s) => s.id === submissionId);
+  if (!current) {
+    return submissionFail(state, "Заявка не найдена.");
+  }
+  if (current.status !== "PENDING_REVIEW") {
+    return submissionFail(state, "Заявка не находится на проверке.");
+  }
+
+  const validationError = validateMenuItemSubmission(current);
+  if (validationError !== null) {
+    return submissionFail(state, validationError);
+  }
+
+  const menuItemId = `menu-item-${current.id}`;
+  if (state.menuItems.some((item) => item.id === menuItemId)) {
+    return submissionFail(state, "Блюдо по этой заявке уже опубликовано.");
+  }
+
+  const publishedItem = buildPublishedMenuItemFromSubmission(
+    current,
+    menuItemId,
+  );
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      menuItems: [...state.menuItems, publishedItem],
+      menuItemSubmissions: state.menuItemSubmissions.map((submission) =>
+        submission.id === submissionId
+          ? {
+              ...submission,
+              status: "APPROVED" as MenuItemSubmissionStatus,
+              reviewedAt: nowIso,
+              reviewedBy: "ADMIN" as const,
+              rejectionReason: null,
+              publishedMenuItemId: menuItemId,
+              updatedAt: nowIso,
+              reviewHistory: [
+                ...submission.reviewHistory,
+                {
+                  id: `${submission.id}-review-${submission.reviewHistory.length + 1}`,
+                  occurredAt: nowIso,
+                  action: "APPROVED" as const,
+                  by: "ADMIN" as const,
+                  reason: null,
+                },
+              ],
+            }
+          : submission,
+      ),
+    },
+    nowIso,
+  );
+  return { state: nextState, result: { ok: true, error: null, submissionId } };
+}
+
+/**
+ * Отклонение заявки администратором Direct с обязательной причиной. Меню не
+ * меняется, publishedMenuItemId остаётся null; ресторан может отредактировать
+ * заявку и отправить её снова.
+ */
+export function rejectMenuItemSubmission(
+  state: PrototypeState,
+  submissionId: string,
+  reason: string,
+  actor: OrderActionActor = "ADMIN",
+  nowIso: string = new Date().toISOString(),
+): ActionResult<MenuItemSubmissionResult> {
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return submissionFail(state, "Некорректное время операции.");
+  }
+  if (actor !== "ADMIN") {
+    return submissionFail(state, "Отклонить заявку может только Direct.");
+  }
+  const current = state.menuItemSubmissions.find((s) => s.id === submissionId);
+  if (!current) {
+    return submissionFail(state, "Заявка не найдена.");
+  }
+  if (current.status !== "PENDING_REVIEW") {
+    return submissionFail(state, "Заявка не находится на проверке.");
+  }
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) {
+    return submissionFail(state, "Укажите причину отклонения.");
+  }
+
+  const nextState = replaceSubmission(
+    state,
+    submissionId,
+    (submission) => ({
+      ...submission,
+      status: "REJECTED",
+      reviewedAt: nowIso,
+      reviewedBy: "ADMIN",
+      rejectionReason: normalizedReason,
+      publishedMenuItemId: null,
+      updatedAt: nowIso,
+      reviewHistory: [
+        ...submission.reviewHistory,
+        {
+          id: `${submission.id}-review-${submission.reviewHistory.length + 1}`,
+          occurredAt: nowIso,
+          action: "REJECTED",
+          by: "ADMIN",
+          reason: normalizedReason,
+        },
+      ],
+    }),
+    nowIso,
+  );
+  return { state: nextState, result: { ok: true, error: null, submissionId } };
 }

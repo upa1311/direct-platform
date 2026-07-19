@@ -5,12 +5,21 @@ import {
   type DaySchedule,
   type DeliveryMode,
   type FinancialSnapshot,
+  type MenuItemSubmission,
+  type MenuItemSubmissionReviewEntry,
+  type MenuItemSubmissionVariant,
+  type MenuItemVariant,
+  type MenuPortion,
   type Order,
   type OrderItemSnapshot,
   type PrototypeState,
   type RestaurantDeliveryProvider,
   type WeeklySchedule,
 } from "./models";
+import {
+  normalizeOptionalCategory,
+  validateMenuPortion,
+} from "./menu-catalog";
 import {
   createAlwaysOpenDemoSchedule,
   createDefaultState,
@@ -108,6 +117,21 @@ function providerForMode(mode: DeliveryMode): RestaurantDeliveryProvider {
 }
 
 /** Заполняет недостающие поля снимка позиции нейтральными значениями. */
+/**
+ * Структурированная порция из сохранённого состояния. Некорректные и legacy
+ * значения (в т.ч. свободные строки вроде «350 грамм») превращаются в null —
+ * источником истины остаётся только валидная пара value/unit.
+ */
+function normalizeMenuPortion(value: unknown): MenuPortion | null {
+  if (!isRecord(value)) return null;
+  const unit = value.unit;
+  if (unit !== "G" && unit !== "ML" && unit !== "PCS" && unit !== "CM") {
+    return null;
+  }
+  const portion: MenuPortion = { value: num(value.value, 0), unit };
+  return validateMenuPortion(portion) === null ? portion : null;
+}
+
 function normalizeOrderItem(value: unknown): OrderItemSnapshot {
   const raw = isRecord(value) ? value : {};
   const unitPriceCents = num(raw.unitPriceCents, num(raw.finalUnitPriceCents, 0));
@@ -138,6 +162,8 @@ function normalizeOrderItem(value: unknown): OrderItemSnapshot {
     finalLineTotalCents: num(raw.finalLineTotalCents, lineTotalCents),
     currencyCode: "USD",
     cookingComment: str(raw.cookingComment, ""),
+    // Старые заказы снимка порции не имеют — остаются с null и не меняются.
+    portionSnapshot: normalizeMenuPortion(raw.portionSnapshot),
     unitPriceCents,
     lineTotalCents,
   };
@@ -495,10 +521,104 @@ function normalizeMenuItem(
   value: unknown,
 ): PrototypeState["menuItems"][number] {
   const raw = isRecord(value) ? value : {};
+  const item = raw as unknown as PrototypeState["menuItems"][number];
+  // Варианты старых блюд не имеют порции — получают null, остальное как есть.
+  const variants = Array.isArray(raw.variants)
+    ? (raw.variants as MenuItemVariant[]).map((variant) => ({
+        ...variant,
+        portion: normalizeMenuPortion(
+          (variant as unknown as Record<string, unknown>).portion,
+        ),
+      }))
+    : undefined;
   return {
-    ...(raw as unknown as PrototypeState["menuItems"][number]),
+    ...item,
     // Старое available сохраняется как есть (в т.ч. ручная недоступность false).
     availabilityPause: normalizeOperationalPause(raw.availabilityPause),
+    // Категория необязательна: пустая строка и пробелы — это «без категории».
+    category: normalizeOptionalCategory(raw.category),
+    // Старые блюда не имеют фотографии и порции.
+    imageMediaId:
+      typeof raw.imageMediaId === "string" && raw.imageMediaId.trim()
+        ? raw.imageMediaId.trim()
+        : null,
+    portion: normalizeMenuPortion(raw.portion),
+    ...(variants ? { variants } : {}),
+  };
+}
+
+/** Один вариант заявки из сохранённого состояния. */
+function normalizeSubmissionVariant(
+  value: unknown,
+): MenuItemSubmissionVariant {
+  const raw = isRecord(value) ? value : {};
+  return {
+    id: str(raw.id, ""),
+    name: str(raw.name, ""),
+    priceDeltaCents: num(raw.priceDeltaCents, 0),
+    isDefault: raw.isDefault === true,
+    portion: normalizeMenuPortion(raw.portion),
+  };
+}
+
+/** Запись истории решений по заявке. */
+function normalizeSubmissionReviewEntry(
+  value: unknown,
+): MenuItemSubmissionReviewEntry {
+  const raw = isRecord(value) ? value : {};
+  const action = raw.action;
+  return {
+    id: str(raw.id, ""),
+    occurredAt: str(raw.occurredAt, new Date(0).toISOString()),
+    action:
+      action === "APPROVED" || action === "REJECTED" || action === "SUBMITTED"
+        ? action
+        : "SUBMITTED",
+    by: raw.by === "ADMIN" ? "ADMIN" : "RESTAURANT",
+    reason: typeof raw.reason === "string" ? raw.reason : null,
+  };
+}
+
+/** Заявка на новое блюдо из сохранённого состояния. */
+function normalizeMenuItemSubmission(value: unknown): MenuItemSubmission {
+  const raw = isRecord(value) ? value : {};
+  const status = raw.status;
+  return {
+    id: str(raw.id, ""),
+    restaurantId: str(raw.restaurantId, ""),
+    status:
+      status === "PENDING_REVIEW" ||
+      status === "APPROVED" ||
+      status === "REJECTED"
+        ? status
+        : "DRAFT",
+    name: str(raw.name, ""),
+    description: str(raw.description, ""),
+    priceCents: typeof raw.priceCents === "number" ? raw.priceCents : null,
+    currencyCode: "USD",
+    category: normalizeOptionalCategory(raw.category),
+    imageMediaId:
+      typeof raw.imageMediaId === "string" && raw.imageMediaId.trim()
+        ? raw.imageMediaId.trim()
+        : null,
+    portion: normalizeMenuPortion(raw.portion),
+    variants: Array.isArray(raw.variants)
+      ? raw.variants.map(normalizeSubmissionVariant)
+      : [],
+    createdAt: str(raw.createdAt, new Date(0).toISOString()),
+    updatedAt: str(raw.updatedAt, new Date(0).toISOString()),
+    submittedAt: typeof raw.submittedAt === "string" ? raw.submittedAt : null,
+    reviewedAt: typeof raw.reviewedAt === "string" ? raw.reviewedAt : null,
+    reviewedBy: raw.reviewedBy === "ADMIN" ? "ADMIN" : null,
+    rejectionReason:
+      typeof raw.rejectionReason === "string" ? raw.rejectionReason : null,
+    publishedMenuItemId:
+      typeof raw.publishedMenuItemId === "string"
+        ? raw.publishedMenuItemId
+        : null,
+    reviewHistory: Array.isArray(raw.reviewHistory)
+      ? raw.reviewHistory.map(normalizeSubmissionReviewEntry)
+      : [],
   };
 }
 
@@ -774,6 +894,10 @@ export function normalizePrototypeState(
     menuItems: Array.isArray(state.menuItems)
       ? state.menuItems.map(normalizeMenuItem)
       : defaults.menuItems,
+    // Старое состояние заявок не имеет — безопасный пустой список.
+    menuItemSubmissions: Array.isArray(state.menuItemSubmissions)
+      ? state.menuItemSubmissions.map(normalizeMenuItemSubmission)
+      : [],
     promotions: Array.isArray(state.promotions)
       ? state.promotions.map(normalizeSeedPromotion)
       : defaults.promotions,

@@ -45,6 +45,8 @@ function MenuItemSizeEditor({ menuItem }: { menuItem: MenuItem }) {
                 priceDeltaCents: 0,
                 available: true,
                 isDefault: !defaultLarge,
+                // Порция размера здесь не задаётся — используется базовая.
+                portion: null,
               },
               {
                 id: "size-large",
@@ -52,6 +54,7 @@ function MenuItemSizeEditor({ menuItem }: { menuItem: MenuItem }) {
                 priceDeltaCents: parseDollarsToCents(surcharge),
                 available: largeAvailable,
                 isDefault: defaultLarge,
+                portion: null,
               },
             ]
           : null,

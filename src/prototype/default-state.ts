@@ -101,6 +101,8 @@ export function createSizeVariants(): MenuItemVariant[] {
       priceDeltaCents: 0,
       available: true,
       isDefault: true,
+      // Порция у демо-вариантов не задана: поле необязательное.
+      portion: null,
     },
     {
       id: "size-large",
@@ -108,6 +110,7 @@ export function createSizeVariants(): MenuItemVariant[] {
       priceDeltaCents: 200,
       available: true,
       isDefault: false,
+      portion: null,
     },
   ];
 }
@@ -281,7 +284,13 @@ export function getDefaultRecommendationRank(restaurantId: string): number {
   );
 }
 
-const defaultMenuItems: MenuItem[] = [
+/**
+ * Демо-меню задаётся без новых необязательных полей, а фотография и порция
+ * добавляются ниже единообразно: у всех seed-блюд их нет.
+ */
+type SeedMenuItem = Omit<MenuItem, "imageMediaId" | "portion">;
+
+const defaultMenuItemSeeds: SeedMenuItem[] = [
   {
     id: "restaurant-1-item-1",
     restaurantId: "restaurant-1",
@@ -411,6 +420,13 @@ const defaultMenuItems: MenuItem[] = [
   },
 ];
 
+/** Демо-блюда без фотографии и без указанной порции — оба поля необязательны. */
+const defaultMenuItems: MenuItem[] = defaultMenuItemSeeds.map((item) => ({
+  ...item,
+  imageMediaId: null,
+  portion: null,
+}));
+
 const defaultPromotions: Promotion[] = [
   {
     id: "promo-restaurant-2-pizza",
@@ -498,6 +514,8 @@ export function createDefaultState(): PrototypeState {
       ...item,
       variants: cloneVariants(item.variants),
     })),
+    // Заявок на новые блюда в демо-состоянии нет.
+    menuItemSubmissions: [],
     promotions: defaultPromotions.map((promotion) => ({
       ...promotion,
       eligibleMenuItemIds: [...promotion.eligibleMenuItemIds],

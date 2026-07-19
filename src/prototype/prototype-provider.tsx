@@ -41,6 +41,13 @@ import {
   markPickupNoShow as runPickupNoShow,
   reportRestaurantPreparationProblem,
   resolveRestaurantPreparationProblem,
+  approveMenuItemSubmission,
+  createMenuItemSubmissionDraft,
+  rejectMenuItemSubmission,
+  submitMenuItemSubmission,
+  updateMenuItemSubmissionDraft,
+  type MenuItemSubmissionDraftPatch,
+  type MenuItemSubmissionResult,
   setRestaurantWorkflowModeWithResult,
   simulateSuccessfulOnlinePaymentWithResult,
   startKitchenPreparationWithResult,
@@ -241,6 +248,27 @@ export interface PrototypeContextValue {
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
   ) => MutationAckPromise;
+  /** Каталог блюд: заявка ресторана и модерация Direct. */
+  createMenuItemDraft: (
+    restaurantId: string,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => Promise<MenuItemSubmissionResult>;
+  updateMenuItemDraft: (
+    submissionId: string,
+    patch: MenuItemSubmissionDraftPatch,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => Promise<MenuItemSubmissionResult>;
+  submitMenuItemDraft: (
+    submissionId: string,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => Promise<MenuItemSubmissionResult>;
+  approveMenuItemDraft: (
+    submissionId: string,
+  ) => Promise<MenuItemSubmissionResult>;
+  rejectMenuItemDraft: (
+    submissionId: string,
+    reason: string,
+  ) => Promise<MenuItemSubmissionResult>;
   adjustOrderEta: (
     orderId: string,
     intent: EtaAdjustmentIntent,
@@ -905,6 +933,100 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  // --- Каталог блюд: заявки ресторана и модерация Direct --------------------
+  // Все пять действий идут через ту же сериализованную мутацию под Web Lock,
+  // что и остальной домен: UI state напрямую не мутирует.
+
+  const createMenuItemDraft = useCallback(
+    (restaurantId: string, workspaceRole?: RestaurantWorkspaceRole) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          createMenuItemSubmissionDraft(
+            baseState,
+            restaurantId,
+            "RESTAURANT",
+            workspaceRole,
+          ),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          submissionId: null,
+        }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const updateMenuItemDraft = useCallback(
+    (
+      submissionId: string,
+      patch: MenuItemSubmissionDraftPatch,
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          updateMenuItemSubmissionDraft(
+            baseState,
+            submissionId,
+            patch,
+            "RESTAURANT",
+            workspaceRole,
+          ),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          submissionId: null,
+        }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const submitMenuItemDraft = useCallback(
+    (submissionId: string, workspaceRole?: RestaurantWorkspaceRole) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          submitMenuItemSubmission(
+            baseState,
+            submissionId,
+            "RESTAURANT",
+            workspaceRole,
+          ),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          submissionId: null,
+        }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const approveMenuItemDraft = useCallback(
+    (submissionId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          approveMenuItemSubmission(baseState, submissionId, "ADMIN"),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          submissionId: null,
+        }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const rejectMenuItemDraft = useCallback(
+    (submissionId: string, reason: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          rejectMenuItemSubmission(baseState, submissionId, reason, "ADMIN"),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          submissionId: null,
+        }),
+      }),
+    [runSerializedActionMutation],
+  );
+
   const restoreMenuItem = useCallback(
     (restaurantId: string, menuItemId: string, actor: OperationalActor) => {
       return runSerializedActionMutation({
@@ -1480,6 +1602,11 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       simulateOnlinePayment,
       markReady,
       startKitchenPreparation,
+      createMenuItemDraft,
+      updateMenuItemDraft,
+      submitMenuItemDraft,
+      approveMenuItemDraft,
+      rejectMenuItemDraft,
       adjustOrderEta,
       reportPreparationProblem,
       resolvePreparationProblem,
@@ -1536,6 +1663,11 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       simulateOnlinePayment,
       markReady,
       startKitchenPreparation,
+      createMenuItemDraft,
+      updateMenuItemDraft,
+      submitMenuItemDraft,
+      approveMenuItemDraft,
+      rejectMenuItemDraft,
       adjustOrderEta,
       reportPreparationProblem,
       resolvePreparationProblem,

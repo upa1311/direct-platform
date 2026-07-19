@@ -251,7 +251,10 @@ export type RestaurantWorkspaceAction =
   | "MANAGE_DRIVER"
   | "HANDOFF_ORDER"
   | "PAUSE_RESTAURANT"
-  | "CHANGE_MENU_AVAILABILITY";
+  /** Временное включение/выключение уже существующих блюд. */
+  | "CHANGE_MENU_AVAILABILITY"
+  /** Создание черновика нового блюда, его правка и отправка на модерацию. */
+  | "MANAGE_MENU_CATALOG";
 
 /** Категории данных заказа для матрицы видимости (Этап 3). */
 export type RestaurantWorkspaceData =
@@ -323,23 +326,42 @@ export interface Restaurant {
   orderWorkflowMode: RestaurantOrderWorkflowMode;
 }
 
+/** Единица измерения порции. Свободная строка источником истины не является. */
+export type MenuPortionUnit = "G" | "ML" | "PCS" | "CM";
+
+/** Структурированная порция блюда или варианта; null — порция не указана. */
+export interface MenuPortion {
+  value: number;
+  unit: MenuPortionUnit;
+}
+
 export interface MenuItemVariant {
   id: string;
   name: string;
   priceDeltaCents: number;
   available: boolean;
   isDefault: boolean;
+  /** Порция варианта; null — используется базовая порция блюда. */
+  portion: MenuPortion | null;
 }
 
 export interface MenuItem {
   id: string;
   restaurantId: string;
-  category: string;
+  /**
+   * Категорию ресторан придумывает сам; глобального справочника Direct нет.
+   * null — категория не указана (пустая строка нормализуется в null).
+   */
+  category: string | null;
   name: string;
   description: string;
   priceCents: number;
   currencyCode: CurrencyCode;
   available: boolean;
+  /** Ссылка на media-объект фотографии; null — фотографии нет. */
+  imageMediaId: string | null;
+  /** Базовая порция блюда; null — не указана. */
+  portion: MenuPortion | null;
   /** Варианты размеров. Пусто/undefined — товар без размеров (старый flow). */
   variants?: MenuItemVariant[];
   /** Операционная временная недоступность блюда (кухня). null — нет паузы. */
@@ -429,6 +451,12 @@ export interface OrderItemSnapshot {
   finalLineTotalCents: number;
   currencyCode: CurrencyCode;
   cookingComment: string;
+  /**
+   * Снимок порции на момент заказа: порция выбранного варианта, иначе базовая
+   * порция блюда, иначе null. Будущее изменение граммовки в меню не меняет уже
+   * оформленные заказы.
+   */
+  portionSnapshot: MenuPortion | null;
   /** Совместимость с прежними представлениями заказа. */
   unitPriceCents: number;
   lineTotalCents: number;
@@ -592,6 +620,69 @@ export interface Order {
   etaAdjustments: OrderEtaAdjustment[];
 }
 
+/**
+ * Жизненный цикл заявки ресторана на новое блюдо. Ресторан не добавляет объект
+ * в опубликованный menuItems напрямую: DRAFT → PENDING_REVIEW → APPROVED, либо
+ * REJECTED → правка → снова PENDING_REVIEW.
+ */
+export type MenuItemSubmissionStatus =
+  | "DRAFT"
+  | "PENDING_REVIEW"
+  | "APPROVED"
+  | "REJECTED";
+
+/** Вариант внутри заявки (ещё не опубликован). */
+export interface MenuItemSubmissionVariant {
+  id: string;
+  name: string;
+  priceDeltaCents: number;
+  isDefault: boolean;
+  portion: MenuPortion | null;
+}
+
+/** Что произошло с заявкой: лёгкий встроенный аудит, без второй event-системы. */
+export type MenuItemSubmissionReviewAction =
+  | "SUBMITTED"
+  | "APPROVED"
+  | "REJECTED";
+
+export interface MenuItemSubmissionReviewEntry {
+  id: string;
+  occurredAt: string;
+  action: MenuItemSubmissionReviewAction;
+  by: "RESTAURANT" | "ADMIN";
+  /** Причина отклонения; для прочих действий null. */
+  reason: string | null;
+}
+
+/**
+ * Заявка на новое блюдо. Живёт отдельно от опубликованного меню: до APPROVED
+ * блюда физически нет в menuItems, поэтому клиент его не видит нигде.
+ */
+export interface MenuItemSubmission {
+  id: string;
+  restaurantId: string;
+  status: MenuItemSubmissionStatus;
+  name: string;
+  description: string;
+  priceCents: number | null;
+  currencyCode: CurrencyCode;
+  category: string | null;
+  imageMediaId: string | null;
+  portion: MenuPortion | null;
+  variants: MenuItemSubmissionVariant[];
+  createdAt: string;
+  updatedAt: string;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewedBy: "ADMIN" | null;
+  /** Актуальная причина отклонения; очищается при повторной отправке. */
+  rejectionReason: string | null;
+  publishedMenuItemId: string | null;
+  /** История решений: прошлые причины остаются здесь, а не в rejectionReason. */
+  reviewHistory: MenuItemSubmissionReviewEntry[];
+}
+
 export type CancellationRequestStatus = "PENDING" | "APPROVED" | "REJECTED";
 
 /** Клиентский запрос на отмену уже готовящегося заказа (рассматривает Direct). */
@@ -629,6 +720,8 @@ export interface PrototypeState {
   tariffs: TariffMatrix;
   restaurants: Restaurant[];
   menuItems: MenuItem[];
+  /** Заявки на новые блюда. Клиентские селекторы их не читают. */
+  menuItemSubmissions: MenuItemSubmission[];
   promotions: Promotion[];
   customer: CustomerProfile;
   drivers: DriverProfile[];
