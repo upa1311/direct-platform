@@ -1242,11 +1242,21 @@ export function getKitchenNewOrders(
   );
 }
 
-/** «Ожидают оплаты» — AWAITING_PAYMENT (отдельная полоса, без действий кухни). */
+/**
+ * «Ожидают оплаты» — AWAITING_PAYMENT (отдельная полоса, без действий кухни).
+ * В SPLIT_OPERATOR_KITCHEN неоплаченный заказ ещё не является производственной
+ * задачей кухни (оператор принимает и подтверждает оплату первым), поэтому
+ * отдельная кухня его не видит — возвращается []. В COMBINED выборка прежняя.
+ * Гейт по режиму — тот же источник поведения, что и в getKitchenNewOrders.
+ */
 export function getKitchenAwaitingPaymentOrders(
   state: PrototypeState,
   restaurantId: string,
 ): Order[] {
+  const mode =
+    state.restaurants.find((r) => r.id === restaurantId)?.orderWorkflowMode ??
+    "COMBINED";
+  if (mode === "SPLIT_OPERATOR_KITCHEN") return [];
   return kitchenOrders(state, restaurantId, ["AWAITING_PAYMENT"]).sort(
     (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
   );
