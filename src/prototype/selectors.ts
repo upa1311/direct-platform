@@ -1648,15 +1648,20 @@ export function shouldShowDriverAssignment(order: Order): boolean {
  * `assignedDriverId === driverId` в одном из активных курьерских статусов
  * (`DRIVER_ACTIVE_STATUSES`, не терминальных). Единственный источник истины для
  * инварианта «один активный заказ на водителя»: null — водитель ничего не везёт.
- * Чистая производная, состояние не мутируется.
+ *
+ * `excludeOrderId` исключает конкретный заказ из проверки (для безопасного
+ * освобождения при unassign/reassign/complete/cancel — чтобы освобождаемый заказ
+ * не считался «другим активным»). Чистая производная, состояние не мутируется.
  */
 export function getDriverActiveOrder(
   state: PrototypeState,
   driverId: string,
+  excludeOrderId?: string,
 ): Order | null {
   return (
     state.orders.find(
       (order) =>
+        order.id !== excludeOrderId &&
         order.assignedDriverId === driverId &&
         DRIVER_ACTIVE_STATUSES.includes(order.status),
     ) ?? null
@@ -1664,11 +1669,19 @@ export function getDriverActiveOrder(
 }
 
 /**
- * Доступен ли водитель для новых предложений. Только `AVAILABLE` — на смене и
- * свободен. `BUSY` (везёт заказ) и `OFFLINE` (не на смене) предложения не получают.
+ * Доступен ли водитель для новых предложений. Fail-closed инвариант: только когда
+ * ОДНОВРЕМЕННО `status === "AVAILABLE"` И у водителя нет активного назначенного
+ * заказа (`getDriverActiveOrder === null`). Не полагается только на поле status —
+ * повреждённое состояние (AVAILABLE + активный заказ) недоступным считается верно.
  */
-export function isDriverAvailableForOffers(driver: DriverProfile): boolean {
-  return driver.status === "AVAILABLE";
+export function isDriverAvailableForOffers(
+  state: PrototypeState,
+  driver: DriverProfile,
+): boolean {
+  return (
+    driver.status === "AVAILABLE" &&
+    getDriverActiveOrder(state, driver.id) === null
+  );
 }
 
 /** Активные (не завершённые) статусы заказа. */

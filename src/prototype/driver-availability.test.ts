@@ -160,10 +160,22 @@ test("getDriverActiveOrder: активный назначенный заказ �
 
 // 11 -------------------------------------------------------------------------
 
-test("isDriverAvailableForOffers: только AVAILABLE получает предложения", () => {
-  assert.equal(isDriverAvailableForOffers({ status: "AVAILABLE" } as never), true);
-  assert.equal(isDriverAvailableForOffers({ status: "BUSY" } as never), false);
-  assert.equal(isDriverAvailableForOffers({ status: "OFFLINE" } as never), false);
+test("isDriverAvailableForOffers: AVAILABLE без активного заказа получает предложения", () => {
+  const state = createDefaultState();
+  const available = state.drivers.find((d) => d.id === AVAILABLE_DRIVER)!;
+  const offline = state.drivers.find((d) => d.id === OFFLINE_DRIVER)!;
+  assert.equal(isDriverAvailableForOffers(state, available), true);
+  assert.equal(isDriverAvailableForOffers(state, offline), false);
+  assert.equal(
+    isDriverAvailableForOffers(state, { ...available, status: "BUSY" }),
+    false,
+  );
+  // Fail-closed: AVAILABLE-по-полю, но с активным заказом → недоступен.
+  const withActive = {
+    ...state,
+    orders: [assignedOrder(AVAILABLE_DRIVER, "OUT_FOR_DELIVERY")],
+  };
+  assert.equal(isDriverAvailableForOffers(withActive, available), false);
 });
 
 // 12 -------------------------------------------------------------------------

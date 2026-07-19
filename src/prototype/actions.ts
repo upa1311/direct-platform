@@ -1498,7 +1498,7 @@ export function approveCancellationRequest(
     {
       ...state,
       orders: state.orders.map((o) => (o.id === order.id ? updatedOrder : o)),
-      drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+      drivers: releaseAssignedDriver(state, order.assignedDriverId, order.id),
       cancellationRequests,
     },
     now,
@@ -2824,16 +2824,27 @@ function isTerminalOrderStatus(status: OrderStatus): boolean {
   return TERMINAL_ORDER_STATUSES.includes(status);
 }
 
-/** Освобождает назначенного водителя заказа (переводит в AVAILABLE). */
+/**
+ * Освобождает назначенного водителя заказа `releasedOrderId`. Fail-closed: в
+ * AVAILABLE переводим только если у водителя НЕ осталось другого активного
+ * заказа (проверка через getDriverActiveOrder с исключением освобождаемого
+ * заказа). Если другой активный заказ есть (в т.ч. при повреждённом двойном
+ * назначении) — водитель остаётся/становится BUSY, а не AVAILABLE.
+ */
 function releaseAssignedDriver(
-  drivers: DriverProfile[],
+  state: PrototypeState,
   driverId: string | null,
+  releasedOrderId: string,
 ): DriverProfile[] {
   if (!driverId) {
-    return drivers;
+    return state.drivers;
   }
-  return drivers.map((driver) =>
-    driver.id === driverId ? { ...driver, status: "AVAILABLE" } : driver,
+  const hasOtherActive =
+    getDriverActiveOrder(state, driverId, releasedOrderId) !== null;
+  return setDriverStatus(
+    state.drivers,
+    driverId,
+    hasOtherActive ? "BUSY" : "AVAILABLE",
   );
 }
 
@@ -3610,6 +3621,12 @@ export function setDriverAvailability(
   if (online) {
     // Онлайн только из OFFLINE; AVAILABLE/BUSY уже на смене — no-op успех.
     if (driver.status !== "OFFLINE") return ok(state);
+    // Fail-closed: OFFLINE-водитель с уже существующим активным назначенным
+    // заказом (повреждённое состояние) НЕ становится AVAILABLE. Статус не
+    // «чиним» молча и не переводим в BUSY здесь — просто отказ.
+    if (getDriverActiveOrder(state, driverId)) {
+      return fail("Нельзя выйти на смену свободным: есть незавершённый активный заказ.");
+    }
     const now = new Date().toISOString();
     return ok(
       finalizeMutation(
@@ -3671,6 +3688,12 @@ export function assignDriverToOrder(
   if (!driver) return fail("Водитель не найден.");
   if (driver.status !== "AVAILABLE") {
     return fail("Водитель недоступен.");
+  }
+  // Fail-closed «один активный заказ на водителя»: не полагаемся только на
+  // status. Назначаемый заказ ещё не привязан к этому водителю, поэтому любой
+  // найденный активный заказ — это ДРУГОЙ заказ.
+  if (getDriverActiveOrder(state, driverId)) {
+    return fail("У водителя уже есть активный заказ.");
   }
 
   const now = new Date().toISOString();
@@ -3747,6 +3770,12 @@ export function reassignDriverForOrder(
   if (newDriver.status !== "AVAILABLE") {
     return fail("Водитель недоступен.");
   }
+  // Тот же fail-closed guard для нового водителя: нельзя переназначить на того,
+  // кто уже ведёт другую активную доставку (исключаем текущий заказ — он сейчас
+  // на старом водителе, но защищаемся явно). Не полагаемся только на status.
+  if (getDriverActiveOrder(state, newDriverId, orderId)) {
+    return fail("У водителя уже есть активный заказ.");
+  }
 
   const now = new Date().toISOString();
   const updatedOrder: Order = {
@@ -3767,9 +3796,10 @@ export function reassignDriverForOrder(
       ),
     ],
   };
-  // Сначала освобождаем старого, затем занимаем нового.
+  // Сначала освобождаем старого (fail-closed, исключая текущий заказ), затем
+  // занимаем нового.
   const drivers = setDriverStatus(
-    releaseAssignedDriver(state.drivers, order.assignedDriverId),
+    releaseAssignedDriver(state, order.assignedDriverId, order.id),
     newDriverId,
     "BUSY",
   );
@@ -3833,7 +3863,7 @@ export function unassignDriverFromOrder(
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
-      drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+      drivers: releaseAssignedDriver(state, order.assignedDriverId, order.id),
     },
     now,
   );
@@ -3901,7 +3931,7 @@ export function markOrderDeliveredByDriverWithResult(
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
-      drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+      drivers: releaseAssignedDriver(state, order.assignedDriverId, order.id),
       // Двусторонний журнал: признаём обязательства завершённого заказа.
       restaurantAccountingEntries: [
         ...state.restaurantAccountingEntries,
@@ -4002,7 +4032,7 @@ export function adminCancelOrder(
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
-      drivers: releaseAssignedDriver(state.drivers, order.assignedDriverId),
+      drivers: releaseAssignedDriver(state, order.assignedDriverId, order.id),
       cancellationRequests,
     },
     now,
