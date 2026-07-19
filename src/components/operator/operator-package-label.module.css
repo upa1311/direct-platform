@@ -1,8 +1,8 @@
 /*
- * Внешний вид пакетной наклейки: рулон 80 мм, печатная область ~74 мм.
- * Только чёрное на белом — термопринтер не печатает цвет, тени и градиенты.
- * Высота не задаётся: наклейка ровно по содержимому, иначе появляется вторая
- * пустая страница.
+ * Внешний вид пакетной наклейки: рулон 80 мм, печатная область ~74 мм,
+ * термопринтер 203 dpi. Только чёрное на белом — цвет, градиенты, тени и серые
+ * заливки термопечать не воспроизводит. Высота не задаётся: наклейка ровно по
+ * содержимому, иначе появляется вторая пустая страница.
  *
  * Поля сверху и слева больше остальных: термопринтер печатает с небольшим
  * смещением, и текст не должен подходить вплотную к краю.
@@ -24,29 +24,44 @@
   margin-bottom: 0;
 }
 
-/* Бренд — крупная разрядка сверху. */
-.brand {
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
+/*
+ * Логотип: по центру, пропорции сохранены, без рамки, тени и фильтров.
+ * Ширина ограничена, чтобы иллюстрация не вытесняла остальную наклейку на
+ * вторую страницу, и не разрывается между страницами.
+ */
+.logoBox {
+  margin-bottom: 2mm;
+  text-align: center;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
-/* Тип документа — что это за наклейка. */
-.kind {
-  margin-bottom: 1mm;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+.logo {
+  display: block;
+  width: 100%;
+  max-width: 46mm;
+  height: auto;
+  margin: 0 auto;
+  object-fit: contain;
+  border: 0;
 }
 
-/* Способ получения — крупная жирная строка. */
+/* Способ получения — крупная жирная строка по центру. */
 .delivery {
-  font-size: 16px;
+  margin-bottom: 1mm;
+  font-size: 17px;
   font-weight: 800;
+  text-align: center;
   overflow-wrap: anywhere;
 }
 
-/* Номер заказа — самый крупный элемент наклейки. */
+/* Обычные читаемые строки: ресторан, клиент, адрес. */
+.line {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* Номер заказа — самый крупный текстовый элемент после логотипа. */
 .number {
   margin: 1mm 0 2mm;
   font-size: 30px;
@@ -56,14 +71,8 @@
   overflow-wrap: anywhere;
 }
 
-/* Ресторан — обычный читаемый текст. */
-.line {
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
 .items {
-  margin: 2mm 0 0;
+  margin: 2mm 0;
   padding: 0;
   list-style: none;
 }
@@ -76,18 +85,37 @@
   overflow-wrap: anywhere;
 }
 
-.counts {
-  margin-bottom: 2mm;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-/* Платёжный маркер — отдельный заметный блок с чёрной рамкой. */
+/*
+ * Платёжный блок — строго последний элемент: толстая сплошная чёрная рамка,
+ * заметные внутренние отступы, крупный жирный текст по центру, чёрным по белому.
+ * Не разрывается между страницами.
+ */
 .payment {
-  padding: 1mm;
-  border: 1.5px solid #000;
-  font-size: 15px;
-  font-weight: 800;
+  margin-top: 3mm;
+  padding: 2.5mm 2mm;
+  border: 2px solid #000;
   text-align: center;
   overflow-wrap: anywhere;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.paymentTitle {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+/* Сумма визуально крупнее первой строки блока. */
+.paymentAmount {
+  margin-top: 1mm;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.paymentMethods {
+  margin-top: 1mm;
+  font-size: 14px;
+  font-weight: 700;
 }
