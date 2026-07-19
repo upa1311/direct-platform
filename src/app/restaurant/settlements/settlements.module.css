@@ -337,12 +337,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.dayHeaderMeta {
-  font-size: 13px;
-  opacity: 0.75;
-  overflow-wrap: anywhere;
-}
-
 .dayChevron {
   margin-left: auto;
   opacity: 0.6;

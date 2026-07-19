@@ -530,10 +530,6 @@ function DayCard({
         onClick={() => setOpen((v) => !v)}
       >
         <span className={styles.dayDate}>{formatLocalDateRu(day.localDate)}</span>
-        <span className={styles.dayHeaderMeta}>
-          Завершённых заказов: {day.completedOrderCount} · Стоимость:{" "}
-          {money(day.customerTotalCents)}
-        </span>
         {hasOrders ? (
           <span className={styles.dayChevron} aria-hidden="true">
             {open ? "▲" : "▼"}
