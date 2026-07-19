@@ -34,26 +34,35 @@ export function OperatorPackageLabel({
         />
       </div>
 
-      <div className={styles.delivery}>{data.deliveryLabel}</div>
-      <div className={styles.line}>Ресторан: {data.restaurantName}</div>
-      <div className={styles.number}>{data.publicNumber}</div>
+      {/* Текстовая часть слегка сдвинута вправо: фирменный рисунок визуально
+          тяжелее справа, и прижатый к левому краю текст выглядел смещённым.
+          Платёжный блок в этот контейнер НЕ входит — он остаётся на всей
+          доступной ширине наклейки. */}
+      <div className={styles.textBlock}>
+        <div className={styles.delivery}>{data.deliveryLabel}</div>
+        <div className={styles.line}>Ресторан: {data.restaurantName}</div>
 
-      <ul className={styles.items}>
-        {data.items.map((item, index) => (
-          <li className={styles.item} key={`${item.name}-${index}`}>
-            {formatPackageLabelItemLine(item)}
-          </li>
-        ))}
-      </ul>
+        {/* Подпись перед крупным номером, чтобы он не сливался с рестораном. */}
+        <div className={styles.numberCaption}>Номер заказа</div>
+        <div className={styles.number}>{data.publicNumber}</div>
 
-      <div className={styles.line}>Клиент: {data.customerName}</div>
-      {/* Адрес только для доставки: для самовывоза строки нет совсем. */}
-      {data.addressMain ? (
-        <div className={styles.line}>Адрес: {data.addressMain}</div>
-      ) : null}
-      {data.addressAccess ? (
-        <div className={styles.line}>{data.addressAccess}</div>
-      ) : null}
+        <ul className={styles.items}>
+          {data.items.map((item, index) => (
+            <li className={styles.item} key={`${item.name}-${index}`}>
+              {formatPackageLabelItemLine(item)}
+            </li>
+          ))}
+        </ul>
+
+        <div className={styles.customer}>Клиент: {data.customerName}</div>
+        {/* Адрес только для доставки: для самовывоза строки нет совсем. */}
+        {data.addressMain ? (
+          <div className={styles.address}>Адрес: {data.addressMain}</div>
+        ) : null}
+        {data.addressAccess ? (
+          <div className={styles.addressAccess}>{data.addressAccess}</div>
+        ) : null}
+      </div>
 
       {/* Платёжный блок — строго последний элемент наклейки. */}
       <div className={styles.payment}>
