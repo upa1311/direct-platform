@@ -580,30 +580,34 @@ function DayCard({
         ) : null}
       </button>
 
-      {/* Основные показатели дня: четыре главных значения, всегда видимы. */}
-      <div className={styles.summaryGrid}>
-        <SummaryCard label="Заказов" value={String(day.completedOrderCount)} />
-        <SummaryCard label="Продажи блюд" value={money(day.foodSubtotalCents)} />
-        <SummaryCard label="Ресторану после комиссии" value={money(day.restaurantNetCents)} />
-        <SummaryCard label="Комиссия Direct" value={money(day.platformCommissionReceivableCents)} />
-      </div>
-
-      {/* Остальные показатели дня скрыты по умолчанию (нативный details). */}
-      <details className={styles.reconDetails}>
-        <summary className={styles.reconSummary}>Подробности дня</summary>
-        <div className={styles.reconDetailsBody}>
-          <div className={styles.summaryGrid}>
-            <SummaryCard label="Стоимость заказов" value={money(day.customerTotalCents)} />
-            <SummaryCard label="Собрано рестораном с клиентов" value={money(day.restaurantCollectedFromCustomerCents)} />
-            <SummaryCard label="Собрано Direct с клиентов" value={money(day.platformCollectedFromCustomerCents)} />
-            <SummaryCard
-              label="Ожидает расчёта по журналу комиссий"
-              value={money(day.pendingLedgerCents)}
-            />
-            <SummaryCard label="Требуют внимания" value={String(day.paidCanceledCount)} />
-          </div>
+      {/* Тело дня с внутренними отступами; таблица заказов — вне него, чтобы
+          сохранить её border-top. */}
+      <div className={styles.dayBody}>
+        {/* Основные показатели дня: четыре главных значения, всегда видимы. */}
+        <div className={styles.summaryGrid}>
+          <SummaryCard label="Заказов" value={String(day.completedOrderCount)} />
+          <SummaryCard label="Продажи блюд" value={money(day.foodSubtotalCents)} />
+          <SummaryCard label="Ресторану после комиссии" value={money(day.restaurantNetCents)} />
+          <SummaryCard label="Комиссия Direct" value={money(day.platformCommissionReceivableCents)} />
         </div>
-      </details>
+
+        {/* Остальные показатели дня скрыты по умолчанию (нативный details). */}
+        <details className={styles.reconDetails}>
+          <summary className={styles.reconSummary}>Подробности дня</summary>
+          <div className={styles.reconDetailsBody}>
+            <div className={styles.summaryGrid}>
+              <SummaryCard label="Стоимость заказов" value={money(day.customerTotalCents)} />
+              <SummaryCard label="Собрано рестораном с клиентов" value={money(day.restaurantCollectedFromCustomerCents)} />
+              <SummaryCard label="Собрано Direct с клиентов" value={money(day.platformCollectedFromCustomerCents)} />
+              <SummaryCard
+                label="Ожидает расчёта по журналу комиссий"
+                value={money(day.pendingLedgerCents)}
+              />
+              <SummaryCard label="Требуют внимания" value={String(day.paidCanceledCount)} />
+            </div>
+          </div>
+        </details>
+      </div>
 
       {open && hasOrders ? (
         <div className={`${styles.tableScroll} ${styles.dayOrders}`}>

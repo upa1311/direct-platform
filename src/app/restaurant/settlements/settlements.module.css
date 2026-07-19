@@ -371,32 +371,14 @@
   font-size: 12px;
 }
 
-/* Метрики дня: auto-fill, одна колонка на узких экранах. */
-.dayMetrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 8px 12px;
-  padding: 0 14px 12px;
-}
-
-.dayMetric {
+/* Тело дня: основные карточки и «Подробности дня» с внутренними отступами,
+   чтобы не касаться границ dayCard. Таблица заказов (dayOrders) — вне dayBody,
+   поэтому её border-top сохраняется. */
+.dayBody {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.dayMetricLabel {
-  font-size: 11px;
-  opacity: 0.7;
-  overflow-wrap: anywhere;
-}
-
-.dayMetricValue {
-  font-size: 15px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
+  gap: 12px;
+  padding: 0 14px 12px;
 }
 
 .dayOrders {
@@ -407,17 +389,8 @@
   .summaryGrid {
     grid-template-columns: 1fr;
   }
-  .dayMetrics {
-    grid-template-columns: 1fr 1fr;
-  }
   .container {
     padding: 12px;
-  }
-}
-
-@media (max-width: 360px) {
-  .dayMetrics {
-    grid-template-columns: 1fr;
   }
 }
 
