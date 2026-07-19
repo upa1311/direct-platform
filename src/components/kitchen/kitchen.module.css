@@ -815,6 +815,36 @@
   font-weight: 750;
 }
 
+/* --- Kitchen start confirmation (SPLIT) ---------------------------------- */
+/* Заметный блок «Заказ передан на кухню» — пока кухня не подтвердила начало. */
+.startNotice {
+  padding: 9px 11px;
+  border: 1px solid var(--kds-border);
+  border-left: 4px solid var(--kds-action);
+  border-radius: 7px;
+  background: var(--kds-surface-subtle);
+}
+
+.startNoticeTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 750;
+  color: var(--kds-text);
+}
+
+.startNotice p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--kds-muted);
+}
+
+/* Спокойная строка после подтверждения начала: «Начато в HH:MM». */
+.startedLine {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--kds-success);
+}
+
 /* --- Reject dialog ------------------------------------------------------- */
 .dialog {
   display: grid;

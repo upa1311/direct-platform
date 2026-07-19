@@ -2,146 +2,164 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  initialPreparingSoundState,
-  preparingOrderIds,
-  reducePreparingSound,
-  type PreparingSoundState,
+  KITCHEN_START_REPEAT_INTERVAL_MS,
+  preparingAwaitingKitchenStartIds,
 } from "./split-kitchen-preparing-sound.ts";
+import { isKitchenBeepDue } from "../../prototype/selectors.ts";
 import type { Order, OrderStatus } from "../../prototype/models.ts";
 
-const RID = "restaurant-1";
+/**
+ * Кухонный сигнал ожидания подтверждения начала приготовления (SPLIT): пока в
+ * PREPARING есть заказ с kitchenStartedAt === null, сигнал повторяется каждые
+ * KITCHEN_START_REPEAT_INTERVAL_MS. Кандидатов отбирает preparingAwaitingKitchenStartIds,
+ * расписание считает общий isKitchenBeepDue — здесь проверяем обе чистые части.
+ */
 
-function order(id: string, status: OrderStatus, restaurantId = RID): Order {
+const RID = "restaurant-1";
+const T0 = 100_000;
+
+function order(
+  id: string,
+  status: OrderStatus,
+  kitchenStartedAt: string | null,
+  restaurantId = RID,
+): Order {
   return {
     id,
     status,
+    kitchenStartedAt,
     restaurant: { id: restaurantId, name: "R", address: "", zoneId: "zone-1" },
   } as unknown as Order;
 }
 
-function step(
-  state: PreparingSoundState,
-  preparingIds: string[],
-  enabled = true,
-  restaurantId = RID,
-) {
-  const { next, play } = reducePreparingSound(state, {
-    restaurantId,
-    enabled,
-    preparingIds,
-  });
-  return { state: next, play };
-}
+// Константа --------------------------------------------------------------------
 
-// preparingOrderIds --------------------------------------------------------
+test("интервал повтора — именованная константа = 20 000 мс", () => {
+  assert.equal(KITCHEN_START_REPEAT_INTERVAL_MS, 20_000);
+});
 
-test("preparingOrderIds: только PREPARING выбранного ресторана", () => {
+// preparingAwaitingKitchenStartIds --------------------------------------------
+
+test("кандидаты: только PREPARING с kitchenStartedAt===null выбранного ресторана", () => {
   const orders = [
-    order("a", "PREPARING"),
-    order("b", "AWAITING_PAYMENT"),
-    order("c", "READY"),
-    order("d", "RESTAURANT_REVIEW"),
-    order("e", "PREPARING", "restaurant-2"),
+    order("a", "PREPARING", null), // ждёт подтверждения — кандидат
+    order("b", "PREPARING", "2026-07-19T10:00:00.000Z"), // уже начат — не кандидат
+    order("c", "AWAITING_PAYMENT", null), // не PREPARING
+    order("d", "READY", null), // не PREPARING
+    order("e", "PREPARING", null, "restaurant-2"), // другой ресторан
   ];
-  assert.deepEqual(preparingOrderIds(orders, RID), ["a"]);
+  assert.deepEqual(preparingAwaitingKitchenStartIds(orders, RID), ["a"]);
 });
 
-// 1 -----------------------------------------------------------------------
-
-test("первый baseline с существующими PREPARING → звука нет", () => {
-  const r = step(initialPreparingSoundState(), ["a", "b"]);
-  assert.equal(r.play, false);
-  assert.deepEqual(r.state.knownPreparingIds, ["a", "b"]);
+test("после подтверждения начала заказ выпадает из набора", () => {
+  const waiting = [order("a", "PREPARING", null)];
+  assert.deepEqual(preparingAwaitingKitchenStartIds(waiting, RID), ["a"]);
+  const started = [order("a", "PREPARING", "2026-07-19T10:00:00.000Z")];
+  assert.deepEqual(preparingAwaitingKitchenStartIds(started, RID), []);
 });
 
-// 2 -----------------------------------------------------------------------
+// Расписание (isKitchenBeepDue + интервал начала) ------------------------------
 
-test("пусто → один PREPARING: один сигнал", () => {
-  let s = step(initialPreparingSoundState(), []);
-  assert.equal(s.play, false);
-  s = step(s.state, ["a"]);
-  assert.equal(s.play, true);
-});
+// 8 --------------------------------------------------------------------------
 
-// 3 -----------------------------------------------------------------------
-
-test("один PREPARING → добавилось ещё два: один сигнал", () => {
-  let s = step(initialPreparingSoundState(), []);
-  s = step(s.state, ["a"]);
-  assert.equal(s.play, true);
-  s = step(s.state, ["a", "b", "c"]);
-  assert.equal(s.play, true, "ровно один сигнал на двух новых");
-});
-
-// 4 -----------------------------------------------------------------------
-
-test("появился только AWAITING_PAYMENT: сигнала нет", () => {
-  // preparingOrderIds исключает AWAITING_PAYMENT — набор не меняется.
-  const before = preparingOrderIds([order("a", "PREPARING")], RID);
-  let s = step(initialPreparingSoundState(), before); // baseline ["a"]
-  const after = preparingOrderIds(
-    [order("a", "PREPARING"), order("b", "AWAITING_PAYMENT")],
-    RID,
+test("первый кандидат появился → сигнал сразу", () => {
+  assert.equal(
+    isKitchenBeepDue({
+      reviewOrderIds: ["a"],
+      announcedOrderIds: [],
+      lastBeepAtMs: null,
+      nowMs: T0,
+      intervalMs: KITCHEN_START_REPEAT_INTERVAL_MS,
+    }),
+    true,
   );
-  s = step(s.state, after);
-  assert.equal(s.play, false, "AWAITING_PAYMENT не считается");
-  assert.deepEqual(s.state.knownPreparingIds, ["a"]);
 });
 
-// 5 -----------------------------------------------------------------------
+// 9 --------------------------------------------------------------------------
 
-test("AWAITING_PAYMENT → PREPARING: один сигнал", () => {
-  // Онлайн-заказ: сначала AWAITING (в набор не входит), затем PREPARING.
-  let s = step(
-    initialPreparingSoundState(),
-    preparingOrderIds([order("a", "AWAITING_PAYMENT")], RID), // []
+test("через 19 999 мс того же набора → тишина", () => {
+  assert.equal(
+    isKitchenBeepDue({
+      reviewOrderIds: ["a"],
+      announcedOrderIds: ["a"],
+      lastBeepAtMs: T0,
+      nowMs: T0 + KITCHEN_START_REPEAT_INTERVAL_MS - 1,
+      intervalMs: KITCHEN_START_REPEAT_INTERVAL_MS,
+    }),
+    false,
   );
-  assert.equal(s.play, false);
-  s = step(s.state, preparingOrderIds([order("a", "PREPARING")], RID)); // ["a"]
-  assert.equal(s.play, true, "после подтверждения оплаты — один сигнал");
 });
 
-// 6 -----------------------------------------------------------------------
+// 10 -------------------------------------------------------------------------
 
-test("PREPARING остаётся PREPARING: повторного сигнала нет", () => {
-  let s = step(initialPreparingSoundState(), []);
-  s = step(s.state, ["a"]);
-  assert.equal(s.play, true);
-  s = step(s.state, ["a"]);
-  assert.equal(s.play, false);
+test("через 20 000 мс → повтор", () => {
+  assert.equal(
+    isKitchenBeepDue({
+      reviewOrderIds: ["a"],
+      announcedOrderIds: ["a"],
+      lastBeepAtMs: T0,
+      nowMs: T0 + KITCHEN_START_REPEAT_INTERVAL_MS,
+      intervalMs: KITCHEN_START_REPEAT_INTERVAL_MS,
+    }),
+    true,
+  );
 });
 
-// 7 -----------------------------------------------------------------------
+// 11 -------------------------------------------------------------------------
 
-test("enabled=false: звука нет; backlog после включения не звучит; новый PREPARING звучит", () => {
-  let s = step(initialPreparingSoundState(), [], false);
-  s = step(s.state, ["a"], false);
-  assert.equal(s.play, false);
-  assert.deepEqual(s.state.knownPreparingIds, ["a"]);
-  s = step(s.state, ["a"], true);
-  assert.equal(s.play, false, "backlog после включения не звучит");
-  s = step(s.state, ["a", "b"], true);
-  assert.equal(s.play, true);
+test("после kitchenStartedAt повторы прекращаются (пустой набор → сигнала нет)", () => {
+  // Кандидат подтверждён и выпал из набора — расписание сбрасывается.
+  assert.equal(preparingAwaitingKitchenStartIds([order("a", "PREPARING", "2026-07-19T10:00:00.000Z")], RID).length, 0);
+  assert.equal(
+    isKitchenBeepDue({
+      reviewOrderIds: [],
+      announcedOrderIds: ["a"],
+      lastBeepAtMs: T0,
+      nowMs: T0 + 3 * KITCHEN_START_REPEAT_INTERVAL_MS,
+      intervalMs: KITCHEN_START_REPEAT_INTERVAL_MS,
+    }),
+    false,
+  );
 });
 
-// 8 -----------------------------------------------------------------------
+// 12 -------------------------------------------------------------------------
 
-test("смена ресторана: текущие PREPARING нового ресторана становятся baseline", () => {
-  let s = step(initialPreparingSoundState(), ["a"], true, "restaurant-1");
-  s = step(s.state, ["x"], true, "restaurant-2");
-  assert.equal(s.play, false, "backlog нового ресторана не озвучивается");
-  assert.equal(s.state.restaurantId, "restaurant-2");
-  assert.deepEqual(s.state.knownPreparingIds, ["x"]);
-  s = step(s.state, ["x", "y"], true, "restaurant-2");
-  assert.equal(s.play, true);
+test("несколько ожидающих заказов → один сигнал на цикл", () => {
+  // Три ожидающих сразу — один булев true, не три.
+  assert.equal(
+    isKitchenBeepDue({
+      reviewOrderIds: ["a", "b", "c"],
+      announcedOrderIds: [],
+      lastBeepAtMs: null,
+      nowMs: T0,
+      intervalMs: KITCHEN_START_REPEAT_INTERVAL_MS,
+    }),
+    true,
+  );
+  // После объявления всех — до интервала повтора нет.
+  assert.equal(
+    isKitchenBeepDue({
+      reviewOrderIds: ["a", "b", "c"],
+      announcedOrderIds: ["a", "b", "c"],
+      lastBeepAtMs: T0,
+      nowMs: T0 + 5_000,
+      intervalMs: KITCHEN_START_REPEAT_INTERVAL_MS,
+    }),
+    false,
+  );
 });
 
-// 9 -----------------------------------------------------------------------
+// 13 -------------------------------------------------------------------------
 
-test("COMBINED (enabled=false всегда): дополнительный сигнал PREPARING отключён", () => {
-  let s = step(initialPreparingSoundState(), [], false);
-  s = step(s.state, ["a"], false);
-  assert.equal(s.play, false);
-  s = step(s.state, ["a", "b", "c"], false);
-  assert.equal(s.play, false, "в общем режиме сигнал начала приготовления не звучит");
+test("новый ожидающий id между циклами → немедленный сигнал", () => {
+  assert.equal(
+    isKitchenBeepDue({
+      reviewOrderIds: ["a", "b"], // b — новый ожидающий
+      announcedOrderIds: ["a"],
+      lastBeepAtMs: T0,
+      nowMs: T0 + 5_000, // < интервала
+      intervalMs: KITCHEN_START_REPEAT_INTERVAL_MS,
+    }),
+    true,
+  );
 });

@@ -11,6 +11,7 @@ import {
   rejectRestaurantOrderWithResult,
   setCartFulfillmentChoice,
   simulateSuccessfulOnlinePaymentWithResult,
+  startKitchenPreparationWithResult,
   updateCartAddress,
   RESTAURANT_RESPONSE_TIMEOUT_MS,
 } from "./actions.ts";
@@ -240,22 +241,51 @@ test("SPLIT: онлайн-оплата — приём даёт AWAITING_PAYMENT,
   assert.equal(preparing.length, 1, "после оплаты заказ появляется у кухни");
 });
 
-test("SPLIT: кухня готовит принятый оператором заказ и отмечает готовность", () => {
+test("SPLIT: кухня подтверждает начало, готовит и отмечает готовность", () => {
   const { state, orderId } = orderState("SPLIT_OPERATOR_KITCHEN");
-  const accepted = acceptRestaurantOrderWithResult(
+  const acceptedRaw = acceptRestaurantOrderWithResult(
     state,
     orderId,
     20,
     "RESTAURANT",
     "OPERATOR",
   ).state;
+  // SPLIT: до подтверждения начала готовность заблокирована (fail-closed).
+  const early = markOrderReadyWithResult(
+    acceptedRaw,
+    orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  );
+  assert.equal(early.result.ok, false);
+  assert.equal(early.result.error, "Сначала подтвердите начало приготовления.");
+  assert.equal(early.state, acceptedRaw);
 
-  const ready = markOrderReadyWithResult(accepted, orderId, "RESTAURANT", "KITCHEN");
+  // Кухня подтверждает начало — событие KITCHEN_START, статус остаётся PREPARING.
+  const started = startKitchenPreparationWithResult(
+    acceptedRaw,
+    orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  );
+  assert.equal(started.result.ok, true);
+  const startedOrder = getOrder(started.state, orderId);
+  assert.equal(startedOrder.status, "PREPARING");
+  assert.ok(startedOrder.kitchenStartedAt);
+  assert.equal(startedOrder.history.at(-1)?.type, "KITCHEN_START");
+  assert.equal(startedOrder.history.at(-1)?.restaurantWorkspaceRole, "KITCHEN");
+
+  const ready = markOrderReadyWithResult(
+    started.state,
+    orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  );
   assert.equal(ready.result.ok, true);
   const order = getOrder(ready.state, orderId);
   assert.equal(order.status, "READY_FOR_PICKUP");
   assert.equal(order.history.at(-1)?.restaurantWorkspaceRole, "KITCHEN");
-  assert.equal(ready.state.revision, accepted.revision + 1);
+  assert.equal(ready.state.revision, started.state.revision + 1);
 });
 
 test("SPLIT: автозакрытие не зависит от роли и не удваивается", () => {

@@ -606,13 +606,20 @@ function PreparingCard({
   timeZone: string;
   isSplit: boolean;
 }) {
-  const { state, markReady } = usePrototype();
+  const { state, markReady, startKitchenPreparation } = usePrototype();
   // Исправление 7: готовность — await с pending и русской ошибкой (гонка двух
   // экранов, устаревший статус, отказ хранилища не проходят молча).
   const {
     error: readyError,
     pending: readyPending,
     run: runReady,
+  } = useMutationGuard();
+  // Подтверждение начала приготовления — отдельный guard: своя ошибка и pending,
+  // не смешиваются с готовностью.
+  const {
+    error: startError,
+    pending: startPending,
+    run: runStart,
   } = useMutationGuard();
   const restaurant = getRestaurant(state, order.restaurant.id);
   const openProblem = getOpenPreparationProblem(order);
@@ -621,6 +628,12 @@ function PreparingCard({
   const [etaOpen, setEtaOpen] = useState(false);
   const [etaConfirm, setEtaConfirm] = useState(false);
   const lastEta = order.etaAdjustments.at(-1) ?? null;
+  // SPLIT: пока кухня не подтвердила начало (kitchenStartedAt === null), заказ
+  // ждёт подтверждения — готовность недоступна, идёт повторяющийся сигнал.
+  const awaitingKitchenStart = isSplit && order.kitchenStartedAt === null;
+  const startedClock = order.kitchenStartedAt
+    ? formatClock24(order.kitchenStartedAt, timeZone || "Europe/Chisinau")
+    : null;
   const readyLabel =
     order.deliveryMode === "PICKUP"
       ? "Готово к выдаче"
@@ -662,6 +675,37 @@ function PreparingCard({
       >
         {countdown.overdue ? countdown.text : `До готовности: ${countdown.text}`}
       </div>
+      {/* SPLIT: пока кухня не подтвердила начало — заметный блок передачи заказа
+          с основной кнопкой «Начать готовить». После подтверждения — спокойная
+          строка «Начато в HH:MM». В COMBINED начало ставится автоматически, блок
+          не показывается. */}
+      {awaitingKitchenStart ? (
+        <div className={kds.startNotice} role="status">
+          <p className={kds.startNoticeTitle}>Заказ передан на кухню</p>
+          <p>Подтвердите начало приготовления, чтобы отметить заказ в работе.</p>
+          <div className={kds.btnRow}>
+            <button
+              className={`${kds.btn} ${kds.btnDark}`}
+              type="button"
+              disabled={startPending}
+              onClick={() =>
+                void runStart(() =>
+                  startKitchenPreparation(order.id, "RESTAURANT", "KITCHEN"),
+                )
+              }
+            >
+              {startPending ? "Подтверждаем…" : "Начать готовить"}
+            </button>
+          </div>
+          {startError ? (
+            <p className={kds.pickupError} role="alert">
+              {startError}
+            </p>
+          ) : null}
+        </div>
+      ) : isSplit && startedClock ? (
+        <p className={kds.startedLine}>Начато в {startedClock}</p>
+      ) : null}
       <div className={kds.changeTimeRow}>
         <button
           className={`${kds.btn} ${kds.btnOutline} ${kds.changeTimeButton}`}
@@ -679,23 +723,30 @@ function PreparingCard({
           Сначала дождитесь решения проблемы приготовления.
         </p>
       ) : null}
-      <div className={kds.btnRow}>
-        <button
-          className={`${kds.btn} ${kds.btnGreen}`}
-          type="button"
-          disabled={readyPending || openProblem !== null}
-          onClick={() =>
-            void runReady(() => markReady(order.id, "RESTAURANT", "KITCHEN"))
-          }
-        >
-          {readyPending ? "Сохраняем…" : readyLabel}
-        </button>
-      </div>
-      {readyError ? (
-        <p className={kds.pickupError} role="alert">
-          {readyError}
-        </p>
-      ) : null}
+      {/* Готовность доступна только после подтверждения начала (в SPLIT). Пока
+          заказ ждёт подтверждения кухни, кнопку не показываем; доменный markReady
+          дополнительно fail-closed запрещает готовность. */}
+      {awaitingKitchenStart ? null : (
+        <>
+          <div className={kds.btnRow}>
+            <button
+              className={`${kds.btn} ${kds.btnGreen}`}
+              type="button"
+              disabled={readyPending || openProblem !== null}
+              onClick={() =>
+                void runReady(() => markReady(order.id, "RESTAURANT", "KITCHEN"))
+              }
+            >
+              {readyPending ? "Сохраняем…" : readyLabel}
+            </button>
+          </div>
+          {readyError ? (
+            <p className={kds.pickupError} role="alert">
+              {readyError}
+            </p>
+          ) : null}
+        </>
+      )}
       {etaOpen && restaurant ? (
         <EtaAdjustPanel
           order={order}
@@ -1134,9 +1185,10 @@ export default function RestaurantKitchenPage() {
     nowMs,
   });
 
-  // SPLIT: кухня получает один существующий beep при фактическом появлении заказа
-  // в PREPARING (после принятия оператором или подтверждения онлайн-оплаты). Тот
-  // же колокольчик кухни — разрешение звука. В COMBINED сигнал PREPARING отключён.
+  // SPLIT: пока заказ в PREPARING и кухня не подтвердила «Начать готовить»
+  // (kitchenStartedAt === null), кухня получает существующий playKitchenBeep сразу
+  // и затем каждые 20 секунд до подтверждения. Тот же колокольчик кухни —
+  // разрешение звука. В COMBINED сигнал отключён (начало ставится автоматически).
   useSplitKitchenPreparingSound({
     restaurantId: selectedRestaurantId,
     enabled: isSplit && soundEnabled,

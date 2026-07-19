@@ -17,6 +17,7 @@ import {
   resumeExpiredOperationalPauses,
   setCartFulfillmentChoice,
   setMenuItemOperationallyUnavailable,
+  startKitchenPreparation,
   updateCartAddress,
   type ActionResult,
 } from "./actions.ts";
@@ -733,6 +734,7 @@ test("Compatibility-wrappers домена продолжают работать 
 test("Pickup code не используется дважды; settlement не дублируется", () => {
   const { state: initial, orderId } = splitOrderState("PICKUP");
   let s = acceptRestaurantOrder(initial, orderId, 20, "RESTAURANT", "OPERATOR");
+  s = startKitchenPreparation(s, orderId, "RESTAURANT", "KITCHEN");
   s = markOrderReady(s, orderId, "RESTAURANT", "KITCHEN");
   const ready = getOrder(s, orderId);
   assert.equal(ready.status, "READY_FOR_PICKUP");

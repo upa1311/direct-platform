@@ -12,6 +12,7 @@ import {
   resolveRestaurantPreparationProblem,
   setCartFulfillmentChoice,
   simulateSuccessfulOnlinePaymentWithResult,
+  startKitchenPreparationWithResult,
   updateCartAddress,
 } from "./actions.ts";
 import type {
@@ -75,7 +76,22 @@ function makePreparingOrder(
       : accepted;
   assert.equal(preparing.result.ok, true, preparing.result.error ?? "");
   assert.equal(getOrder(preparing.state, orderId).status, "PREPARING");
-  return { state: preparing.state, orderId };
+  // В SPLIT заказ в работе только после подтверждения кухни: без него готовность
+  // блокируется отдельной ошибкой. Тесты проблемы/готовности работают с уже
+  // начатым заказом, поэтому здесь подтверждаем начало. В COMBINED начало ставится
+  // автоматически при переходе в PREPARING — дополнительного шага нет.
+  const started =
+    mode === "SPLIT_OPERATOR_KITCHEN"
+      ? startKitchenPreparationWithResult(
+          preparing.state,
+          orderId,
+          "RESTAURANT",
+          "KITCHEN",
+        )
+      : preparing;
+  assert.equal(started.result.ok, true, started.result.error ?? "");
+  assert.equal(getOrder(started.state, orderId).kitchenStartedAt !== null, true);
+  return { state: started.state, orderId };
 }
 
 function reportOpenProblem(

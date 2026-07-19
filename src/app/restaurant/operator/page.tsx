@@ -28,6 +28,7 @@ import type { Order, PickupPaymentMethod } from "@/prototype/models";
 import {
   comparePreparingByReadyAt,
   deliveryModeLabels,
+  formatClock24,
   formatKitchenCountdown,
   formatMoney,
   formatOrderEtaClock,
@@ -725,9 +726,23 @@ function OperatorPreparingTiming({
   const { state } = usePrototype();
   const countdown = formatKitchenCountdown(order.expectedReadyAt, nowMs);
   const lastEta = order.etaAdjustments.at(-1) ?? null;
+  // Состояние кухни для оператора: ждём подтверждения начала или уже начато.
+  // Оператор только видит статус — кнопки «Начать готовить» у него нет.
+  const kitchenTimeZone =
+    getRestaurant(state, order.restaurant.id)?.timeZone || "Europe/Chisinau";
 
   return (
     <>
+      {order.kitchenStartedAt ? (
+        <p className={kds.startedLine}>
+          Кухня начала готовить в{" "}
+          {formatClock24(order.kitchenStartedAt, kitchenTimeZone)}
+        </p>
+      ) : (
+        <div className={kds.startNotice} role="status">
+          <p className={kds.startNoticeTitle}>Ожидаем подтверждения кухни</p>
+        </div>
+      )}
       {overdue ? <span className={kds.delayBadge}>Задержка</span> : null}
       <div className={kds.metaLine}>
         Первоначальная оценка: {order.preparationMinutes ?? "—"} мин

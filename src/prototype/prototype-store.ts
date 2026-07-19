@@ -222,6 +222,48 @@ function normalizePickupMethods(value: unknown): ("CASH" | "CARD")[] {
   return value.filter((m): m is "CASH" | "CARD" => m === "CASH" || m === "CARD");
 }
 
+/**
+ * Миграция kitchenStartedAt для сохранённых заказов. Явное валидное значение
+ * (ISO или null) сохраняется как есть. Legacy-заказы без поля: до приготовления
+ * (RESTAURANT_REVIEW/AWAITING_PAYMENT) и в отменённом статусе — null; заказы,
+ * уже дошедшие до PREPARING и дальше, считаются начатыми (момент входа в
+ * PREPARING из истории, иначе updatedAt/createdAt), чтобы завершённые и
+ * готовящиеся старые заказы не показывались как «кухня не начала» и не
+ * блокировали готовность/не звучали.
+ */
+function normalizeKitchenStartedAt(
+  raw: Record<string, unknown>,
+  status: Order["status"],
+): string | null {
+  const isValidIso = (v: unknown): v is string =>
+    typeof v === "string" && !Number.isNaN(Date.parse(v));
+  if (isValidIso(raw.kitchenStartedAt)) {
+    return raw.kitchenStartedAt;
+  }
+  if (raw.kitchenStartedAt === null) {
+    return null;
+  }
+  if (
+    status === "RESTAURANT_REVIEW" ||
+    status === "AWAITING_PAYMENT" ||
+    status === "CANCELED"
+  ) {
+    return null;
+  }
+  const preparingEntry = Array.isArray(raw.history)
+    ? (raw.history as { toStatus?: unknown; occurredAt?: unknown }[]).find(
+        (event) => event?.toStatus === "PREPARING",
+      )
+    : undefined;
+  const candidates = [
+    preparingEntry?.occurredAt,
+    raw.updatedAt,
+    raw.createdAt,
+  ];
+  const fallback = candidates.find(isValidIso);
+  return fallback ?? new Date(0).toISOString();
+}
+
 function normalizeOrder(
   value: unknown,
   restaurants: PrototypeState["restaurants"],
@@ -327,6 +369,7 @@ function normalizeOrder(
         : typeof raw.expectedReadyAt === "string"
           ? raw.expectedReadyAt
           : null,
+    kitchenStartedAt: normalizeKitchenStartedAt(raw, safeStatus),
     cancellationReason:
       typeof raw.cancellationReason === "string"
         ? raw.cancellationReason

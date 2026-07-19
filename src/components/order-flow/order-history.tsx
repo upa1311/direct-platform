@@ -21,9 +21,14 @@ export function OrderHistory({
   neutralizeEtaReason?: boolean;
 }) {
   const safe = clientSafe || neutralizeEtaReason;
+  // Внутреннее подтверждение кухни «Начать готовить» — только для оператора и
+  // аудита (админ). Клиенту отдельным событием не показываем.
+  const visibleEvents = clientSafe
+    ? events.filter((event) => event.type !== "KITCHEN_START")
+    : events;
   return (
     <ol className={styles.historyList}>
-      {[...events].reverse().map((event) => {
+      {[...visibleEvents].reverse().map((event) => {
         const { message, hideActor } = safe
           ? clientHistoryEvent(event, order, clientSafe)
           : { message: event.message, hideActor: false };

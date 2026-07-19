@@ -18,6 +18,7 @@ import {
   reportRestaurantPreparationProblem,
   setCartFulfillmentChoice,
   simulateSuccessfulOnlinePaymentWithResult,
+  startKitchenPreparationWithResult,
   updateCartAddress,
   RESTAURANT_RESPONSE_TIMEOUT_MS,
 } from "./actions.ts";
@@ -282,11 +283,20 @@ test("Regression 3: SPLIT PICKUP — оператор принимает, кух
     role: "OPERATOR", actor: "RESTAURANT",
   });
 
-  // Готовность — тоже зона кухни.
-  expectRejected(accepted.state, markOrderReadyWithResult(accepted.state, orderId, "RESTAURANT", "OPERATOR"), orderId);
-  const ready = markOrderReadyWithResult(accepted.state, orderId, "RESTAURANT", "KITCHEN");
+  // До подтверждения начала кухней готовность заблокирована (fail-closed).
+  expectRejected(accepted.state, markOrderReadyWithResult(accepted.state, orderId, "RESTAURANT", "KITCHEN"), orderId);
+  const started = startKitchenPreparationWithResult(accepted.state, orderId, "RESTAURANT", "KITCHEN");
+  assert.equal(started.result.ok, true);
+  expectStep(accepted.state, started.state, orderId, {
+    from: "PREPARING", to: "PREPARING", type: "KITCHEN_START",
+    role: "KITCHEN", actor: "RESTAURANT",
+  });
+
+  // Готовность — тоже зона кухни (и только после подтверждения начала).
+  expectRejected(started.state, markOrderReadyWithResult(started.state, orderId, "RESTAURANT", "OPERATOR"), orderId);
+  const ready = markOrderReadyWithResult(started.state, orderId, "RESTAURANT", "KITCHEN");
   assert.equal(ready.result.ok, true);
-  expectStep(accepted.state, ready.state, orderId, {
+  expectStep(started.state, ready.state, orderId, {
     from: "PREPARING", to: "READY_FOR_PICKUP", type: "STATUS",
     role: "KITCHEN", actor: "RESTAURANT",
   });

@@ -241,6 +241,8 @@ export type RestaurantWorkspaceAction =
   | "ACCEPT_ORDER"
   | "SET_INITIAL_ETA"
   | "ADJUST_ETA"
+  /** Кухня подтверждает фактическое начало приготовления (только SPLIT). */
+  | "START_KITCHEN_PREPARATION"
   | "MARK_READY"
   | "REPORT_PREPARATION_PROBLEM"
   | "RESOLVE_PREPARATION_PROBLEM"
@@ -499,7 +501,7 @@ export interface OrderHistoryEvent {
   id: string;
   occurredAt: string;
   actor: "CLIENT" | "RESTAURANT" | "SYSTEM" | "ADMIN";
-  type: "STATUS" | "PAYMENT" | "ETA" | "PREPARATION_PROBLEM";
+  type: "STATUS" | "PAYMENT" | "ETA" | "PREPARATION_PROBLEM" | "KITCHEN_START";
   fromStatus: OrderStatus | null;
   toStatus: OrderStatus;
   message: string;
@@ -553,6 +555,14 @@ export interface Order {
   status: OrderStatus;
   preparationMinutes: number | null;
   expectedReadyAt: string | null;
+  /**
+   * Момент фактического подтверждения кухней начала приготовления. В COMBINED
+   * ставится автоматически при переходе в PREPARING. В SPLIT_OPERATOR_KITCHEN
+   * остаётся null до действия кухни «Начать готовить»: пока null и статус
+   * PREPARING — кухня получает повторяющийся сигнал, а готовность заблокирована.
+   * Единственный источник истины ожидания кухни (не UI-state и не localStorage).
+   */
+  kitchenStartedAt: string | null;
   cancellationReason: string | null;
   /** Одноразовый код выдачи самовывоза (только для PICKUP). */
   pickupCode: string | null;

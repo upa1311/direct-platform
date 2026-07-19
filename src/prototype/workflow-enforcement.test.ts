@@ -24,6 +24,7 @@ import {
   setMenuItemOperationallyUnavailable,
   setRestaurantWorkflowMode,
   simulateSuccessfulOnlinePayment,
+  startKitchenPreparation,
   updateCartAddress,
 } from "./actions.ts";
 import {
@@ -171,7 +172,8 @@ test("COMBINED: событие приёма несёт роль COMBINED", () =>
 
 test("SPLIT: кухня отмечает готовность, оператор — нет", () => {
   const { state, orderId } = splitPickupState();
-  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const accepted = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const prepared = startKitchenPreparation(accepted, orderId, "RESTAURANT", "KITCHEN");
   const byOperator = markOrderReady(prepared, orderId, "RESTAURANT", "OPERATOR");
   assert.equal(byOperator, prepared);
   const byKitchen = markOrderReady(prepared, orderId, "RESTAURANT", "KITCHEN");
@@ -180,7 +182,8 @@ test("SPLIT: кухня отмечает готовность, оператор 
 
 test("Готовность pickup: инварианты кода, оплаты, финансов и события (SPLIT)", () => {
   const { state, orderId } = splitPickupState();
-  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const accepted = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const prepared = startKitchenPreparation(accepted, orderId, "RESTAURANT", "KITCHEN");
   const before = getOrder(prepared, orderId);
   const finBefore = JSON.stringify(before.financials);
 
@@ -230,7 +233,8 @@ test("COMBINED: событие готовности несёт роль COMBINED
 
 test("Повторная готовность pickup: ошибка без события, ревизии и изменений кода", () => {
   const { state, orderId } = splitPickupState();
-  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const accepted = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const prepared = startKitchenPreparation(accepted, orderId, "RESTAURANT", "KITCHEN");
   const first = markOrderReadyWithResult(prepared, orderId, "RESTAURANT", "KITCHEN");
   assert.equal(first.result.ok, true);
   const afterFirst = getOrder(first.state, orderId);
@@ -297,7 +301,8 @@ test("SPLIT: кухня меняет ETA — событие с ролью KITCHE
 
 test("SPLIT: кухня не выполняет выдачу, оператор выполняет", () => {
   const { state, orderId } = splitPickupState();
-  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const accepted = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const prepared = startKitchenPreparation(accepted, orderId, "RESTAURANT", "KITCHEN");
   const ready = markOrderReady(prepared, orderId, "RESTAURANT", "KITCHEN");
   const code = getOrder(ready, orderId).pickupCode as string;
   const byKitchen = completePickupWithCode(ready, orderId, code, "CASH", "RESTAURANT", NOW, "KITCHEN");
@@ -309,7 +314,8 @@ test("SPLIT: кухня не выполняет выдачу, оператор �
 
 test("SPLIT: выдача оператором — оплата, один settlement, роль OPERATOR, ревизия +1", () => {
   const { state, orderId } = splitPickupState();
-  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const accepted = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  const prepared = startKitchenPreparation(accepted, orderId, "RESTAURANT", "KITCHEN");
   const ready = markOrderReady(prepared, orderId, "RESTAURANT", "KITCHEN");
   const before = getOrder(ready, orderId);
   const finBefore = JSON.stringify(before.financials);
@@ -498,6 +504,7 @@ function splitCourierReadyState(): { state: PrototypeState; orderId: string } {
   s = created.state;
   s = acceptRestaurantOrder(s, orderId, 20, "RESTAURANT", "OPERATOR");
   s = simulateSuccessfulOnlinePayment(s, orderId);
+  s = startKitchenPreparation(s, orderId, "RESTAURANT", "KITCHEN");
   s = markOrderReady(s, orderId, "RESTAURANT", "KITCHEN");
   return { state: s, orderId };
 }
@@ -653,6 +660,7 @@ test("Исправление 2: клиент видит нейтральный �
 function readyForNoShow(): { state: PrototypeState; orderId: string; at: string } {
   const { state, orderId } = splitPickupState();
   let s = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  s = startKitchenPreparation(s, orderId, "RESTAURANT", "KITCHEN");
   s = markOrderReady(s, orderId, "RESTAURANT", "KITCHEN");
   const at = getPickupNoShowEligibleAtIso(getOrder(s, orderId))!;
   return { state: s, orderId, at };

@@ -43,6 +43,7 @@ import {
   resolveRestaurantPreparationProblem,
   setRestaurantWorkflowModeWithResult,
   simulateSuccessfulOnlinePaymentWithResult,
+  startKitchenPreparationWithResult,
   setRestaurantAcceptingOrdersWithResult,
   reassignDriverForOrder,
   rejectCancellationRequest,
@@ -231,6 +232,11 @@ export interface PrototypeContextValue {
   ) => Promise<RejectRestaurantOrderResult>;
   simulateOnlinePayment: (orderId: string) => MutationAckPromise;
   markReady: (
+    orderId: string,
+    actor?: OrderActionActor,
+    workspaceRole?: RestaurantWorkspaceRole,
+  ) => MutationAckPromise;
+  startKitchenPreparation: (
     orderId: string,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
@@ -1019,6 +1025,24 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedResultMutation],
   );
 
+  const startKitchenPreparation = useCallback(
+    (
+      orderId: string,
+      actor: OrderActionActor = "RESTAURANT",
+      workspaceRole?: RestaurantWorkspaceRole,
+    ) =>
+      runSerializedResultMutation({
+        mutation: (baseState) =>
+          startKitchenPreparationWithResult(
+            baseState,
+            orderId,
+            actor,
+            workspaceRole,
+          ),
+      }),
+    [runSerializedResultMutation],
+  );
+
   const adjustOrderEta = useCallback(
     (
       orderId: string,
@@ -1455,6 +1479,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       rejectOrder,
       simulateOnlinePayment,
       markReady,
+      startKitchenPreparation,
       adjustOrderEta,
       reportPreparationProblem,
       resolvePreparationProblem,
@@ -1510,6 +1535,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       rejectOrder,
       simulateOnlinePayment,
       markReady,
+      startKitchenPreparation,
       adjustOrderEta,
       reportPreparationProblem,
       resolvePreparationProblem,

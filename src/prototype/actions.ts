@@ -551,6 +551,7 @@ export function createOrderFromCart(
     status: "RESTAURANT_REVIEW",
     preparationMinutes: null,
     expectedReadyAt: null,
+    kitchenStartedAt: null,
     cancellationReason: null,
     pickupCode,
     pickupCodeUsed: false,
@@ -663,6 +664,21 @@ function orderRestaurantWorkflowMode(
     state.restaurants.find((r) => r.id === order.restaurant.id)
       ?.orderWorkflowMode ?? "COMBINED"
   );
+}
+
+/**
+ * Значение kitchenStartedAt в момент перехода заказа в PREPARING. В COMBINED
+ * подтверждения кухни нет — начало ставится автоматически (now). В SPLIT
+ * начало ставит только кухня действием «Начать готовить», поэтому здесь null.
+ */
+function kitchenStartedAtOnPreparing(
+  state: PrototypeState,
+  order: Order,
+  now: string,
+): string | null {
+  return orderRestaurantWorkflowMode(state, order) === "SPLIT_OPERATOR_KITCHEN"
+    ? null
+    : now;
 }
 
 /**
@@ -835,6 +851,9 @@ export function acceptRestaurantOrderWithResult(
         status: "PREPARING",
         preparationMinutes,
         expectedReadyAt,
+        // COMBINED — начало приготовления фиксируется автоматически; SPLIT ждёт
+        // подтверждения кухни (остаётся null).
+        kitchenStartedAt: kitchenStartedAtOnPreparing(state, order, now),
         updatedAt: now,
         history: [
           ...order.history,
@@ -1699,6 +1718,8 @@ export function simulateSuccessfulOnlinePaymentWithResult(
       paidAt: now,
       status: "PREPARING",
       expectedReadyAt,
+      // COMBINED фиксирует начало автоматически; SPLIT ждёт подтверждения кухни.
+      kitchenStartedAt: kitchenStartedAtOnPreparing(state, current, now),
       updatedAt: now,
       history: [
         ...current.history,
@@ -1768,6 +1789,17 @@ export function markOrderReadyWithResult(
   if (targetOrder.status !== "PREPARING") {
     return fail(wrongStatusError(targetOrder.status, "PREPARING"));
   }
+  // SPLIT fail-closed: пока кухня не подтвердила начало приготовления, готовность
+  // недоступна на доменном уровне (не только скрытием кнопки). В COMBINED
+  // kitchenStartedAt проставляется автоматически при переходе в PREPARING,
+  // поэтому это ограничение обычный заказ там не блокирует.
+  if (
+    orderRestaurantWorkflowMode(state, targetOrder) ===
+      "SPLIT_OPERATOR_KITCHEN" &&
+    targetOrder.kitchenStartedAt === null
+  ) {
+    return fail("Сначала подтвердите начало приготовления.");
+  }
   if (getOpenPreparationProblem(targetOrder)) {
     return fail(
       "Сначала дождитесь решения проблемы приготовления.",
@@ -1821,6 +1853,105 @@ export function markOrderReady(
   workspaceRole?: RestaurantWorkspaceRole,
 ): PrototypeState {
   return markOrderReadyWithResult(state, orderId, actor, workspaceRole).state;
+}
+
+/**
+ * Кухня подтверждает фактическое начало приготовления (только SPLIT). Ставит
+ * kitchenStartedAt = now и добавляет отдельное событие истории KITCHEN_START —
+ * НЕ same-status STATUS-событие (его можно спутать с запросом на отмену). Меняет
+ * ТОЛЬКО kitchenStartedAt/updatedAt/history: статус остаётся PREPARING,
+ * preparationMinutes, expectedReadyAt, оплата, financial snapshot, водитель и
+ * settlements не трогаются. Все проверки — до мутации; при ошибке возвращает
+ * исходный state тем же объектом. Повторный вызов (kitchenStartedAt уже задан)
+ * возвращает понятную ошибку без второй мутации и второго события.
+ */
+export function startKitchenPreparationWithResult(
+  state: PrototypeState,
+  orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+): ActionResult<OrderTransitionResult> {
+  const fail = (error: string): ActionResult<OrderTransitionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+
+  const targetOrder = state.orders.find((order) => order.id === orderId);
+  if (!targetOrder) {
+    return fail("Заказ не найден.");
+  }
+  if (!isWorkingRestaurantOrder(targetOrder)) {
+    return fail("Заказ относится к другому ресторану.");
+  }
+  // Подтверждение начала существует только в раздельном режиме.
+  if (
+    orderRestaurantWorkflowMode(state, targetOrder) !==
+    "SPLIT_OPERATOR_KITCHEN"
+  ) {
+    return fail("Подтверждение начала доступно только в раздельном режиме.");
+  }
+  // Начать готовить может только кухня: ADMIN и оператор — нет. ADMIN обошёл бы
+  // матрицу прав, поэтому отсекаем его до guard явной проверкой actor.
+  if (actor !== "RESTAURANT") {
+    return fail("Начать приготовление может только кухня ресторана.");
+  }
+  const guard = checkRestaurantWorkspace(
+    state,
+    targetOrder,
+    actor,
+    "START_KITCHEN_PREPARATION",
+    workspaceRole,
+  );
+  if (!guard.allowed) {
+    return fail("Начать приготовление может только кухня ресторана.");
+  }
+  if (targetOrder.status !== "PREPARING") {
+    return fail(wrongStatusError(targetOrder.status, "PREPARING"));
+  }
+  // Идемпотентность: повторное подтверждение (в т.ч. из устаревшей вкладки) не
+  // создаёт вторую мутацию и второе событие.
+  if (targetOrder.kitchenStartedAt !== null) {
+    return fail("Кухня уже подтвердила начало приготовления.");
+  }
+
+  const now = new Date().toISOString();
+  const nextState = replaceOrder(
+    state,
+    orderId,
+    (order) => ({
+      ...order,
+      kitchenStartedAt: now,
+      updatedAt: now,
+      history: [
+        ...order.history,
+        {
+          id: `${order.id}-history-${order.history.length + 1}`,
+          occurredAt: now,
+          actor,
+          // Отдельный тип события — не STATUS: статус не меняется, и его нельзя
+          // спутать с ресторанным запросом на отмену (same-status STATUS).
+          type: "KITCHEN_START",
+          fromStatus: "PREPARING",
+          toStatus: "PREPARING",
+          message: "Кухня подтвердила начало приготовления.",
+          restaurantWorkspaceRole: guard.role,
+        },
+      ],
+    }),
+    now,
+  );
+  return { state: nextState, result: { ok: true, error: null } };
+}
+
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+export function startKitchenPreparation(
+  state: PrototypeState,
+  orderId: string,
+  actor: OrderActionActor = "RESTAURANT",
+  workspaceRole?: RestaurantWorkspaceRole,
+): PrototypeState {
+  return startKitchenPreparationWithResult(state, orderId, actor, workspaceRole)
+    .state;
 }
 
 export interface AdjustOrderEtaResult {

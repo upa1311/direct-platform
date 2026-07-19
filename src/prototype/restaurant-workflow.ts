@@ -21,6 +21,11 @@ import type {
  */
 const KITCHEN_ACTIONS: ReadonlySet<RestaurantWorkspaceAction> = new Set([
   "ADJUST_ETA",
+  // Подтверждение начала приготовления — действие только кухни (SPLIT). Оператор
+  // за кухню его выполнить не может; сама доменная операция дополнительно требует
+  // режим SPLIT, поэтому в COMBINED (где роль резолвится в «COMBINED») она не
+  // применяется, даже что матрица общего экрана формально его допускает.
+  "START_KITCHEN_PREPARATION",
   "MARK_READY",
   "REPORT_PREPARATION_PROBLEM",
   "PAUSE_RESTAURANT",
