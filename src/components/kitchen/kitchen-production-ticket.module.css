@@ -39,25 +39,12 @@
   overflow-wrap: anywhere;
 }
 
-/* Строка номера: небольшая подпись + крупный номер (номер хорошо сканируется). */
-.numberRow {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 1mm 2mm;
-  margin: 1mm 0 2mm;
-}
-
-.numberLabel {
-  font-size: 12px;
-  font-weight: 600;
-}
-
+/* Номер заказа — одна заметная строка «Номер заказа: DIR-1003». */
 .number {
-  font-size: 26px;
+  margin: 1mm 0 2mm;
+  font-size: 18px;
   font-weight: 800;
-  line-height: 1.05;
-  letter-spacing: -0.02em;
+  line-height: 1.1;
   overflow-wrap: anywhere;
 }
 

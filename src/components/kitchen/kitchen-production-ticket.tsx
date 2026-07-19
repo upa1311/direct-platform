@@ -20,10 +20,8 @@ export function KitchenProductionTicket({
     <div className={styles.ticket}>
       <div className={styles.header}>ПРОИЗВОДСТВЕННЫЙ ЗАКАЗ</div>
       <div className={styles.delivery}>{data.deliveryLabel}</div>
-      <div className={styles.numberRow}>
-        <span className={styles.numberLabel}>Номер заказа:</span>
-        <span className={styles.number}>{data.publicNumber}</span>
-      </div>
+      {/* Одна строка (точная строка «Номер заказа: DIR-1003»). */}
+      <div className={styles.number}>Номер заказа: {data.publicNumber}</div>
 
       <ul className={styles.items}>
         {data.items.map((item, index) => (
