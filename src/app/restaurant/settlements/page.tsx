@@ -249,49 +249,54 @@ export default function RestaurantSettlementsPage() {
                 ))}
               </div>
 
-              {/* Сводные показатели */}
+              {/* Основная сводка: четыре главных показателя, всегда видимы. */}
               <div className={styles.summaryGrid}>
-                <SummaryCard label="Завершённые заказы" value={String(overview.summary.completedOrderCount)} />
-                <SummaryCard label="Стоимость заказов" value={money(overview.summary.customerTotalCents)} />
+                <SummaryCard label="Заказов за период" value={String(overview.summary.completedOrderCount)} />
                 <SummaryCard label="Продажи блюд" value={money(overview.summary.foodSubtotalCents)} />
-                <SummaryCard label="Чисто ресторану" value={money(overview.summary.restaurantNetCents)} />
-                <SummaryCard label="Собрано рестораном с клиентов" value={money(overview.summary.restaurantCollectedFromCustomerCents)} />
-                <SummaryCard
-                  label="Собрано Direct с клиентов"
-                  value={money(overview.summary.platformCollectedFromCustomerCents)}
-                  hint="Информационный показатель снимка, не подтверждённая выплата."
-                />
-                <SummaryCard
-                  label="Комиссия Direct по финансовым снимкам"
-                  value={money(overview.summary.platformCommissionReceivableCents)}
-                  hint="По финансовым снимкам заказов."
-                />
-                <SummaryCard
-                  label="Ожидает расчёта по журналу комиссий"
-                  value={money(overview.summary.pendingLedgerCents)}
-                  hint="Только начисления со статусом „Ожидает расчёта“ в журнале комиссий."
-                />
+                <SummaryCard label="Ресторану после комиссии" value={money(overview.summary.restaurantNetCents)} />
+                <SummaryCard label="Комиссия Direct" value={money(overview.summary.platformCommissionReceivableCents)} />
               </div>
 
-              {/* Объяснение финансовых снимков */}
-              <div className={styles.info}>
-                <p>
-                  Расчёты построены по финансовым снимкам заказов. Открытые
-                  обязательства между Direct и рестораном фиксируются в отдельном
-                  двустороннем журнале. Исполнение или допустимое списание
-                  фиксирует администратор Direct. Система не выполняет
-                  автоматический взаимозачёт или банковский перевод.
-                </p>
-                <p>
-                  Показатель «Ожидает расчёта по журналу комиссий» относится
-                  только к старому журналу комиссий, который сохранён для
-                  совместимости.
-                </p>
-                <p className={styles.footnote}>
-                  Раздел предназначен для операционной сверки, а не заменяет
-                  бухгалтерский учёт.
-                </p>
-              </div>
+              {/* Технические показатели скрыты по умолчанию (нативный details). */}
+              <details className={styles.reconDetails}>
+                <summary className={styles.reconSummary}>Подробности сверки</summary>
+                <div className={styles.reconDetailsBody}>
+                  <div className={styles.summaryGrid}>
+                    <SummaryCard label="Стоимость заказов" value={money(overview.summary.customerTotalCents)} />
+                    <SummaryCard label="Собрано рестораном с клиентов" value={money(overview.summary.restaurantCollectedFromCustomerCents)} />
+                    <SummaryCard
+                      label="Собрано Direct с клиентов"
+                      value={money(overview.summary.platformCollectedFromCustomerCents)}
+                      hint="Информационный показатель снимка, не подтверждённая выплата."
+                    />
+                    <SummaryCard
+                      label="Ожидает расчёта по журналу комиссий"
+                      value={money(overview.summary.pendingLedgerCents)}
+                      hint="Только начисления со статусом „Ожидает расчёта“ в журнале комиссий."
+                    />
+                  </div>
+
+                  {/* Объяснение финансовых снимков */}
+                  <div className={styles.info}>
+                    <p>
+                      Расчёты построены по финансовым снимкам заказов. Открытые
+                      обязательства между Direct и рестораном фиксируются в
+                      отдельном двустороннем журнале. Исполнение или допустимое
+                      списание фиксирует администратор Direct. Система не выполняет
+                      автоматический взаимозачёт или банковский перевод.
+                    </p>
+                    <p>
+                      Показатель «Ожидает расчёта по журналу комиссий» относится
+                      только к старому журналу комиссий, который сохранён для
+                      совместимости.
+                    </p>
+                    <p className={styles.footnote}>
+                      Раздел предназначен для операционной сверки, а не заменяет
+                      бухгалтерский учёт.
+                    </p>
+                  </div>
+                </div>
+              </details>
             </>
           ) : null}
 
