@@ -23,6 +23,7 @@ import {
   SETTLEMENT_COLLECTOR_LABELS,
   type RestaurantDailySettlementRow,
   type RestaurantSettlementPeriod,
+  type RestaurantSettlementRow,
 } from "@/prototype/restaurant-settlements";
 import {
   ACCOUNTING_DIRECTION_LABELS,
@@ -401,21 +402,18 @@ function OrdersView({
             </div>
           ) : (
             <div className={styles.tableScroll}>
+              {/* 7 основных колонок; остальные прежние поля — в «Детали» (details).
+                  Значения и порядок строк не меняются. */}
               <table className={styles.table}>
                 <thead>
                   <tr>
                     <th>Завершён</th>
                     <th>Заказ</th>
                     <th>Способ</th>
-                    <th>Статус</th>
-                    <th className={styles.num}>Стоимость</th>
-                    <th className={styles.num}>Блюда</th>
-                    <th>Собрал</th>
-                    <th className={styles.num}>Собрал ресторан</th>
-                    <th className={styles.num}>Собрал Direct</th>
+                    <th className={styles.num}>Продажи блюд</th>
+                    <th className={styles.num}>Ресторану после комиссии</th>
                     <th className={styles.num}>Комиссия Direct</th>
-                    <th className={styles.num}>Чисто ресторану</th>
-                    <th>Комиссионное начисление</th>
+                    <th>Детали</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -424,30 +422,15 @@ function OrdersView({
                       <td>{formatInZone(row.completedAt, timeZone)}</td>
                       <td className={styles.orderNumber}>{row.publicNumber}</td>
                       <td>{deliveryModeLabels[row.deliveryMode]}</td>
-                      <td>
-                        {row.completionStatus === "DELIVERED"
-                          ? "Доставлен"
-                          : "Получен"}
-                      </td>
-                      <td className={styles.money}>{money(row.customerTotalCents)}</td>
                       <td className={styles.money}>{money(row.foodSubtotalCents)}</td>
-                      <td>{SETTLEMENT_COLLECTOR_LABELS[row.collector]}</td>
                       <td className={styles.money}>
-                        {money(row.restaurantCollectedFromCustomerCents)}
-                      </td>
-                      <td className={styles.money}>
-                        {money(row.platformCollectedFromCustomerCents)}
+                        {money(row.restaurantNetAfterPlatformCommissionCents)}
                       </td>
                       <td className={styles.money}>
                         {money(row.platformCommissionReceivableCents)}
                       </td>
-                      <td className={styles.money}>
-                        {money(row.restaurantNetAfterPlatformCommissionCents)}
-                      </td>
                       <td>
-                        {row.ledger
-                          ? `${settlementTypeLabels[row.ledger.type]} · ${money(row.ledger.amountCents)} · ${settlementStatusLabels[row.ledger.status]}`
-                          : "Начисления нет"}
+                        <OrderDetails row={row} money={money} />
                       </td>
                     </tr>
                   ))}
@@ -478,6 +461,54 @@ function OrdersView({
             </>
           ) : null}
     </>
+  );
+}
+
+/**
+ * «Детали» заказа: нативный закрытый по умолчанию details с остальными прежними
+ * полями строки (статус, полная стоимость, кто собрал, собрано рестораном/Direct,
+ * комиссионное начисление). Значения не пересчитываются — только показ.
+ */
+function OrderDetails({
+  row,
+  money,
+}: {
+  row: RestaurantSettlementRow;
+  money: (cents: number) => string;
+}) {
+  const ledgerText = row.ledger
+    ? `${settlementTypeLabels[row.ledger.type]} · ${money(row.ledger.amountCents)} · ${settlementStatusLabels[row.ledger.status]}`
+    : "Начисления нет";
+  return (
+    <details className={styles.orderDetails}>
+      <summary className={styles.reconSummary}>Открыть</summary>
+      <dl className={styles.orderDetailsList}>
+        <OrderDetailRow
+          label="Статус"
+          value={row.completionStatus === "DELIVERED" ? "Доставлен" : "Получен"}
+        />
+        <OrderDetailRow label="Полная стоимость" value={money(row.customerTotalCents)} />
+        <OrderDetailRow label="Собрал" value={SETTLEMENT_COLLECTOR_LABELS[row.collector]} />
+        <OrderDetailRow
+          label="Собрано рестораном с клиента"
+          value={money(row.restaurantCollectedFromCustomerCents)}
+        />
+        <OrderDetailRow
+          label="Собрано Direct с клиента"
+          value={money(row.platformCollectedFromCustomerCents)}
+        />
+        <OrderDetailRow label="Комиссионное начисление" value={ledgerText} />
+      </dl>
+    </details>
+  );
+}
+
+function OrderDetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className={styles.orderDetailsRow}>
+      <dt className={styles.orderDetailsRowLabel}>{label}</dt>
+      <dd className={styles.orderDetailsRowValue}>{value}</dd>
+    </div>
   );
 }
 

@@ -134,6 +134,34 @@
   gap: 12px;
 }
 
+/* «Детали» заказа в таблице: компактный вертикальный список label/value; длинное
+   комиссионное начисление переносится и не растягивает страницу. */
+.orderDetailsList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0;
+  min-width: 170px;
+  white-space: normal;
+}
+
+.orderDetailsRow {
+  display: flex;
+  flex-direction: column;
+}
+
+.orderDetailsRowLabel {
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.orderDetailsRowValue {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* Контейнер таблицы: локальный горизонтальный scroll, не всей страницы. */
 .tableScroll {
   width: 100%;
