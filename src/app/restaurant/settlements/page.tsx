@@ -723,23 +723,55 @@ function RestaurantStatementSection({
       timeZone: tz,
       asOfIso: asOf,
     });
-    setSnapshot({ restaurantId: rid, timeZone: tz, asOfIso: asOf, result });
+    setSnapshot({
+      restaurantId: rid,
+      timeZone: tz,
+      startLocalDate: range.startLocalDate,
+      endLocalDate: range.endLocalDate,
+      asOfIso: asOf,
+      result,
+    });
   };
 
-  // Envelope виден только при точном совпадении контекста (без опоры на useEffect).
-  const visible = visibleStatementSnapshot(snapshot, restaurantId, timeZone);
+  // Envelope виден только при точном совпадении контекста И периода (без опоры на
+  // useEffect и без автоперестроения). Изменение любой даты немедленно скрывает
+  // старый результат.
+  const visible = visibleStatementSnapshot(
+    snapshot,
+    restaurantId,
+    timeZone,
+    range.startLocalDate,
+    range.endLocalDate,
+  );
+  // Stale: выписка была сформирована, но текущий период формы уже не совпадает с
+  // зафиксированным. Структурное сравнение, не по тексту/DOM/времени.
+  const isStale = snapshot !== null && visible === null;
 
   // CSV и печать доступны ТОЛЬКО из одного и того же зафиксированного успешного
-  // snapshot текущего контекста; при ошибке/отсутствии/смене restaurantId или
-  // timeZone оба helper'а вернут null. asOfIso берётся из envelope — новый
-  // Date.now() не запрашивается, выписка не перестраивается.
+  // snapshot текущего контекста И периода; при ошибке/отсутствии/смене
+  // restaurantId, timeZone или дат оба helper'а вернут null. asOfIso берётся из
+  // envelope — новый Date.now() не запрашивается, выписка не перестраивается.
   const csvFile = useMemo(
-    () => buildStatementCsvExport(snapshot, restaurantId, timeZone),
-    [snapshot, restaurantId, timeZone],
+    () =>
+      buildStatementCsvExport(
+        snapshot,
+        restaurantId,
+        timeZone,
+        range.startLocalDate,
+        range.endLocalDate,
+      ),
+    [snapshot, restaurantId, timeZone, range.startLocalDate, range.endLocalDate],
   );
   const printModel = useMemo(
-    () => buildStatementPrintModel(snapshot, restaurantId, timeZone),
-    [snapshot, restaurantId, timeZone],
+    () =>
+      buildStatementPrintModel(
+        snapshot,
+        restaurantId,
+        timeZone,
+        range.startLocalDate,
+        range.endLocalDate,
+      ),
+    [snapshot, restaurantId, timeZone, range.startLocalDate, range.endLocalDate],
   );
 
   return (
@@ -754,6 +786,7 @@ function RestaurantStatementSection({
       asOfIso={visible?.asOfIso ?? null}
       csvFile={csvFile}
       printModel={printModel}
+      isStale={isStale}
     />
   );
 }
@@ -770,6 +803,7 @@ function StatementView({
   asOfIso,
   csvFile,
   printModel,
+  isStale,
 }: {
   timeZone: string;
   startLocalDate: string;
@@ -781,6 +815,7 @@ function StatementView({
   asOfIso: string | null;
   csvFile: RestaurantStatementCsvFile | null;
   printModel: StatementPrintModel | null;
+  isStale: boolean;
 }) {
   const view = result?.ok ? result.view : null;
   const noMovements =
@@ -829,9 +864,19 @@ function StatementView({
       </div>
 
       {result === null ? (
-        <div className={styles.empty}>
-          Задайте период и сформируйте выписку.
-        </div>
+        isStale ? (
+          // Период изменён после формирования: старый результат скрыт, экспорт
+          // недоступен (helpers вернули null), выписку нужно сформировать заново.
+          <div className={styles.attentionCard} role="status">
+            <div className={styles.attentionRow}>
+              Период изменён. Сформируйте выписку заново.
+            </div>
+          </div>
+        ) : (
+          <div className={styles.empty}>
+            Задайте период и сформируйте выписку.
+          </div>
+        )
       ) : !result.ok || !view ? (
         <div className={styles.attentionCard} role="alert">
           <div className={styles.attentionRow}>{result.error}</div>
