@@ -446,7 +446,6 @@ export function createOrderFromCart(
     ? computePickupSettlement({
         foodSubtotalCents: pricing.foodSubtotalCents,
         commissionRateBps: restaurant.pickupCommissionRateBps,
-        smallOrderFeeCents: pricing.smallOrderFeeCents,
       })
     : null;
   // Способ и статус оплаты определяются фактическим режимом:

@@ -41,6 +41,7 @@ import {
   computeRestaurantDeliveryQuote,
   computeVariantUnitPriceCents,
   resolveDeliveryMode,
+  shouldApplySmallOrderFee,
 } from "./pricing-engine";
 
 export type CatalogSort =
@@ -932,7 +933,8 @@ export function calculateCartPricing(state: PrototypeState): CartPricing {
       minimumPlatformGrossRevenueCents:
         state.platformSettings.minimumPlatformGrossRevenueCents,
       deliveryFeeCents: 0,
-      isPickup: false,
+      // Ветка достигается только при !isPickup у DIRECT-ресторана → PLATFORM_DRIVER.
+      deliveryMode: "PLATFORM_DRIVER",
     });
     base.restaurantCommissionCents = financials.restaurantCommissionCents;
     base.smallOrderFeeCents = financials.smallOrderFeeCents;
@@ -951,7 +953,8 @@ export function calculateCartPricing(state: PrototypeState): CartPricing {
     minimumPlatformGrossRevenueCents:
       state.platformSettings.minimumPlatformGrossRevenueCents,
     deliveryFeeCents: isPickup ? 0 : (matrixFeeCents ?? 0),
-    isPickup,
+    // DIRECT-ресторан: фактический режим — PICKUP или PLATFORM_DRIVER.
+    deliveryMode: isPickup ? "PICKUP" : "PLATFORM_DRIVER",
   });
   return {
     ...base,
@@ -988,6 +991,10 @@ function applyFinancials(
 export function getSmallOrderMissingAmountCents(
   state: PrototypeState,
 ): number {
+  // Подсказка о доплате имеет смысл только там, где доплата применяется —
+  // PLATFORM_DRIVER. Для PICKUP, RESTAURANT_DELIVERY и неопределимого режима
+  // подсказки нет (единый источник истины shouldApplySmallOrderFee).
+  if (!shouldApplySmallOrderFee(getCartDeliveryMode(state))) return 0;
   const restaurant = getRestaurant(state, state.cart.restaurantId);
   const rateBps =
     restaurant?.commissionRateBps ??

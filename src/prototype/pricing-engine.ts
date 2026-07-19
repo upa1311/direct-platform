@@ -44,6 +44,19 @@ export function resolveDeliveryMode(
     : "PLATFORM_DRIVER";
 }
 
+/**
+ * Единственный источник истины права применения small-order fee (доплаты за
+ * небольшой заказ): она применяется ТОГДА И ТОЛЬКО ТОГДА, когда фактический
+ * режим — доставка водителем Direct (PLATFORM_DRIVER). Правило НЕ зависит от
+ * способа оплаты (ONLINE или будущий CASH). PICKUP и RESTAURANT_DELIVERY доплату
+ * не получают; null (режим неопределим) — доплаты нет.
+ */
+export function shouldApplySmallOrderFee(
+  deliveryMode: DeliveryMode | null,
+): boolean {
+  return deliveryMode === "PLATFORM_DRIVER";
+}
+
 /** Деньги всегда целые минимальные единицы валюты. */
 export function roundMoneyCents(value: number): number {
   return Math.round(value);
@@ -219,13 +232,19 @@ export interface DirectFinancialsInput {
   minimumPlatformGrossRevenueCents: number;
   /** 0 для PICKUP, тариф матрицы Direct для PLATFORM_DRIVER. */
   deliveryFeeCents: number;
-  isPickup: boolean;
+  /**
+   * Фактический режим DIRECT-ресторана: PLATFORM_DRIVER (доставка) или PICKUP.
+   * Право применения small-order fee определяется только им (см.
+   * shouldApplySmallOrderFee), а не способом оплаты.
+   */
+  deliveryMode: DeliveryMode;
 }
 
 /**
  * Финансовый снимок ресторана типа DIRECT (Ресторан 1 и Ресторан 2):
- * комиссия Direct, действующая доплата за небольшой заказ, выплата водителю
- * Direct равна стоимости доставки. Для PICKUP доставка и выплата равны нулю.
+ * комиссия Direct, small-order fee ТОЛЬКО для PLATFORM_DRIVER, выплата водителю
+ * Direct равна стоимости доставки. Для PICKUP доставка, выплата и доплата равны
+ * нулю (клиент платит ресторану на точке, доплата Direct не начисляется).
  */
 export function computeDirectFinancials(
   input: DirectFinancialsInput,
@@ -233,11 +252,15 @@ export function computeDirectFinancials(
   const restaurantCommissionCents = roundMoneyCents(
     (input.foodSubtotalCents * input.commissionRateBps) / 10_000,
   );
-  const smallOrderFeeCents = Math.max(
-    0,
-    input.minimumPlatformGrossRevenueCents - restaurantCommissionCents,
-  );
-  const deliveryFeeCents = input.isPickup ? 0 : input.deliveryFeeCents;
+  // Доплата — единый инвариант: только PLATFORM_DRIVER, независимо от оплаты.
+  const smallOrderFeeCents = shouldApplySmallOrderFee(input.deliveryMode)
+    ? Math.max(
+        0,
+        input.minimumPlatformGrossRevenueCents - restaurantCommissionCents,
+      )
+    : 0;
+  const deliveryFeeCents =
+    input.deliveryMode === "PICKUP" ? 0 : input.deliveryFeeCents;
   const platformGrossRevenueCents =
     restaurantCommissionCents + smallOrderFeeCents;
 
@@ -246,7 +269,7 @@ export function computeDirectFinancials(
     smallOrderFeeCents,
     deliveryFeeCents,
     platformGrossRevenueCents,
-    driverPayoutCents: input.isPickup ? 0 : deliveryFeeCents,
+    driverPayoutCents: input.deliveryMode === "PICKUP" ? 0 : deliveryFeeCents,
     restaurantPayoutBeforeBankFeeCents:
       input.foodSubtotalCents - restaurantCommissionCents,
     customerTotalCents:
@@ -294,8 +317,6 @@ export interface PickupSettlementInput {
   foodSubtotalCents: number;
   /** Комиссия Direct за самовывоз, bps (по умолчанию 1500 = 15%). */
   commissionRateBps: number;
-  /** Действующая доплата за небольшой заказ (текущее поведение PICKUP). */
-  smallOrderFeeCents: number;
 }
 
 export interface PickupSettlement {
@@ -305,15 +326,16 @@ export interface PickupSettlement {
   restaurantCollectedFromCustomerCents: number;
   /** Direct не удерживает клиентский платёж при самовывозе. */
   platformCollectedFromCustomerCents: number;
-  /** Сколько ресторан должен Direct: комиссия + small-order fee, если есть. */
+  /** Сколько ресторан должен Direct: только комиссия (доплата не применяется). */
   platformCommissionReceivableCents: number;
   restaurantNetAfterPlatformCommissionCents: number;
 }
 
 /**
  * Финансовая модель самовывоза: клиент платит ресторану на точке, Direct
- * зарабатывает комиссию (и small-order fee, если применяется), которая
- * становится задолженностью ресторана перед Direct только после выдачи.
+ * зарабатывает только комиссию, которая становится задолженностью ресторана
+ * перед Direct после выдачи. Small-order fee к самовывозу НЕ применяется
+ * (см. shouldApplySmallOrderFee) — модель структурно неспособна её принять.
  */
 export function computePickupSettlement(
   input: PickupSettlementInput,
@@ -321,10 +343,9 @@ export function computePickupSettlement(
   const restaurantCommissionCents = roundMoneyCents(
     (input.foodSubtotalCents * input.commissionRateBps) / 10_000,
   );
-  // Доставка при самовывозе равна нулю.
-  const customerTotalCents = input.foodSubtotalCents + input.smallOrderFeeCents;
-  const platformCommissionReceivableCents =
-    restaurantCommissionCents + input.smallOrderFeeCents;
+  // Доставка и доплата при самовывозе равны нулю.
+  const customerTotalCents = input.foodSubtotalCents;
+  const platformCommissionReceivableCents = restaurantCommissionCents;
   return {
     restaurantCommissionCents,
     customerTotalCents,
