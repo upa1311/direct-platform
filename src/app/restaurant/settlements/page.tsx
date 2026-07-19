@@ -118,9 +118,9 @@ export default function RestaurantSettlementsPage() {
 
   // Presentation-only флаги контекста представления (без пересчёта данных).
   // Период и сводка заказов имеют смысл только в отчётах по заказам/дням;
-  // «Взаимные обязательства · за всё время» не относятся к выписке.
+  // «Взаимные обязательства · за всё время» относятся только к «Обязательствам».
   const isPeriodReport = view === "ORDERS" || view === "DAILY";
-  const isStatement = view === "STATEMENT";
+  const isObligations = view === "OBLIGATIONS";
 
   const restaurant = getRestaurant(state, selectedRestaurantId);
   const timeZone = restaurant?.timeZone ?? "Europe/Chisinau";
@@ -296,9 +296,9 @@ export default function RestaurantSettlementsPage() {
           ) : null}
 
           {/* Взаимные обязательства — открытая позиция за всё время (не зависит
-              от переключателя периода). В «Выписке» не показывается: у неё
-              собственный контекст. */}
-          {!isStatement && position ? (
+              от переключателя периода). Показывается только в представлении
+              «Обязательства»; отчёты по заказам/дням и выписка её не показывают. */}
+          {isObligations && position ? (
             <>
               <h2 className={styles.sectionTitle}>
                 Взаимные обязательства · за всё время
