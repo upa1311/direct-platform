@@ -840,8 +840,19 @@
   color: var(--kds-text);
 }
 
+/* Фактический итог заказа — самая заметная строка данных блока. */
+.cashWarningTotal {
+  font-size: 15px;
+  font-weight: 800;
+}
+
 .cashWarningPhone {
   font-weight: 650;
+}
+
+/* Способ получения и оплаты — спокойная уточняющая строка. */
+.cashWarningFulfillment {
+  color: var(--kds-muted);
 }
 
 /* --- Kitchen start confirmation (SPLIT) ---------------------------------- */

@@ -10,13 +10,18 @@ import {
   setCartFulfillmentChoice,
 } from "./actions.ts";
 import {
+  formatMoney,
   getKitchenNewOrders,
   HIGH_VALUE_CASH_ORDER_THRESHOLD_CENTS,
+  HIGH_VALUE_CASH_ORDER_WARNING_TEXT,
+  HIGH_VALUE_CASH_ORDER_WARNING_TITLE,
+  highValueCashOrderFulfillmentLabel,
   isHighValueCashOrder,
 } from "./selectors.ts";
 import type {
   DeliveryMode,
   Order,
+  OrderStatus,
   PaymentMethod,
   PrototypeState,
   RestaurantOrderWorkflowMode,
@@ -36,9 +41,11 @@ function order(
   deliveryMode: DeliveryMode,
   paymentMethod: PaymentMethod,
   customerTotalCents: number,
+  status: OrderStatus = "RESTAURANT_REVIEW",
 ): Order {
   return {
     id: "o1",
+    status,
     deliveryMode,
     paymentMethod,
     customer: { id: "c1", name: "Клиент", phone: "+373 000 00 100" },
@@ -99,6 +106,99 @@ test("порог считается по полному итогу заказа,
   assert.equal(
     isHighValueCashOrder(order("PICKUP", "PAY_AT_RESTAURANT", 4_999)),
     false,
+  );
+});
+
+// Только новый заказ ----------------------------------------------------------
+
+test("RESTAURANT_REVIEW + подходящий заказ $50 — предупреждение есть", () => {
+  assert.equal(
+    isHighValueCashOrder(
+      order("PICKUP", "PAY_AT_RESTAURANT", 5_000, "RESTAURANT_REVIEW"),
+    ),
+    true,
+  );
+});
+
+test("PREPARING + тот же заказ — предупреждения нет", () => {
+  assert.equal(
+    isHighValueCashOrder(
+      order("PICKUP", "PAY_AT_RESTAURANT", 5_000, "PREPARING"),
+    ),
+    false,
+  );
+});
+
+test("любой не-новый статус выключает предупреждение", () => {
+  const statuses: OrderStatus[] = [
+    "AWAITING_PAYMENT",
+    "PREPARING",
+    "READY",
+    "READY_FOR_PICKUP",
+    "OUT_FOR_DELIVERY",
+    "ARRIVING",
+    "DELIVERED",
+    "PICKED_UP",
+    "CANCELED",
+  ];
+  for (const status of statuses) {
+    assert.equal(
+      isHighValueCashOrder(
+        order("PICKUP", "PAY_AT_RESTAURANT", 9_999, status),
+      ),
+      false,
+      status,
+    );
+  }
+});
+
+// Точный текст ----------------------------------------------------------------
+
+test("текст — обязательная инструкция «требует подтверждения», а не рекомендация", () => {
+  assert.equal(
+    HIGH_VALUE_CASH_ORDER_WARNING_TITLE,
+    "ВНИМАНИЕ: БОЛЬШАЯ СУММА ЗАКАЗА",
+  );
+  assert.ok(
+    HIGH_VALUE_CASH_ORDER_WARNING_TEXT.includes(
+      "требует подтверждения клиента по телефону",
+    ),
+    HIGH_VALUE_CASH_ORDER_WARNING_TEXT,
+  );
+  // Смягчённой формулировки в тексте больше нет.
+  assert.ok(!HIGH_VALUE_CASH_ORDER_WARNING_TEXT.includes("рекомендуется"));
+  assert.equal(
+    HIGH_VALUE_CASH_ORDER_WARNING_TEXT,
+    "Заказ с оплатой при получении на сумму от $50 требует подтверждения клиента по телефону перед началом приготовления.",
+  );
+});
+
+// Данные в блоке --------------------------------------------------------------
+
+test("подпись способа получения: точные тексты для обоих режимов", () => {
+  assert.equal(
+    highValueCashOrderFulfillmentLabel(
+      order("PICKUP", "PAY_AT_RESTAURANT", 5_000),
+    ),
+    "Самовывоз · оплата в ресторане",
+  );
+  assert.equal(
+    highValueCashOrderFulfillmentLabel(
+      order("RESTAURANT_DELIVERY", "CASH_TO_RESTAURANT_COURIER", 5_000),
+    ),
+    "Доставка курьером ресторана · наличные при получении",
+  );
+});
+
+test("в блоке есть фактический итог, телефон и подпись способа получения", () => {
+  const target = order("PICKUP", "PAY_AT_RESTAURANT", 6_240);
+  assert.equal(isHighValueCashOrder(target), true);
+  // Итог берётся из заказа существующим formatMoney, без пересчётов.
+  assert.equal(formatMoney(target.financials.customerTotalCents), "$62.40");
+  assert.equal(target.customer.phone, "+373 000 00 100");
+  assert.equal(
+    highValueCashOrderFulfillmentLabel(target),
+    "Самовывоз · оплата в ресторане",
   );
 });
 

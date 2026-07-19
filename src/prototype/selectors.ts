@@ -1456,17 +1456,25 @@ export function getClientCancellationMessage(
 export const HIGH_VALUE_CASH_ORDER_THRESHOLD_CENTS = 5_000;
 
 /**
- * Нужно ли показать информационное предупреждение о крупном наличном заказе.
- * Условия: полный итог заказа (customerTotalCents, а не только стоимость еды)
- * не меньше порога И оплата именно при получении — самовывоз с оплатой в
- * ресторане либо доставка ресторана наличными курьеру. ONLINE и доставка
- * водителем Direct (PLATFORM_DRIVER) под правило не попадают: у наличной
- * доставки Direct отдельное правило.
+ * Нужно ли показать предупреждение о крупном заказе с оплатой при получении.
+ * Условия: заказ ЕЩЁ НОВЫЙ (RESTAURANT_REVIEW), полный итог заказа
+ * (customerTotalCents, а не только стоимость еды) не меньше порога И оплата
+ * именно при получении — самовывоз с оплатой в ресторане либо доставка
+ * ресторана наличными курьеру. ONLINE и доставка водителем Direct
+ * (PLATFORM_DRIVER) под правило не попадают: у наличной доставки Direct
+ * отдельное правило.
+ *
+ * Проверка статуса — часть правила, а не только разметки: для PREPARING, READY,
+ * CANCELED и любого другого статуса helper возвращает false, даже если компонент
+ * позже случайно переиспользуют вне карточки нового заказа.
  *
  * Чистая функция-подсказка: не меняет статус, оплату, ETA и финансовый снимок и
  * ничего не блокирует.
  */
 export function isHighValueCashOrder(order: Order): boolean {
+  if (order.status !== "RESTAURANT_REVIEW") {
+    return false;
+  }
   const paidOnReceipt =
     (order.deliveryMode === "PICKUP" &&
       order.paymentMethod === "PAY_AT_RESTAURANT") ||
@@ -1477,6 +1485,35 @@ export function isHighValueCashOrder(order: Order): boolean {
     order.financials.customerTotalCents >=
       HIGH_VALUE_CASH_ORDER_THRESHOLD_CENTS
   );
+}
+
+/** Заголовок предупреждения о крупном заказе с оплатой при получении. */
+export const HIGH_VALUE_CASH_ORDER_WARNING_TITLE =
+  "ВНИМАНИЕ: БОЛЬШАЯ СУММА ЗАКАЗА";
+
+/**
+ * Обязательная операционная инструкция сотруднику: заказ ТРЕБУЕТ подтверждения
+ * клиента по телефону, а не «рекомендуется подтвердить». При этом система
+ * отдельной кнопки подтверждения не требует и заказ технически не блокирует —
+ * ни приём, ни печать.
+ */
+export const HIGH_VALUE_CASH_ORDER_WARNING_TEXT =
+  "Заказ с оплатой при получении на сумму от $50 требует подтверждения клиента по телефону перед началом приготовления.";
+
+/**
+ * Точная подпись способа получения и оплаты для предупреждения о крупном заказе.
+ * null — способ получения под правило не подпадает (в предупреждении не бывает).
+ */
+export function highValueCashOrderFulfillmentLabel(
+  order: Order,
+): string | null {
+  if (order.deliveryMode === "PICKUP") {
+    return "Самовывоз · оплата в ресторане";
+  }
+  if (order.deliveryMode === "RESTAURANT_DELIVERY") {
+    return "Доставка курьером ресторана · наличные при получении";
+  }
+  return null;
 }
 
 /**
