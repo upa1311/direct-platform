@@ -1475,10 +1475,18 @@ export function getAudibleKitchenReviewOrders(
 }
 
 /**
+ * Интервал повтора сигнала нового заказа: пока в RESTAURANT_REVIEW остаётся хотя
+ * бы один звучащий заказ, тот же сигнал повторяется каждые 20 секунд. Единый
+ * источник истины интервала — без magic number в нескольких местах.
+ */
+export const NEW_ORDER_REPEAT_INTERVAL_MS = 20_000;
+
+/**
  * Нужен ли сейчас звуковой сигнал кухни (§2, §19). Чистая функция расписания:
- * сигнал нужен, если есть новые заказы и либо появился ещё не объявленный заказ,
- * либо прошёл интервал (по умолчанию 20с) с прошлого сигнала. В reviewOrderIds
- * передаются только «звучащие» заказы (моложе 7 минут, выбранного ресторана).
+ * сигнал нужен, если есть новые заказы и либо появился ещё не объявленный заказ
+ * (немедленный сигнал), либо прошёл NEW_ORDER_REPEAT_INTERVAL_MS с прошлого
+ * сигнала. В reviewOrderIds передаются только «звучащие» заказы (моложе 7 минут,
+ * выбранного ресторана); пустой список — сигнала нет (расписание сброшено).
  */
 export function isKitchenBeepDue(params: {
   reviewOrderIds: readonly string[];
@@ -1487,7 +1495,7 @@ export function isKitchenBeepDue(params: {
   nowMs: number;
   intervalMs?: number;
 }): boolean {
-  const interval = params.intervalMs ?? 20_000;
+  const interval = params.intervalMs ?? NEW_ORDER_REPEAT_INTERVAL_MS;
   if (params.reviewOrderIds.length === 0) {
     return false;
   }
