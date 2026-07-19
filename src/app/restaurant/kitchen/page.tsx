@@ -21,6 +21,7 @@ import {
   NewOrderSoundButton,
   useNewOrderSound,
 } from "@/components/kitchen/new-order-sound";
+import { useSplitKitchenPreparingSound } from "@/components/kitchen/use-split-kitchen-preparing-sound";
 import { PreparationProblemResolveBlock } from "@/components/kitchen/preparation-problem-resolve";
 import {
   EtaAdjustPanel,
@@ -1104,6 +1105,15 @@ export default function RestaurantKitchenPage() {
     nowMs,
   });
 
+  // SPLIT: кухня получает один существующий beep при фактическом появлении заказа
+  // в PREPARING (после принятия оператором или подтверждения онлайн-оплаты). Тот
+  // же колокольчик кухни — разрешение звука. В COMBINED сигнал PREPARING отключён.
+  useSplitKitchenPreparingSound({
+    restaurantId: selectedRestaurantId,
+    enabled: isSplit && soundEnabled,
+    nowMs,
+  });
+
   return (
     <div className={kds.screen}>
       <div className={kds.toolbar}>
@@ -1129,14 +1139,13 @@ export default function RestaurantKitchenPage() {
               </option>
             ))}
           </select>
-          {/* В SPLIT новые заказы звучат у оператора — колокольчик кухне не нужен. */}
-          {!isSplit ? (
-            <NewOrderSoundButton
-              soundEnabled={soundEnabled}
-              onEnable={() => void handleEnableSound()}
-              onDisable={handleDisableSound}
-            />
-          ) : null}
+          {/* Один колокольчик на экране: в COMBINED управляет сигналом нового
+              заказа, в SPLIT — кухонным сигналом начала приготовления. */}
+          <NewOrderSoundButton
+            soundEnabled={soundEnabled}
+            onEnable={() => void handleEnableSound()}
+            onDisable={handleDisableSound}
+          />
         </div>
       </div>
       {soundBlocked ? (
