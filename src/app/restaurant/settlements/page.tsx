@@ -403,8 +403,9 @@ function OrdersView({
           ) : (
             <div className={styles.tableScroll}>
               {/* 7 основных колонок; остальные прежние поля — в «Детали» (details).
-                  Значения и порядок строк не меняются. */}
-              <table className={styles.table}>
+                  На ≤720px ordersTable превращает каждую строку в карточку
+                  (data-label подписывает значения). Значения и порядок не меняются. */}
+              <table className={`${styles.table} ${styles.ordersTable}`}>
                 <thead>
                   <tr>
                     <th>Завершён</th>
@@ -419,17 +420,23 @@ function OrdersView({
                 <tbody>
                   {overview.rows.map((row) => (
                     <tr key={row.orderId}>
-                      <td>{formatInZone(row.completedAt, timeZone)}</td>
-                      <td className={styles.orderNumber}>{row.publicNumber}</td>
-                      <td>{deliveryModeLabels[row.deliveryMode]}</td>
-                      <td className={styles.money}>{money(row.foodSubtotalCents)}</td>
-                      <td className={styles.money}>
+                      <td data-label="Завершён">
+                        {formatInZone(row.completedAt, timeZone)}
+                      </td>
+                      <td className={styles.orderNumber} data-label="Заказ">
+                        {row.publicNumber}
+                      </td>
+                      <td data-label="Способ">{deliveryModeLabels[row.deliveryMode]}</td>
+                      <td className={styles.money} data-label="Продажи блюд">
+                        {money(row.foodSubtotalCents)}
+                      </td>
+                      <td className={styles.money} data-label="Ресторану после комиссии">
                         {money(row.restaurantNetAfterPlatformCommissionCents)}
                       </td>
-                      <td className={styles.money}>
+                      <td className={styles.money} data-label="Комиссия Direct">
                         {money(row.platformCommissionReceivableCents)}
                       </td>
-                      <td>
+                      <td className={styles.ordersDetailCell} data-label="Детали">
                         <OrderDetails row={row} money={money} />
                       </td>
                     </tr>
@@ -480,8 +487,13 @@ function OrderDetails({
     ? `${settlementTypeLabels[row.ledger.type]} · ${money(row.ledger.amountCents)} · ${settlementStatusLabels[row.ledger.status]}`
     : "Начисления нет";
   return (
-    <details className={styles.orderDetails}>
-      <summary className={styles.reconSummary}>Открыть</summary>
+    <details>
+      <summary
+        className={styles.reconSummary}
+        aria-label={`Открыть детали заказа ${row.publicNumber}`}
+      >
+        Открыть
+      </summary>
       <dl className={styles.orderDetailsList}>
         <OrderDetailRow
           label="Статус"
