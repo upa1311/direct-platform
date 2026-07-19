@@ -18,6 +18,7 @@ import {
   NewOrderSoundButton,
   useNewOrderSound,
 } from "@/components/kitchen/new-order-sound";
+import { useOperatorOrderReadySound } from "@/components/operator/use-operator-order-ready-sound";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
@@ -823,6 +824,18 @@ export default function RestaurantOperatorPage() {
     enabled:
       isHydrated &&
       restaurant?.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN",
+    nowMs,
+  });
+
+  // Звук «Заказ готов» — только у оператора в SPLIT и только при включённом
+  // колокольчике (то же разрешение, что и у сигнала нового заказа). Один сигнал
+  // при первом переходе заказа в READY/READY_FOR_PICKUP. В COMBINED не звучит.
+  useOperatorOrderReadySound({
+    restaurantId: selectedRestaurantId,
+    enabled:
+      isHydrated &&
+      restaurant?.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN" &&
+      soundEnabled,
     nowMs,
   });
 
