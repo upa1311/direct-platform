@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
@@ -23,7 +24,6 @@ import {
 import { PreparationProblemResolveBlock } from "@/components/kitchen/preparation-problem-resolve";
 import {
   EtaAdjustPanel,
-  MenuAvailabilitySection,
   RestaurantPauseControl,
 } from "@/components/kitchen/kitchen-operations";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
@@ -1265,9 +1265,19 @@ export default function RestaurantKitchenPage() {
               )}
             </section>
           </div>
-          {restaurant ? (
-            <MenuAvailabilitySection restaurant={restaurant} nowMs={nowMs} />
-          ) : null}
+          {/* Полный список доступности меню живёт в отдельном разделе
+              /restaurant/menu; на экране заказов — только компактный переход,
+              чтобы не дублировать всё меню. */}
+          <section className={kds.section}>
+            <h2 className={kds.sectionTitle}>Меню и доступность</h2>
+            <p className={kds.panelHint}>
+              Отключение блюд и управление доступностью находятся в отдельном
+              разделе.
+            </p>
+            <Link className={`${kds.btn} ${kds.btnOutline}`} href="/restaurant/menu">
+              Открыть меню
+            </Link>
+          </section>
         </>
       )}
     </div>
