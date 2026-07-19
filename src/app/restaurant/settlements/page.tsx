@@ -116,6 +116,12 @@ export default function RestaurantSettlementsPage() {
   const [period, setPeriod] = useState<RestaurantSettlementPeriod>("TODAY");
   const [view, setView] = useState<SettlementView>("ORDERS");
 
+  // Presentation-only флаги контекста представления (без пересчёта данных).
+  // Период и сводка заказов имеют смысл только в отчётах по заказам/дням;
+  // «Взаимные обязательства · за всё время» не относятся к выписке.
+  const isPeriodReport = view === "ORDERS" || view === "DAILY";
+  const isStatement = view === "STATEMENT";
+
   const restaurant = getRestaurant(state, selectedRestaurantId);
   const timeZone = restaurant?.timeZone ?? "Europe/Chisinau";
 
@@ -189,22 +195,7 @@ export default function RestaurantSettlementsPage() {
         <div className={kds.empty}>Ресторан не найден.</div>
       ) : (
         <div className={`${styles.container} direct-print-screen`}>
-          {/* Переключатель периода */}
-          <div className={styles.periods} role="group" aria-label="Период">
-            {RESTAURANT_SETTLEMENT_PERIOD_ORDER.map((p) => (
-              <button
-                key={p}
-                type="button"
-                className={styles.periodButton}
-                aria-pressed={period === p}
-                onClick={() => setPeriod(p)}
-              >
-                {RESTAURANT_SETTLEMENT_PERIOD_LABELS[p]}
-              </button>
-            ))}
-          </div>
-
-          {/* Внутренний переключатель представления (не пункт навигации). */}
+          {/* Переключатель представления всегда первым (не пункт навигации). */}
           <div className={styles.periods} role="group" aria-label="Представление">
             <button
               type="button"
@@ -240,52 +231,74 @@ export default function RestaurantSettlementsPage() {
             </button>
           </div>
 
-          {/* Сводные показатели */}
-          <div className={styles.summaryGrid}>
-            <SummaryCard label="Завершённые заказы" value={String(overview.summary.completedOrderCount)} />
-            <SummaryCard label="Стоимость заказов" value={money(overview.summary.customerTotalCents)} />
-            <SummaryCard label="Продажи блюд" value={money(overview.summary.foodSubtotalCents)} />
-            <SummaryCard label="Чисто ресторану" value={money(overview.summary.restaurantNetCents)} />
-            <SummaryCard label="Собрано рестораном с клиентов" value={money(overview.summary.restaurantCollectedFromCustomerCents)} />
-            <SummaryCard
-              label="Собрано Direct с клиентов"
-              value={money(overview.summary.platformCollectedFromCustomerCents)}
-              hint="Информационный показатель снимка, не подтверждённая выплата."
-            />
-            <SummaryCard
-              label="Комиссия Direct по финансовым снимкам"
-              value={money(overview.summary.platformCommissionReceivableCents)}
-              hint="По финансовым снимкам заказов."
-            />
-            <SummaryCard
-              label="Ожидает расчёта по журналу комиссий"
-              value={money(overview.summary.pendingLedgerCents)}
-              hint="Только начисления со статусом „Ожидает расчёта“ в журнале комиссий."
-            />
-          </div>
+          {/* Период и сводка заказов — только в отчётах по заказам/дням. */}
+          {isPeriodReport ? (
+            <>
+              {/* Переключатель периода */}
+              <div className={styles.periods} role="group" aria-label="Период">
+                {RESTAURANT_SETTLEMENT_PERIOD_ORDER.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={styles.periodButton}
+                    aria-pressed={period === p}
+                    onClick={() => setPeriod(p)}
+                  >
+                    {RESTAURANT_SETTLEMENT_PERIOD_LABELS[p]}
+                  </button>
+                ))}
+              </div>
 
-          {/* Объяснение */}
-          <div className={styles.info}>
-            <p>
-              Расчёты построены по финансовым снимкам заказов. Открытые
-              обязательства между Direct и рестораном фиксируются в отдельном
-              двустороннем журнале. Исполнение или допустимое списание фиксирует
-              администратор Direct. Система не выполняет автоматический
-              взаимозачёт или банковский перевод.
-            </p>
-            <p>
-              Показатель «Ожидает расчёта по журналу комиссий» относится только к
-              старому журналу комиссий, который сохранён для совместимости.
-            </p>
-            <p className={styles.footnote}>
-              Раздел предназначен для операционной сверки, а не заменяет
-              бухгалтерский учёт.
-            </p>
-          </div>
+              {/* Сводные показатели */}
+              <div className={styles.summaryGrid}>
+                <SummaryCard label="Завершённые заказы" value={String(overview.summary.completedOrderCount)} />
+                <SummaryCard label="Стоимость заказов" value={money(overview.summary.customerTotalCents)} />
+                <SummaryCard label="Продажи блюд" value={money(overview.summary.foodSubtotalCents)} />
+                <SummaryCard label="Чисто ресторану" value={money(overview.summary.restaurantNetCents)} />
+                <SummaryCard label="Собрано рестораном с клиентов" value={money(overview.summary.restaurantCollectedFromCustomerCents)} />
+                <SummaryCard
+                  label="Собрано Direct с клиентов"
+                  value={money(overview.summary.platformCollectedFromCustomerCents)}
+                  hint="Информационный показатель снимка, не подтверждённая выплата."
+                />
+                <SummaryCard
+                  label="Комиссия Direct по финансовым снимкам"
+                  value={money(overview.summary.platformCommissionReceivableCents)}
+                  hint="По финансовым снимкам заказов."
+                />
+                <SummaryCard
+                  label="Ожидает расчёта по журналу комиссий"
+                  value={money(overview.summary.pendingLedgerCents)}
+                  hint="Только начисления со статусом „Ожидает расчёта“ в журнале комиссий."
+                />
+              </div>
+
+              {/* Объяснение финансовых снимков */}
+              <div className={styles.info}>
+                <p>
+                  Расчёты построены по финансовым снимкам заказов. Открытые
+                  обязательства между Direct и рестораном фиксируются в отдельном
+                  двустороннем журнале. Исполнение или допустимое списание
+                  фиксирует администратор Direct. Система не выполняет
+                  автоматический взаимозачёт или банковский перевод.
+                </p>
+                <p>
+                  Показатель «Ожидает расчёта по журналу комиссий» относится
+                  только к старому журналу комиссий, который сохранён для
+                  совместимости.
+                </p>
+                <p className={styles.footnote}>
+                  Раздел предназначен для операционной сверки, а не заменяет
+                  бухгалтерский учёт.
+                </p>
+              </div>
+            </>
+          ) : null}
 
           {/* Взаимные обязательства — открытая позиция за всё время (не зависит
-              от переключателя периода). */}
-          {position ? (
+              от переключателя периода). В «Выписке» не показывается: у неё
+              собственный контекст. */}
+          {!isStatement && position ? (
             <>
               <h2 className={styles.sectionTitle}>
                 Взаимные обязательства · за всё время
