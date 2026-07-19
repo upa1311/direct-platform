@@ -57,6 +57,7 @@ import {
   isActiveOrderStatus,
   isAddressReady,
   isCustomerNameValid,
+  getDriverActiveOrder,
   isCustomerPhoneValid,
   isMenuItemAvailableAt,
   isOperationalPauseActiveAt,
@@ -3568,6 +3569,70 @@ export function resumeExpiredOperationalPauses(
       operationalEvents: [...state.operationalEvents, ...events],
     },
     nowIso,
+  );
+}
+
+/** Результат действия из кабинета водителя. */
+export interface DriverActionResult {
+  ok: boolean;
+  error: string | null;
+}
+
+/**
+ * Водитель сам управляет сменой: онлайн (`OFFLINE → AVAILABLE`) или офлайн
+ * (`AVAILABLE → OFFLINE`). Инварианты:
+ *  - неизвестный водитель → ошибка, состояние не меняется;
+ *  - уйти офлайн во время активной доставки нельзя (есть заказ в работе или
+ *    статус `BUSY`) — сначала завершается доставка;
+ *  - `BUSY` онлайн-запросом не понижается (водитель уже на смене и везёт заказ);
+ *  - повторный запрос того же состояния — успех без изменения ревизии (no-op).
+ *
+ * `BUSY` устанавливается/снимается только жизненным циклом назначения (assign /
+ * complete / cancel), а не этим действием. Состояние не мутируется.
+ */
+export function setDriverAvailability(
+  state: PrototypeState,
+  driverId: string,
+  online: boolean,
+): ActionResult<DriverActionResult> {
+  const fail = (error: string): ActionResult<DriverActionResult> => ({
+    state,
+    result: { ok: false, error },
+  });
+  const ok = (nextState: PrototypeState): ActionResult<DriverActionResult> => ({
+    state: nextState,
+    result: { ok: true, error: null },
+  });
+
+  const driver = state.drivers.find((d) => d.id === driverId);
+  if (!driver) return fail("Водитель не найден.");
+
+  if (online) {
+    // Онлайн только из OFFLINE; AVAILABLE/BUSY уже на смене — no-op успех.
+    if (driver.status !== "OFFLINE") return ok(state);
+    const now = new Date().toISOString();
+    return ok(
+      finalizeMutation(
+        state,
+        { ...state, drivers: setDriverStatus(state.drivers, driverId, "AVAILABLE") },
+        now,
+      ),
+    );
+  }
+
+  // Офлайн: запрещён при активной доставке.
+  if (driver.status === "BUSY" || getDriverActiveOrder(state, driverId)) {
+    return fail("Нельзя уйти офлайн во время активной доставки.");
+  }
+  // Офлайн только из AVAILABLE; уже OFFLINE — no-op успех.
+  if (driver.status !== "AVAILABLE") return ok(state);
+  const now = new Date().toISOString();
+  return ok(
+    finalizeMutation(
+      state,
+      { ...state, drivers: setDriverStatus(state.drivers, driverId, "OFFLINE") },
+      now,
+    ),
   );
 }
 

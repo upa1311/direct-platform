@@ -1643,6 +1643,34 @@ export function shouldShowDriverAssignment(order: Order): boolean {
   return eligibleForFirstAssignment || alreadyAssignedActive;
 }
 
+/**
+ * Активный (в работе) заказ, назначенный водителю: заказ с
+ * `assignedDriverId === driverId` в одном из активных курьерских статусов
+ * (`DRIVER_ACTIVE_STATUSES`, не терминальных). Единственный источник истины для
+ * инварианта «один активный заказ на водителя»: null — водитель ничего не везёт.
+ * Чистая производная, состояние не мутируется.
+ */
+export function getDriverActiveOrder(
+  state: PrototypeState,
+  driverId: string,
+): Order | null {
+  return (
+    state.orders.find(
+      (order) =>
+        order.assignedDriverId === driverId &&
+        DRIVER_ACTIVE_STATUSES.includes(order.status),
+    ) ?? null
+  );
+}
+
+/**
+ * Доступен ли водитель для новых предложений. Только `AVAILABLE` — на смене и
+ * свободен. `BUSY` (везёт заказ) и `OFFLINE` (не на смене) предложения не получают.
+ */
+export function isDriverAvailableForOffers(driver: DriverProfile): boolean {
+  return driver.status === "AVAILABLE";
+}
+
 /** Активные (не завершённые) статусы заказа. */
 export const ACTIVE_ORDER_STATUSES: readonly OrderStatus[] = [
   "RESTAURANT_REVIEW",
