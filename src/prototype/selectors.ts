@@ -1450,6 +1450,36 @@ export function getClientCancellationMessage(
 }
 
 /**
+ * Порог информационного предупреждения о крупном заказе с оплатой при получении:
+ * $50.00. Сравнение нестрогое — ровно $50.00 уже попадает под предупреждение.
+ */
+export const HIGH_VALUE_CASH_ORDER_THRESHOLD_CENTS = 5_000;
+
+/**
+ * Нужно ли показать информационное предупреждение о крупном наличном заказе.
+ * Условия: полный итог заказа (customerTotalCents, а не только стоимость еды)
+ * не меньше порога И оплата именно при получении — самовывоз с оплатой в
+ * ресторане либо доставка ресторана наличными курьеру. ONLINE и доставка
+ * водителем Direct (PLATFORM_DRIVER) под правило не попадают: у наличной
+ * доставки Direct отдельное правило.
+ *
+ * Чистая функция-подсказка: не меняет статус, оплату, ETA и финансовый снимок и
+ * ничего не блокирует.
+ */
+export function isHighValueCashOrder(order: Order): boolean {
+  const paidOnReceipt =
+    (order.deliveryMode === "PICKUP" &&
+      order.paymentMethod === "PAY_AT_RESTAURANT") ||
+    (order.deliveryMode === "RESTAURANT_DELIVERY" &&
+      order.paymentMethod === "CASH_TO_RESTAURANT_COURIER");
+  return (
+    paidOnReceipt &&
+    order.financials.customerTotalCents >=
+      HIGH_VALUE_CASH_ORDER_THRESHOLD_CENTS
+  );
+}
+
+/**
  * Таймаут ответа ресторана для звукового расписания — ровно 7 минут. Должен
  * совпадать с RESTAURANT_RESPONSE_TIMEOUT_MS в actions (авто-отмена).
  */

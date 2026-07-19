@@ -6,6 +6,7 @@ import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
+import { HighValueCashOrderWarning } from "@/components/kitchen/high-value-cash-order-warning";
 import { formatOperatorDeliveryAddress } from "@/components/kitchen/operator-delivery-address";
 import { PreparationProblemResolveBlock } from "@/components/kitchen/preparation-problem-resolve";
 import { OperatorPackageLabelPrintButton } from "@/components/operator/operator-package-label-print";
@@ -215,6 +216,9 @@ function OperatorAcceptPanel({
 
   return (
     <>
+      {/* Крупный заказ с оплатой при получении: подсказка позвонить клиенту.
+          Только карточка нового заказа оператора; приём и печать не блокируются. */}
+      <HighValueCashOrderWarning order={order} />
       {autoClose.needsAttention ? (
         <span className={kds.attentionBadge}>Требуется реакция</span>
       ) : null}

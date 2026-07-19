@@ -6,6 +6,7 @@ import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
+import { HighValueCashOrderWarning } from "@/components/kitchen/high-value-cash-order-warning";
 import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
 import { OperatorPackageLabelPrintButton } from "@/components/operator/operator-package-label-print";
 import {
@@ -461,6 +462,11 @@ function NewOrderCard({
       {autoClose.needsAttention ? (
         <span className={kds.attentionBadge}>Требуется реакция</span>
       ) : null}
+      {/* Крупный заказ с оплатой при получении: подсказка позвонить клиенту.
+          Только общий экран (COMBINED) — эта карточка в SPLIT не рендерится,
+          но признак оставлен явно, чтобы кухня не получила предупреждение и
+          телефон клиента ни при каких изменениях разметки. */}
+      {isSplit ? null : <HighValueCashOrderWarning order={order} />}
       <KitchenItems order={order} />
       <p className={kds.units}>Всего единиц: {totalUnits(order)}</p>
       <div
