@@ -624,6 +624,11 @@
   align-items: start;
 }
 
+/* SPLIT-кухня без колонки «Новые»: две равные колонки на desktop. */
+.boardSplit {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .column {
   display: grid;
   gap: 10px;
@@ -878,7 +883,8 @@
 
 /* --- Mobile -------------------------------------------------------------- */
 @media (max-width: 960px) {
-  .board {
+  .board,
+  .boardSplit {
     grid-template-columns: 1fr;
   }
 }

@@ -1215,19 +1215,23 @@ export default function RestaurantKitchenPage() {
             </p>
           ) : null}
 
-          <div className={kds.board}>
-            <section className={kds.column}>
-              <h2 className={kds.columnHead}>
-                Новые <span>— {newOrders.length}</span>
-              </h2>
-              {newOrders.length === 0 ? (
-                <div className={kds.empty}>Новых заказов нет.</div>
-              ) : (
-                newOrders.map((order) => (
-                  <NewOrderCard order={order} nowMs={nowMs} isSplit={isSplit} key={order.id} />
-                ))
-              )}
-            </section>
+          {/* SPLIT: отдельная кухня не принимает новые заказы — колонка «Новые»
+              не рендерится, доска сжимается до двух равных колонок. */}
+          <div className={isSplit ? `${kds.board} ${kds.boardSplit}` : kds.board}>
+            {isSplit ? null : (
+              <section className={kds.column}>
+                <h2 className={kds.columnHead}>
+                  Новые <span>— {newOrders.length}</span>
+                </h2>
+                {newOrders.length === 0 ? (
+                  <div className={kds.empty}>Новых заказов нет.</div>
+                ) : (
+                  newOrders.map((order) => (
+                    <NewOrderCard order={order} nowMs={nowMs} isSplit={isSplit} key={order.id} />
+                  ))
+                )}
+              </section>
+            )}
 
             <section className={kds.column}>
               <h2 className={kds.columnHead}>
