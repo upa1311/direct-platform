@@ -5,6 +5,7 @@ import { createDefaultState } from "./default-state.ts";
 import {
   acceptRestaurantOrder,
   addCartItem,
+  completePickupAtRestaurant,
   completePickupWithCode,
   createOrderFromCart,
   createRestaurant,
@@ -36,8 +37,9 @@ function makeReadyPickupOrder(): {
   const order = s.orders.find((o) => o.id === orderId);
   assert.ok(order);
   assert.equal(order.status, "READY_FOR_PICKUP");
-  assert.ok(order.pickupCode);
-  return { state: s, orderId, code: order.pickupCode as string };
+  // Новый самовывоз кода не имеет: подтверждением служит фактическая оплата.
+  assert.equal(order.pickupCode, null);
+  return { state: s, orderId, code: "" };
 }
 
 test("самовывоз: заказ не запускает онлайн-оплату", () => {
@@ -49,18 +51,24 @@ test("самовывоз: заказ не запускает онлайн-опл
   assert.equal(state.settlements.length, 0);
 });
 
-test("неправильный код не завершает заказ и не создаёт settlement", () => {
+test("неготовый заказ не завершается и не создаёт settlement", () => {
   const { state, orderId } = makeReadyPickupOrder();
-  const result = completePickupWithCode(state, orderId, "0000", "CASH");
+  // Код больше не проверяется; блокирует именно неподходящий статус.
+  const preparing = {
+    ...state,
+    orders: state.orders.map((o) =>
+      o.id === orderId ? { ...o, status: "PREPARING" as const } : o,
+    ),
+  };
+  const result = completePickupAtRestaurant(preparing, orderId, "CASH");
   assert.equal(result.result.ok, false);
-  const order = result.state.orders.find((o) => o.id === orderId);
-  assert.equal(order?.status, "READY_FOR_PICKUP");
+  assert.equal(result.state, preparing);
   assert.equal(result.state.settlements.length, 0);
 });
 
-test("правильный код завершает заказ, оплата и одна ledger-запись", () => {
-  const { state, orderId, code } = makeReadyPickupOrder();
-  const result = completePickupWithCode(state, orderId, code, "CASH");
+test("фиксация оплаты завершает заказ и создаёт одну ledger-запись", () => {
+  const { state, orderId } = makeReadyPickupOrder();
+  const result = completePickupAtRestaurant(state, orderId, "CASH");
   assert.equal(result.result.ok, true);
   const order = result.state.orders.find((o) => o.id === orderId);
   assert.equal(order?.status, "PICKED_UP");

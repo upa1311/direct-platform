@@ -70,11 +70,6 @@ export function OperatorPackageLabel({
         {paymentBlock.kind === "PAID" ? null : (
           <div className={styles.paymentAmount}>{paymentBlock.amount}</div>
         )}
-        {paymentBlock.kind === "PICKUP_DUE" && paymentBlock.methodsLine ? (
-          <div className={styles.paymentMethods}>
-            {paymentBlock.methodsLine}
-          </div>
-        ) : null}
       </div>
     </div>
   );

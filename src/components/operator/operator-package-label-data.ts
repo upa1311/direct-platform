@@ -42,10 +42,8 @@ export type PackagePaymentBlock =
   | { kind: "CASH_DUE"; title: "К ОПЛАТЕ НАЛИЧНЫМИ"; amount: string }
   | {
       kind: "PICKUP_DUE";
-      title: "К ОПЛАТЕ В РЕСТОРАНЕ";
+      title: "ОПЛАТА В РЕСТОРАНЕ";
       amount: string;
-      /** «НАЛИЧНЫМИ ИЛИ КАРТОЙ» и т.п.; null — снимок способов пуст. */
-      methodsLine: string | null;
     };
 
 export interface OperatorPackageLabelData {
@@ -93,18 +91,6 @@ export function formatPackageLabelItemLine(
   return variant ? `${base} · ${variant}` : base;
 }
 
-/** Строка способов оплаты на точке строго из снимка заказа; null — снимок пуст. */
-export function formatPickupMethodsLine(
-  methods: readonly ("CASH" | "CARD")[],
-): string | null {
-  const hasCash = methods.includes("CASH");
-  const hasCard = methods.includes("CARD");
-  if (hasCash && hasCard) return "НАЛИЧНЫМИ ИЛИ КАРТОЙ";
-  if (hasCash) return "НАЛИЧНЫМИ";
-  if (hasCard) return "КАРТОЙ";
-  return null;
-}
-
 /**
  * Платёжный блок из фактического состояния заказа. Полный итог берётся из
  * неизменяемого снимка (financials.customerTotalCents) и форматируется общим
@@ -142,12 +128,9 @@ export function resolvePackagePaymentBlock(
     order.deliveryMode === "PICKUP" &&
     order.paymentMethod === "PAY_AT_RESTAURANT"
   ) {
-    return {
-      kind: "PICKUP_DUE",
-      title: "К ОПЛАТЕ В РЕСТОРАНЕ",
-      amount,
-      methodsLine: formatPickupMethodsLine(order.pickupPaymentMethodsSnapshot),
-    };
+    // Способы оплаты на наклейке не перечисляем: клиент выбирает их уже в
+    // ресторане, а пустой исторический снимок печать не блокирует.
+    return { kind: "PICKUP_DUE", title: "ОПЛАТА В РЕСТОРАНЕ", amount };
   }
 
   return null;

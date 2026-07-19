@@ -60,6 +60,7 @@ import {
   getOrderReadySince,
   getOrderStatusSince,
   getPickupNoShowEligibleAtIso,
+  getPickupPaymentChoices,
   getRestaurant,
   getRestaurantMenu,
   isPickupNoShowEligibleAt,
@@ -945,11 +946,13 @@ function KitchenPickupNoShow({
 }
 
 /**
- * §8: инлайновая выдача самовывоза на кухне. Способ оплаты (радио, авто-выбор
- * при одном), ввод названного клиентом четырёхзначного кода (только цифры),
- * подтверждение одним доменным действием. Код клиента здесь НЕ отображается.
- * Ошибка не закрывает панель и не стирает код; успех убирает карточку (статус
- * заказа меняется на PICKED_UP). Рядом — инлайновый невыкуп (§1).
+ * Инлайновая выдача неоплаченного самовывоза на общем экране. Заказ не оплачен
+ * заранее: сотрудник отмечает фактический способ полученной оплаты (радио,
+ * авто-выбор при единственном варианте) и выдаёт заказ одним доменным
+ * действием. Никакого кода клиента здесь нет и не требуется.
+ *
+ * Ошибка не закрывает панель и не сбрасывает выбор; успех убирает карточку
+ * (статус заказа меняется на PICKED_UP). Рядом — инлайновый невыкуп (§1).
  */
 function KitchenPickupHandoff({
   order,
@@ -972,13 +975,15 @@ function KitchenPickupHandoff({
   const [pickupActionKind, setPickupActionKind] = useState<
     "HANDOFF" | "NO_SHOW" | null
   >(null);
-  const methods = order.pickupPaymentMethodsSnapshot;
+  // Способы оплаты берутся из исторического снимка; пустой снимок не блокирует
+  // выдачу — сотрудник фиксирует фактическую оплату из безопасного набора.
+  const methods = getPickupPaymentChoices(order);
   const single = methods.length === 1 ? methods[0] : null;
   const [paidWith, setPaidWith] = useState<PickupPaymentMethod | null>(single);
-  const [code, setCode] = useState("");
 
-  const codeValid = /^\d{4}$/.test(code.trim());
-  const canConfirm = codeValid && paidWith !== null;
+  // Код клиента больше не требуется: заказ не оплачен заранее, подтверждением
+  // служит сама оплата сотруднику.
+  const canConfirm = paidWith !== null;
   // Одна общая ошибка показывается только около того действия, что упало.
   const handoffError =
     pickupActionKind === "HANDOFF" ? pickupActionError : null;
@@ -995,7 +1000,6 @@ function KitchenPickupHandoff({
       setPickupActionKind("HANDOFF");
       const res = await completePickup(
         order.id,
-        code,
         paidWith,
         "RESTAURANT",
         "KITCHEN",
@@ -1023,46 +1027,26 @@ function KitchenPickupHandoff({
         К оплате: {formatMoney(order.financials.customerTotalCents)}
       </p>
       <fieldset className={kds.pickupMethods}>
-        <legend>Способ оплаты на точке</legend>
-        {methods.length === 0 ? (
-          <span>Способы оплаты не заданы.</span>
-        ) : (
-          methods.map((method) => (
-            <label key={method} className={kds.pickupMethodOption}>
-              <input
-                type="radio"
-                name={`kds-pay-${order.id}`}
-                value={method}
-                checked={paidWith === method}
-                disabled={pickupActionPending}
-                onChange={() => {
-                  setPaidWith(method);
-                  clearPickupActionError();
-                }}
-              />
-              <span>{pickupPaymentMethodLabels[method]}</span>
-            </label>
-          ))
-        )}
+        <legend>Чем клиент оплатил</legend>
+        {methods.map((method) => (
+          <label key={method} className={kds.pickupMethodOption}>
+            <input
+              type="radio"
+              name={`kds-pay-${order.id}`}
+              value={method}
+              checked={paidWith === method}
+              disabled={pickupActionPending}
+              onChange={() => {
+                setPaidWith(method);
+                clearPickupActionError();
+              }}
+            />
+            <span>{pickupPaymentMethodLabels[method]}</span>
+          </label>
+        ))}
       </fieldset>
-      <label className={kds.field}>
-        <span>Код клиента</span>
-        <input
-          type="text"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={4}
-          value={code}
-          placeholder="4 цифры"
-          disabled={pickupActionPending}
-          onChange={(event) => {
-            setCode(event.target.value.replace(/\D/g, "").slice(0, 4));
-            clearPickupActionError();
-          }}
-        />
-      </label>
       <p className={kds.pickupInstruction}>
-        Попросите клиента назвать четырёхзначный код.
+        Отметьте фактический способ оплаты и выдайте заказ.
       </p>
       {handoffError ? (
         <p className={kds.pickupError} role="alert">
@@ -1077,11 +1061,8 @@ function KitchenPickupHandoff({
       >
         {pickupActionPending && pickupActionKind === "HANDOFF"
           ? "Подтверждаем…"
-          : "Подтвердить оплату и выдать"}
+          : "Оплата получена — выдать заказ"}
       </button>
-      <p className={kds.pickupAdminHint}>
-        Нет кода клиента? Обратитесь к администратору Direct.
-      </p>
       <KitchenPickupNoShow
         order={order}
         nowMs={nowMs}

@@ -6,7 +6,6 @@ import {
   buildOperatorPackageLabelData,
   canPrintOperatorPackageLabel,
   formatPackageLabelItemLine,
-  formatPickupMethodsLine,
   PACKAGE_LABEL_LOGO_ERROR,
   PACKAGE_LABEL_LOGO_SRC,
   PACKAGE_LABEL_PAYMENT_ERROR,
@@ -390,7 +389,7 @@ test("будущая комбинация «водитель Direct + налич
 
 // 18 — самовывоз с оплатой в ресторане ----------------------------------------
 
-test("самовывоз: К ОПЛАТЕ В РЕСТОРАНЕ, полный итог и способы оплаты", () => {
+test("самовывоз: ОПЛАТА В РЕСТОРАНЕ и полный итог без перечня способов", () => {
   const base = acceptedOrder();
   const { order } = withOrder(base.state, base.order, {
     status: "READY_FOR_PICKUP",
@@ -400,29 +399,36 @@ test("самовывоз: К ОПЛАТЕ В РЕСТОРАНЕ, полный и
   });
   const block = buildOk(order).paymentBlock;
   assert.equal(block.kind, "PICKUP_DUE");
-  assert.equal(block.title, "К ОПЛАТЕ В РЕСТОРАНЕ");
+  assert.equal(block.title, "ОПЛАТА В РЕСТОРАНЕ");
   assert.equal(block.kind === "PICKUP_DUE" && block.amount, "$10.00");
-  assert.equal(block.kind === "PICKUP_DUE" && block.methodsLine, "НАЛИЧНЫМИ ИЛИ КАРТОЙ");
+  // Способы оплаты клиент выбирает уже в ресторане — на наклейке их нет.
+  const serialized = JSON.stringify(block);
+  assert.ok(!serialized.includes("НАЛИЧНЫМИ"));
+  assert.ok(!serialized.includes("КАРТОЙ"));
 });
 
-test("строка способов оплаты строится только из снимка заказа", () => {
-  assert.equal(formatPickupMethodsLine(["CASH", "CARD"]), "НАЛИЧНЫМИ ИЛИ КАРТОЙ");
-  assert.equal(formatPickupMethodsLine(["CARD", "CASH"]), "НАЛИЧНЫМИ ИЛИ КАРТОЙ");
-  assert.equal(formatPickupMethodsLine(["CASH"]), "НАЛИЧНЫМИ");
-  assert.equal(formatPickupMethodsLine(["CARD"]), "КАРТОЙ");
-  // Пустой снимок: способы не выдумываем, третьей строки нет.
-  assert.equal(formatPickupMethodsLine([]), null);
-});
-
-test("самовывоз с пустым снимком способов не печатает третью строку", () => {
+test("самовывоз с пустым снимком способов: наклейка строится и печатается", () => {
   const base = acceptedOrder();
   const { order } = withOrder(base.state, base.order, {
     status: "READY_FOR_PICKUP",
     paymentStatus: "DUE_AT_PICKUP",
+    financials: { ...base.order.financials, customerTotalCents: 1000 },
+    // Пустой исторический снимок способов печать НЕ блокирует.
     pickupPaymentMethodsSnapshot: [],
   });
-  const block = buildOk(order).paymentBlock;
-  assert.equal(block.kind === "PICKUP_DUE" && block.methodsLine, null);
+  const data = buildOperatorPackageLabelData(order);
+  assert.ok(data, "label-data успешно строится");
+  const block = data.paymentBlock;
+  assert.equal(block.kind, "PICKUP_DUE");
+  assert.equal(block.title, "ОПЛАТА В РЕСТОРАНЕ");
+  assert.equal(block.kind === "PICKUP_DUE" && block.amount, "$10.00");
+  assert.ok(!JSON.stringify(block).includes("НАЛИЧНЫМИ"));
+});
+
+test("логотип наклейки уменьшен вдвое и путь PNG не изменён", () => {
+  assert.equal(PACKAGE_LABEL_LOGO_SRC, "/print/direct-package-label-logo.png");
+  assert.ok(LABEL_CSS.includes("max-width: 23mm"), "логотип 23мм вместо 46мм");
+  assert.ok(!LABEL_CSS.includes("max-width: 46mm"));
 });
 
 // 24 — неизвестная комбинация -------------------------------------------------

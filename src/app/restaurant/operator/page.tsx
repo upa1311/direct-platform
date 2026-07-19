@@ -37,6 +37,7 @@ import {
   getCancellationRequestForOrder,
   getDriverById,
   getPickupNoShowEligibleAtIso,
+  getPickupPaymentChoices,
   getRestaurant,
   isPickupNoShowEligibleAt,
   paymentMethodLabels,
@@ -406,10 +407,11 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
     run: runHandoff,
     clearError: clearHandoffError,
   } = useMutationGuard();
-  const methods = order.pickupPaymentMethodsSnapshot;
+  // Пустой исторический снимок способов не блокирует выдачу: сотрудник
+  // фиксирует фактическую оплату из безопасного набора.
+  const methods = getPickupPaymentChoices(order);
   const single = methods.length === 1 ? methods[0] : null;
   const [paidWith, setPaidWith] = useState<PickupPaymentMethod | null>(single);
-  const [code, setCode] = useState("");
   const [noShowOpen, setNoShowOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
@@ -420,20 +422,19 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
   const noShowEligible = nowIso ? isPickupNoShowEligibleAt(order, nowIso) : false;
   const minutesLeft = minutesUntil(eligibleAtIso, nowMs);
 
-  const codeValid = /^\d{4}$/.test(code.trim());
-  const canConfirm = codeValid && paidWith !== null;
+  // Код клиента больше не требуется: подтверждением служит фактическая оплата.
+  const canConfirm = paidWith !== null;
   const isOther = reason === "Другая причина";
   const effectiveReason = isOther ? customReason : reason;
 
   const doConfirm = async () => {
-    // Кнопка disabled без способа оплаты и валидного кода — защитный выход.
-    if (!paidWith || !codeValid) return;
+    // Кнопка disabled без выбранного способа оплаты — защитный выход.
+    if (!paidWith) return;
     // Thunk: операция НЕ стартует до входа в guard. При успехе карточка исчезает
     // из готовых через обновлённый общий state — локальный success не нужен.
     await runHandoff(async () => {
       const response = await completePickup(
         order.id,
-        code,
         paidWith,
         "RESTAURANT",
         "OPERATOR",
@@ -465,46 +466,26 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
         К оплате: {formatMoney(order.financials.customerTotalCents)}
       </p>
       <fieldset className={kds.pickupMethods}>
-        <legend>Способ оплаты на точке</legend>
-        {methods.length === 0 ? (
-          <span>Способы оплаты не заданы.</span>
-        ) : (
-          methods.map((method) => (
-            <label key={method} className={kds.pickupMethodOption}>
-              <input
-                type="radio"
-                name={`op-pay-${order.id}`}
-                value={method}
-                checked={paidWith === method}
-                disabled={handoffPending}
-                onChange={() => {
-                  setPaidWith(method);
-                  clearHandoffError();
-                }}
-              />
-              <span>{pickupPaymentMethodLabels[method]}</span>
-            </label>
-          ))
-        )}
+        <legend>Чем клиент оплатил</legend>
+        {methods.map((method) => (
+          <label key={method} className={kds.pickupMethodOption}>
+            <input
+              type="radio"
+              name={`op-pay-${order.id}`}
+              value={method}
+              checked={paidWith === method}
+              disabled={handoffPending}
+              onChange={() => {
+                setPaidWith(method);
+                clearHandoffError();
+              }}
+            />
+            <span>{pickupPaymentMethodLabels[method]}</span>
+          </label>
+        ))}
       </fieldset>
-      <label className={kds.field}>
-        <span>Код клиента</span>
-        <input
-          type="text"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={4}
-          value={code}
-          disabled={handoffPending}
-          placeholder="4 цифры"
-          onChange={(event) => {
-            setCode(event.target.value.replace(/\D/g, "").slice(0, 4));
-            clearHandoffError();
-          }}
-        />
-      </label>
       <p className={kds.pickupInstruction}>
-        Попросите клиента назвать четырёхзначный код.
+        Отметьте фактический способ оплаты и выдайте заказ.
       </p>
       {handoffError ? (
         <p className={kds.pickupError} role="alert">
@@ -517,7 +498,7 @@ function OperatorPickupHandoff({ order, nowMs }: { order: Order; nowMs: number }
         disabled={!canConfirm || handoffPending}
         onClick={doConfirm}
       >
-        {handoffPending ? "Подтверждаем…" : "Подтвердить оплату и выдать"}
+        {handoffPending ? "Подтверждаем…" : "Оплата получена — выдать заказ"}
       </button>
 
       {!noShowOpen ? (

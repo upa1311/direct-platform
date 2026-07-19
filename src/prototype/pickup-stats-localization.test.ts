@@ -61,7 +61,7 @@ function addReadyPickup(state: PrototypeState): {
   const orderId = created.result.orderId as string;
   s = acceptRestaurantOrder(s, orderId, 20);
   s = markOrderReady(s, orderId);
-  return { state: s, orderId, code: getOrder(s, orderId).pickupCode as string };
+  return { state: s, orderId, code: "" };
 }
 
 function eligibleAt(state: PrototypeState, orderId: string): string {

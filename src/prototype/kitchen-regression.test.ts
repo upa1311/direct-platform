@@ -163,7 +163,8 @@ test("Regression 1: COMBINED PICKUP — приём → готовность → 
   assert.equal(created.status, "RESTAURANT_REVIEW");
   assert.equal(created.paymentMethod, "PAY_AT_RESTAURANT");
   assert.equal(created.paymentStatus, "DUE_AT_PICKUP");
-  assert.ok(created.pickupCode);
+  // Кода выдачи у нового самовывоза нет.
+  assert.equal(created.pickupCode, null);
   assert.equal(created.pickupCodeUsed, false);
   assert.equal(state.settlements.length, 0);
   assert.equal(state.orders.filter((o) => o.id === orderId).length, 1);
@@ -196,7 +197,7 @@ test("Regression 1: COMBINED PICKUP — приём → готовность → 
   // Шаг 3 — выдача: время считается от фактического состояния, не жёсткой датой.
   const handoffAt = afterIso(readyOrder.updatedAt);
   assert.ok(Date.parse(handoffAt) > Date.parse(readyOrder.updatedAt));
-  const code = readyOrder.pickupCode as string;
+  const code = "";
   const done = completePickupWithCode(ready.state, orderId, code, "CARD", "RESTAURANT", handoffAt, "COMBINED");
   assert.equal(done.result.ok, true);
   const added = expectStep(ready.state, done.state, orderId, {

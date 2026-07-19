@@ -39,7 +39,8 @@
 .logo {
   display: block;
   width: 100%;
-  max-width: 46mm;
+  /* Вдвое меньше прежних 46 мм: логотип не вытесняет остальную наклейку. */
+  max-width: 23mm;
   height: auto;
   margin: 0 auto;
   object-fit: contain;

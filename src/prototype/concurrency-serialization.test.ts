@@ -738,8 +738,9 @@ test("Pickup code не используется дважды; settlement не д
   s = markOrderReady(s, orderId, "RESTAURANT", "KITCHEN");
   const ready = getOrder(s, orderId);
   assert.equal(ready.status, "READY_FOR_PICKUP");
-  assert.ok(ready.pickupCode);
-  const code = ready.pickupCode as string;
+  // Новый самовывоз кода не имеет: выдача идёт по факту оплаты.
+  assert.equal(ready.pickupCode, null);
+  const code = "";
 
   const store = makeSharedStore(s);
   const tabA: Tab = { local: s };

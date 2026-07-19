@@ -19,7 +19,7 @@ import {
   approveCancellationRequest,
   assignDriverToOrder,
   cancelOrderByClient,
-  completePickupWithCode,
+  completePickupAtRestaurant,
   correctOrderStatus,
   createOrderFromCart,
   createRestaurant,
@@ -302,9 +302,9 @@ export interface PrototypeContextValue {
     note: string,
     externalReference: string | null,
   ) => Promise<RestaurantAccountingResolutionResult>;
+  /** Выдача самовывоза после фактической оплаты на точке; код не требуется. */
   completePickup: (
     orderId: string,
-    code: string,
     paidWith: PickupPaymentMethod,
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
@@ -1300,7 +1300,6 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   const completePickup = useCallback(
     (
       orderId: string,
-      code: string,
       paidWith: PickupPaymentMethod,
       actor: OrderActionActor = "RESTAURANT",
       workspaceRole?: RestaurantWorkspaceRole,
@@ -1308,14 +1307,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       const nowIso = new Date().toISOString();
       return runSerializedActionMutation({
         mutation: (baseState) =>
-          completePickupWithCode(
+          completePickupAtRestaurant(
             baseState,
             orderId,
-            code,
             paidWith,
             actor,
-            nowIso,
             workspaceRole,
+            nowIso,
           ),
         infrastructureFailure: (error) => ({
           ok: false,

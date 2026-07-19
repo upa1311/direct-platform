@@ -7,7 +7,7 @@ import {
   addCartItem,
   adminCancelOrder,
   assignDriverToOrder,
-  completePickupWithCode,
+  completePickupAtRestaurant,
   correctOrderStatus,
   createOrderFromCart,
   issuePickupWithoutCode,
@@ -64,8 +64,8 @@ function makePickupReady(): {
   st = acceptRestaurantOrder(st, orderId, 20); // PREPARING (оплата в ресторане)
   st = markOrderReady(st, orderId); // READY_FOR_PICKUP
   const order = st.orders.find((o) => o.id === orderId);
-  assert.ok(order?.pickupCode);
-  return { state: st, orderId, code: order.pickupCode as string };
+  assert.equal(order?.pickupCode, null);
+  return { state: st, orderId, code: "" };
 }
 
 function makeRestaurantDeliveryArriving(): {
@@ -275,15 +275,16 @@ test("исправление статуса не может выставить D
 });
 
 // 16: обычная выдача PICKUP требует код
-test("выдача PICKUP без кода невозможна обычным действием", () => {
+test("обычная выдача PICKUP кода не требует", () => {
   const { state, orderId } = makePickupReady();
-  const wrong = completePickupWithCode(state, orderId, "0000", "CASH");
-  assert.equal(wrong.result.ok, false);
+  // Заказ не оплачен заранее: подтверждением служит фактическая оплата.
+  const done = completePickupAtRestaurant(state, orderId, "CASH");
+  assert.equal(done.result.ok, true, done.result.error ?? "");
   assert.equal(
-    wrong.state.orders.find((o) => o.id === orderId)?.status,
-    "READY_FOR_PICKUP",
+    done.state.orders.find((o) => o.id === orderId)?.status,
+    "PICKED_UP",
   );
-  assert.equal(wrong.state.settlements.length, 0);
+  assert.equal(done.state.settlements.length, 1);
 });
 
 // 17: аварийная выдача требует причину

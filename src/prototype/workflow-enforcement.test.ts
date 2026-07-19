@@ -7,6 +7,7 @@ import {
   acceptRestaurantOrderWithResult,
   addCartItem,
   adjustOrderEtaFromIntent,
+  completePickupAtRestaurant,
   completePickupWithCode,
   createOrderFromCart,
   markOrderArriving,
@@ -37,7 +38,7 @@ import {
   workflowModeLabels,
 } from "./selectors.ts";
 import { normalizePrototypeState } from "./prototype-store.ts";
-import type { Order, PrototypeState } from "./models.ts";
+import type { Order, PickupPaymentMethod, PrototypeState } from "./models.ts";
 
 const NOW = "2026-07-14T12:00:00.000Z";
 
@@ -196,8 +197,8 @@ test("Готовность pickup: инварианты кода, оплаты, 
   assert.equal(order.paymentStatus, "DUE_AT_PICKUP");
   assert.equal(order.preparationMinutes, before.preparationMinutes);
   assert.equal(order.expectedReadyAt, before.expectedReadyAt);
-  // Pickup code существует, не изменился и не использован.
-  assert.ok(before.pickupCode);
+  // Кода выдачи нет и он не появляется.
+  assert.equal(before.pickupCode, null);
   assert.equal(order.pickupCode, before.pickupCode);
   assert.equal(order.pickupCodeUsed, false);
   assert.equal(order.pickupPaidWith, null);
@@ -319,22 +320,28 @@ test("SPLIT: выдача оператором — оплата, один settle
   const ready = markOrderReady(prepared, orderId, "RESTAURANT", "KITCHEN");
   const before = getOrder(ready, orderId);
   const finBefore = JSON.stringify(before.financials);
-  const code = before.pickupCode as string;
   assert.equal(before.pickupCodeUsed, false);
   assert.equal(before.paymentStatus, "DUE_AT_PICKUP");
   assert.equal(ready.settlements.length, 0);
 
-  // Неправильный код не меняет состояние (тот же объект state).
-  const wrong = completePickupWithCode(ready, orderId, "0000", "CASH", "RESTAURANT", NOW, "OPERATOR");
+  // Не выбран способ оплаты — состояние не меняется (тот же объект state).
+  const wrong = completePickupAtRestaurant(
+    ready,
+    orderId,
+    "BONUS" as PickupPaymentMethod,
+    "RESTAURANT",
+    "OPERATOR",
+    NOW,
+  );
   assert.equal(wrong.result.ok, false);
-  assert.equal(wrong.result.error, "Неверный код клиента.");
+  assert.equal(wrong.result.error, "Выберите способ оплаты.");
   assert.equal(wrong.state, ready);
   assert.equal(getOrder(wrong.state, orderId).pickupCodeUsed, false);
   assert.equal(wrong.state.settlements.length, 0);
   assert.equal(wrong.state.revision, ready.revision);
 
-  // Правильный код: заказ выдан, оплата зафиксирована.
-  const res = completePickupWithCode(ready, orderId, code, "CARD", "RESTAURANT", NOW, "OPERATOR");
+  // Фактическая оплата зафиксирована — заказ выдан, кода не требовалось.
+  const res = completePickupAtRestaurant(ready, orderId, "CARD", "RESTAURANT", "OPERATOR", NOW);
   assert.equal(res.result.ok, true);
   const order = getOrder(res.state, orderId);
   assert.equal(order.status, "PICKED_UP");
@@ -370,7 +377,7 @@ test("SPLIT: выдача оператором — оплата, один settle
   assert.equal(res.state.orders.filter((o) => o.id === orderId).length, 1);
 
   // Повторная выдача отклоняется и не создаёт второй settlement.
-  const again = completePickupWithCode(res.state, orderId, code, "CARD", "RESTAURANT", NOW, "OPERATOR");
+  const again = completePickupAtRestaurant(res.state, orderId, "CARD", "RESTAURANT", "OPERATOR", NOW);
   assert.equal(again.result.ok, false);
   assert.equal(again.state, res.state);
   assert.equal(again.state.settlements.length, 1);

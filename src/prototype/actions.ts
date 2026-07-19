@@ -74,7 +74,6 @@ import {
 } from "./selectors";
 import {
   computePickupSettlement,
-  generatePickupCode,
   validatePickupPayment,
 } from "./pricing-engine";
 import {
@@ -472,9 +471,10 @@ export function createOrderFromCart(
     : isRestaurantDelivery
       ? "DUE_TO_RESTAURANT_COURIER"
       : "NOT_STARTED";
-  const pickupCode = isPickup
-    ? generatePickupCode(state.nextOrderNumber)
-    : null;
+  // Самовывоз не оплачен заранее: клиент платит на месте, и подтверждением
+  // служит сама оплата сотруднику. Четырёхзначный код больше не выдаётся;
+  // pickupCode/pickupCodeUsed остаются legacy-полями старых заказов.
+  const pickupCode = null;
   const restaurantCommissionRateBps = isPickup
     ? restaurant.pickupCommissionRateBps
     : restaurant.commissionRateBps;
@@ -2653,25 +2653,27 @@ export interface CompletePickupResult {
   paidWith: PickupPaymentMethod | null;
 }
 
-/** Ровно четыре цифры (после trim). */
-function isFourDigitCode(value: string): boolean {
-  return /^\d{4}$/.test(value.trim());
-}
-
 /**
- * Атомарная выдача самовывоза по коду клиента: фиксирует оплату на точке,
- * переводит заказ в PICKED_UP и один раз начисляет комиссию Direct. Единственный
- * штатный путь завершить PICKUP-заказ. Все проверки — до любой мутации; при любой
- * ошибке состояние возвращается тем же ref (идемпотентность повторного вызова).
+ * Атомарная выдача неоплаченного самовывоза: сотрудник фиксирует ФАКТИЧЕСКИЙ
+ * способ оплаты, полученной на точке, заказ переходит в PICKED_UP и один раз
+ * начисляется комиссия Direct. Единственный авторитетный путь завершить
+ * PICKUP-заказ.
+ *
+ * Четырёхзначный код клиента больше не участвует: заказ не оплачен заранее,
+ * поэтому подтверждением служит сама оплата сотруднику. Отсутствие или
+ * несовпадение legacy-кода и пустой pickupPaymentMethodsSnapshot выдачу НЕ
+ * блокируют; повторную выдачу закрывают статус PICKED_UP и settlement-инвариант.
+ *
+ * Все проверки — до любой мутации; при любой ошибке состояние возвращается тем
+ * же ref (идемпотентность повторного вызова).
  */
-export function completePickupWithCode(
+export function completePickupAtRestaurant(
   state: PrototypeState,
   orderId: string,
-  code: string,
   paidWith: PickupPaymentMethod,
   actor: OrderActionActor = "RESTAURANT",
-  nowIso: string = new Date().toISOString(),
   workspaceRole?: RestaurantWorkspaceRole,
+  nowIso: string = new Date().toISOString(),
 ): ActionResult<CompletePickupResult> {
   const fail = (error: string): ActionResult<CompletePickupResult> => ({
     state,
@@ -2699,47 +2701,29 @@ export function completePickupWithCode(
     return fail("Недостаточно прав для выдачи заказа.");
   }
   const handoffWorkspace = handoffGuard.role;
-  // 14. Повторная выдача — без двойной мутации, тот же ref состояния.
+  // 4. Повторная выдача — без двойной мутации, тот же ref состояния.
   if (order.status === "PICKED_UP" || order.pickupCodeUsed) {
     return fail("Заказ уже выдан.");
   }
-  // 4. Готовность к выдаче.
+  // 5. Готовность к выдаче.
   if (order.status !== "READY_FOR_PICKUP") {
     return fail("Заказ ещё не готов к выдаче.");
   }
-  // 5. Способ оплаты заказа — оплата на точке.
+  // 6. Способ оплаты заказа — оплата на точке.
   if (order.paymentMethod !== "PAY_AT_RESTAURANT") {
     return fail("Этот заказ не оплачивается при получении.");
   }
-  // 6. Оплата ещё ожидается на точке.
+  // 7. Оплата ещё ожидается на точке.
   if (order.paymentStatus !== "DUE_AT_PICKUP") {
     return fail("Оплата по заказу не ожидается.");
   }
-  // 7. Код выдачи существует.
-  if (!order.pickupCode) {
-    return fail("Для заказа не сгенерирован код выдачи.");
-  }
-  // 8. Код ещё не использован (дублирует 14 на уровне флага).
-  if (order.pickupCodeUsed) {
-    return fail("Заказ уже выдан.");
-  }
-  // 9. Ровно четыре цифры.
-  if (!isFourDigitCode(code)) {
-    return fail("Код должен состоять из четырёх цифр.");
-  }
-  // 10. Код совпадает.
-  if (code.trim() !== order.pickupCode) {
-    return fail("Неверный код клиента.");
-  }
-  // 11. Способ оплаты выбран корректно.
+  // 8. Зафиксирован фактический способ полученной оплаты.
+  // Историческим снимком способов НЕ ограничиваем: он мог быть пустым или
+  // неполным, а деньги сотрудник уже получил — фиксируем как есть.
   if (paidWith !== "CASH" && paidWith !== "CARD") {
     return fail("Выберите способ оплаты.");
   }
-  // 12. Способ доступен на точке (по историческому снимку).
-  if (!order.pickupPaymentMethodsSnapshot.includes(paidWith)) {
-    return fail("Этот способ оплаты недоступен на точке.");
-  }
-  // 13. Комиссия ещё не начислена.
+  // 9. Комиссия ещё не начислена.
   const settlementId = `settlement-${orderId}`;
   if (
     state.settlements.some(
@@ -2761,8 +2745,8 @@ export function completePickupWithCode(
         : "Оплата получена в ресторане картой.";
   const statusMessage =
     actor === "ADMIN"
-      ? "Администратор Direct подтвердил выдачу клиенту по коду."
-      : "Заказ выдан клиенту по коду.";
+      ? "Администратор Direct подтвердил выдачу клиенту после оплаты в ресторане."
+      : "Заказ выдан клиенту после оплаты в ресторане.";
   const updatedOrder: Order = {
     ...order,
     status: "PICKED_UP",
@@ -2825,6 +2809,30 @@ export function completePickupWithCode(
     now,
   );
   return { state: nextState, result: { ok: true, error: null, paidWith } };
+}
+
+/**
+ * Compatibility-wrapper прежней сигнатуры с кодом: код игнорируется, вся логика
+ * — в авторитетном completePickupAtRestaurant. Оставлен только для существующих
+ * импортов; новый workflow кода не использует.
+ */
+export function completePickupWithCode(
+  state: PrototypeState,
+  orderId: string,
+  _code: string,
+  paidWith: PickupPaymentMethod,
+  actor: OrderActionActor = "RESTAURANT",
+  nowIso: string = new Date().toISOString(),
+  workspaceRole?: RestaurantWorkspaceRole,
+): ActionResult<CompletePickupResult> {
+  return completePickupAtRestaurant(
+    state,
+    orderId,
+    paidWith,
+    actor,
+    workspaceRole,
+    nowIso,
+  );
 }
 
 export const PICKUP_NO_SHOW_REASON_MAX_LENGTH = 300;

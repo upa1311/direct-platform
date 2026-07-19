@@ -5,6 +5,7 @@ import { createDefaultState } from "./default-state.ts";
 import {
   acceptRestaurantOrder,
   addCartItem,
+  completePickupAtRestaurant,
   completePickupWithCode,
   createOrderFromCart,
   issuePickupWithoutCode,
@@ -48,8 +49,9 @@ function makeReadyPickup(): {
   const order = s.orders.find((o) => o.id === orderId);
   assert.ok(order);
   assert.equal(order.status, "READY_FOR_PICKUP");
-  assert.ok(order.pickupCode);
-  return { state: s, orderId, code: order.pickupCode as string };
+  // Новый самовывоз кода не имеет: подтверждением служит фактическая оплата.
+  assert.equal(order.pickupCode, null);
+  return { state: s, orderId, code: "" };
 }
 
 function getOrder(state: PrototypeState, orderId: string): Order {
@@ -183,7 +185,7 @@ test("выдача по коду: текст STATUS-события (рестор
   const status = getOrder(res.state, orderId).history.find(
     (e) => e.type === "STATUS" && e.toStatus === "PICKED_UP",
   );
-  assert.equal(status?.message, "Заказ выдан клиенту по коду.");
+  assert.equal(status?.message, "Заказ выдан клиенту после оплаты в ресторане.");
 });
 
 test("выдача по коду администратором: тексты отражают администратора", () => {
@@ -200,7 +202,7 @@ test("выдача по коду администратором: тексты о
   );
   assert.equal(
     status?.message,
-    "Администратор Direct подтвердил выдачу клиенту по коду.",
+    "Администратор Direct подтвердил выдачу клиенту после оплаты в ресторане.",
   );
   assert.equal(payment?.actor, "ADMIN");
   assert.equal(status?.actor, "ADMIN");
@@ -285,73 +287,92 @@ test("оплата уже закрыта (не DUE_AT_PICKUP): ошибка", ()
   assert.equal(res.result.ok, false);
 });
 
-test("нет кода выдачи: ошибка", () => {
+test("отсутствие кода выдачу НЕ блокирует", () => {
   const { state, orderId } = makeReadyPickup();
-  const tampered = patchOrder(state, orderId, { pickupCode: null });
-  const res = completePickupWithCode(tampered, orderId, "1234", "CASH", "RESTAURANT", NOW);
-  assert.equal(res.result.ok, false);
+  // У нового заказа кода нет вовсе — выдача всё равно проходит.
+  const res = completePickupAtRestaurant(
+    state,
+    orderId,
+    "CASH",
+    "RESTAURANT",
+    "COMBINED",
+    NOW,
+  );
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+  assert.equal(getOrder(res.state, orderId).status, "PICKED_UP");
 });
 
-test("код не из четырёх цифр (3): ошибка", () => {
+test("legacy-заказ с сохранённым кодом выдаётся без ввода кода", () => {
   const { state, orderId } = makeReadyPickup();
-  const res = completePickupWithCode(state, orderId, "123", "CASH", "RESTAURANT", NOW);
-  assert.equal(res.result.ok, false);
-  assert.equal(res.result.error, "Код должен состоять из четырёх цифр.");
+  const legacy = patchOrder(state, orderId, { pickupCode: "4321" });
+  const res = completePickupAtRestaurant(
+    legacy,
+    orderId,
+    "CARD",
+    "RESTAURANT",
+    "COMBINED",
+    NOW,
+  );
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+  const order = getOrder(res.state, orderId);
+  assert.equal(order.status, "PICKED_UP");
+  assert.equal(order.pickupPaidWith, "CARD");
 });
 
-test("код из пяти цифр: ошибка", () => {
+test("пустой снимок способов оплаты выдачу НЕ блокирует", () => {
   const { state, orderId } = makeReadyPickup();
-  const res = completePickupWithCode(state, orderId, "12345", "CASH", "RESTAURANT", NOW);
-  assert.equal(res.result.ok, false);
+  const empty = patchOrder(state, orderId, {
+    pickupPaymentMethodsSnapshot: [],
+  });
+  const res = completePickupAtRestaurant(
+    empty,
+    orderId,
+    "CARD",
+    "RESTAURANT",
+    "COMBINED",
+    NOW,
+  );
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+  assert.equal(getOrder(res.state, orderId).pickupPaidWith, "CARD");
 });
 
-test("код с нецифровыми символами: ошибка", () => {
+test("способ вне исторического снимка допустим: фиксируем фактическую оплату", () => {
   const { state, orderId } = makeReadyPickup();
-  const res = completePickupWithCode(state, orderId, "12a4", "CASH", "RESTAURANT", NOW);
-  assert.equal(res.result.ok, false);
-});
-
-test("неверный код (4 цифры, не совпадает): ошибка", () => {
-  const { state, orderId, code } = makeReadyPickup();
-  const wrong = code === "0000" ? "1111" : "0000";
-  const res = completePickupWithCode(state, orderId, wrong, "CASH", "RESTAURANT", NOW);
-  assert.equal(res.result.ok, false);
-  assert.equal(res.result.error, "Неверный код клиента.");
-});
-
-test("код с пробелами по краям — trim и совпадает", () => {
-  const { state, orderId, code } = makeReadyPickup();
-  const res = completePickupWithCode(state, orderId, ` ${code} `, "CASH", "RESTAURANT", NOW);
-  assert.equal(res.result.ok, true);
-});
-
-test("способ оплаты вне снимка: ошибка", () => {
-  const { state, orderId, code } = makeReadyPickup();
   const cashOnly = patchOrder(state, orderId, {
     pickupPaymentMethodsSnapshot: ["CASH"],
   });
-  const res = completePickupWithCode(cashOnly, orderId, code, "CARD", "RESTAURANT", NOW);
-  assert.equal(res.result.ok, false);
-  assert.equal(res.result.error, "Этот способ оплаты недоступен на точке.");
+  // Клиент фактически заплатил картой — сотрудник фиксирует как есть.
+  const res = completePickupAtRestaurant(
+    cashOnly,
+    orderId,
+    "CARD",
+    "RESTAURANT",
+    "COMBINED",
+    NOW,
+  );
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+  assert.equal(getOrder(res.state, orderId).pickupPaidWith, "CARD");
 });
 
 test("некорректный paidWith: ошибка", () => {
-  const { state, orderId, code } = makeReadyPickup();
-  const res = completePickupWithCode(
+  const { state, orderId } = makeReadyPickup();
+  const res = completePickupAtRestaurant(
     state,
     orderId,
-    code,
     "BONUS" as PickupPaymentMethod,
     "RESTAURANT",
+    "COMBINED",
     NOW,
   );
   assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Выберите способ оплаты.");
+  assert.equal(res.state, state);
 });
 
 test("повторная выдача: «Заказ уже выдан.», тот же ref, одна settlement", () => {
-  const { state, orderId, code } = makeReadyPickup();
-  const first = completePickupWithCode(state, orderId, code, "CASH", "RESTAURANT", NOW);
-  const second = completePickupWithCode(first.state, orderId, code, "CASH", "RESTAURANT", NOW);
+  const { state, orderId } = makeReadyPickup();
+  const first = completePickupAtRestaurant(state, orderId, "CASH", "RESTAURANT", "COMBINED", NOW);
+  const second = completePickupAtRestaurant(first.state, orderId, "CASH", "RESTAURANT", "COMBINED", NOW);
   assert.equal(second.result.ok, false);
   assert.equal(second.result.error, "Заказ уже выдан.");
   assert.equal(second.state, first.state);
@@ -360,8 +381,20 @@ test("повторная выдача: «Заказ уже выдан.», тот
 
 test("ошибка не мутирует состояние (тот же ref)", () => {
   const { state, orderId } = makeReadyPickup();
-  const res = completePickupWithCode(state, orderId, "0000", "CASH", "RESTAURANT", NOW);
-  assert.equal(res.state, state);
+  // Неверный статус — заказ ещё не готов к выдаче.
+  const preparing = patchOrder(state, orderId, { status: "PREPARING" });
+  const res = completePickupAtRestaurant(
+    preparing,
+    orderId,
+    "CASH",
+    "RESTAURANT",
+    "COMBINED",
+    NOW,
+  );
+  assert.equal(res.result.ok, false);
+  assert.equal(res.state, preparing);
+  assert.equal(res.state.revision, preparing.revision);
+  assert.equal(res.state.settlements.length, 0);
 });
 
 // --- Невыкуп (§11) -----------------------------------------------------------

@@ -1450,6 +1450,22 @@ export function getClientCancellationMessage(
 }
 
 /**
+ * Способы оплаты, которые сотрудник может зафиксировать при выдаче самовывоза.
+ *
+ * Основа — исторический снимок заказа. Пустой или повреждённый снимок выдачу НЕ
+ * блокирует: заказ не оплачен заранее, деньги сотрудник получает на месте,
+ * поэтому показываем безопасный набор «наличные или карта» и фиксируем
+ * фактический способ.
+ */
+export function getPickupPaymentChoices(order: Order): PickupPaymentMethod[] {
+  const fromSnapshot = order.pickupPaymentMethodsSnapshot.filter(
+    (method): method is PickupPaymentMethod =>
+      method === "CASH" || method === "CARD",
+  );
+  return fromSnapshot.length > 0 ? fromSnapshot : ["CASH", "CARD"];
+}
+
+/**
  * Порог информационного предупреждения о крупном заказе с оплатой при получении:
  * $50.00. Сравнение нестрогое — ровно $50.00 уже попадает под предупреждение.
  */

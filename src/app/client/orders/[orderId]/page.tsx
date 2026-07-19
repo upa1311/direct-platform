@@ -56,13 +56,15 @@ function ClientPickupBlock({ order }: { order: Order }) {
       </div>
     );
   }
-  if (order.status === "READY_FOR_PICKUP" && order.pickupCode) {
+  if (order.status === "READY_FOR_PICKUP") {
     const methods =
       order.pickupPaymentMethodsSnapshot.length > 0
         ? order.pickupPaymentMethodsSnapshot
             .map((m) => pickupPaymentMethodLabels[m])
             .join(" или ")
         : "уточните в ресторане";
+    // Четырёхзначный код больше не выдаётся: заказ не оплачен заранее, клиент
+    // просто оплачивает его в ресторане и забирает.
     return (
       <div className={`${flowStyles.zoneNotice} ${flowStyles.pickupReadyCard}`}>
         <strong>Заказ готов к выдаче</strong>
@@ -71,10 +73,8 @@ function ClientPickupBlock({ order }: { order: Order }) {
         </div>
         <div>К оплате в ресторане: {formatMoney(order.financials.customerTotalCents)}</div>
         <div>Способы оплаты на точке: {methods}</div>
-        <span className={flowStyles.pickupCode}>{order.pickupCode}</span>
         <p className={flowStyles.pickupInstruction}>
-          Назовите этот четырёхзначный код в ресторане при получении и оплате
-          заказа.
+          Оплатите заказ в ресторане при получении.
         </p>
       </div>
     );
