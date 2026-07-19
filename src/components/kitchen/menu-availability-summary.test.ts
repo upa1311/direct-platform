@@ -1,0 +1,228 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
+
+import { getMenuAvailabilitySummary } from "./menu-availability-summary.ts";
+import type { MenuItem, OperationalPause } from "../../prototype/models.ts";
+
+/**
+ * Сводка доступности меню для компактной строки внизу экрана заказов: точные
+ * тексты, склонения, tone и учёт временной availabilityPause. Разметка нижнего
+ * блока и embedded-режим дополнительно проверяются контрактно по исходникам
+ * (JSX в node:test не исполняется).
+ */
+
+const NOW = Date.parse("2026-07-19T12:00:00.000Z");
+
+function item(
+  id: string,
+  available: boolean,
+  availabilityPause: OperationalPause | null = null,
+): MenuItem {
+  return {
+    id,
+    restaurantId: "restaurant-1",
+    category: "Основное",
+    name: `Блюдо ${id}`,
+    description: "",
+    priceCents: 500,
+    currencyCode: "USD",
+    available,
+    availabilityPause,
+  } as unknown as MenuItem;
+}
+
+function items(count: number, available: boolean): MenuItem[] {
+  return Array.from({ length: count }, (_, i) => item(`i${i}`, available));
+}
+
+// 1 --------------------------------------------------------------------------
+
+test("пустое меню: «Блюд пока нет», tone EMPTY", () => {
+  const summary = getMenuAvailabilitySummary([], NOW);
+  assert.equal(summary.text, "Блюд пока нет");
+  assert.equal(summary.tone, "EMPTY");
+  assert.equal(summary.total, 0);
+  assert.equal(summary.unavailable, 0);
+});
+
+// 2 --------------------------------------------------------------------------
+
+test("все блюда доступны: «Все позиции доступны», tone OK", () => {
+  const summary = getMenuAvailabilitySummary(items(4, true), NOW);
+  assert.equal(summary.text, "Все позиции доступны");
+  assert.equal(summary.tone, "OK");
+  assert.equal(summary.total, 4);
+  assert.equal(summary.unavailable, 0);
+});
+
+// 3 --------------------------------------------------------------------------
+
+test("часть недоступна: верное количество и tone PARTIAL", () => {
+  const menu = [...items(3, true), ...items(2, false).map((m, i) => item(`u${i}`, false))];
+  const summary = getMenuAvailabilitySummary(menu, NOW);
+  assert.equal(summary.total, 5);
+  assert.equal(summary.unavailable, 2);
+  assert.equal(summary.text, "2 позиции недоступны");
+  assert.equal(summary.tone, "PARTIAL");
+});
+
+// 4 --------------------------------------------------------------------------
+
+test("все недоступны: «Все позиции недоступны», tone ALL_UNAVAILABLE", () => {
+  const summary = getMenuAvailabilitySummary(items(3, false), NOW);
+  assert.equal(summary.text, "Все позиции недоступны");
+  assert.equal(summary.tone, "ALL_UNAVAILABLE");
+  assert.equal(summary.unavailable, 3);
+});
+
+// 5 — русские склонения -------------------------------------------------------
+
+test("склонения: 1 позиция, 2 позиции, 5 позиций, 11 позиций, 21 позиция", () => {
+  // В каждом случае одно блюдо доступно, чтобы ветка была именно PARTIAL.
+  const cases: [number, string][] = [
+    [1, "1 позиция недоступна"],
+    [2, "2 позиции недоступны"],
+    [3, "3 позиции недоступны"],
+    [4, "4 позиции недоступны"],
+    [5, "5 позиций недоступны"],
+    [11, "11 позиций недоступны"],
+    [12, "12 позиций недоступны"],
+    [14, "14 позиций недоступны"],
+    [21, "21 позиция недоступна"],
+    [22, "22 позиции недоступны"],
+    [25, "25 позиций недоступны"],
+    [101, "101 позиция недоступна"],
+    [111, "111 позиций недоступны"],
+  ];
+  for (const [count, expected] of cases) {
+    const menu = [
+      ...Array.from({ length: count }, (_, i) => item(`u${i}`, false)),
+      item("ok", true),
+    ];
+    const summary = getMenuAvailabilitySummary(menu, NOW);
+    assert.equal(summary.tone, "PARTIAL", String(count));
+    assert.equal(summary.unavailable, count);
+    assert.equal(summary.text, expected);
+  }
+});
+
+// 6 — временная пауза через isMenuItemAvailableAt ------------------------------
+
+test("активная availabilityPause делает блюдо недоступным", () => {
+  const activePause: OperationalPause = {
+    startedAt: "2026-07-19T11:00:00.000Z",
+    reason: "Закончился ингредиент",
+    mode: "UNTIL_TIME",
+    resumeAt: "2026-07-19T13:00:00.000Z",
+    startedBy: "RESTAURANT",
+  };
+  // available === true, но активная пауза перевешивает.
+  const menu = [item("paused", true, activePause), item("ok", true)];
+  const summary = getMenuAvailabilitySummary(menu, NOW);
+  assert.equal(summary.unavailable, 1);
+  assert.equal(summary.text, "1 позиция недоступна");
+  assert.equal(summary.tone, "PARTIAL");
+});
+
+test("истёкшая availabilityPause снова делает блюдо доступным", () => {
+  const expiredPause: OperationalPause = {
+    startedAt: "2026-07-19T09:00:00.000Z",
+    reason: "Закончился ингредиент",
+    mode: "UNTIL_TIME",
+    resumeAt: "2026-07-19T11:00:00.000Z", // раньше NOW
+    startedBy: "RESTAURANT",
+  };
+  const menu = [item("resumed", true, expiredPause), item("ok", true)];
+  const summary = getMenuAvailabilitySummary(menu, NOW);
+  assert.equal(summary.unavailable, 0);
+  assert.equal(summary.text, "Все позиции доступны");
+  assert.equal(summary.tone, "OK");
+});
+
+test("MANUAL-пауза активна без resumeAt и не зависит от nowMs", () => {
+  const manualPause: OperationalPause = {
+    startedAt: "2026-07-19T09:00:00.000Z",
+    reason: "Нет продукта",
+    mode: "MANUAL",
+    resumeAt: null,
+    startedBy: "RESTAURANT",
+  };
+  const menu = [item("manual", true, manualPause)];
+  const summary = getMenuAvailabilitySummary(menu, NOW);
+  assert.equal(summary.tone, "ALL_UNAVAILABLE");
+  assert.equal(summary.text, "Все позиции недоступны");
+});
+
+test("tone не выводится из русского текста: поля независимы", () => {
+  const summary = getMenuAvailabilitySummary(items(2, true), NOW);
+  assert.equal(typeof summary.tone, "string");
+  assert.ok(["EMPTY", "OK", "PARTIAL", "ALL_UNAVAILABLE"].includes(summary.tone));
+  assert.equal(typeof summary.total, "number");
+  assert.equal(typeof summary.unavailable, "number");
+});
+
+// 7/8 — нижний блок экрана заказов -------------------------------------------
+
+const KITCHEN_PAGE = readFileSync(
+  new URL("../../app/restaurant/kitchen/page.tsx", import.meta.url),
+  "utf8",
+);
+const MENU_PAGE = readFileSync(
+  new URL("../../app/restaurant/menu/page.tsx", import.meta.url),
+  "utf8",
+);
+const OPERATIONS = readFileSync(
+  new URL("./kitchen-operations.tsx", import.meta.url),
+  "utf8",
+);
+
+test("на экране заказов есть native details/summary, закрытый по умолчанию", () => {
+  assert.ok(KITCHEN_PAGE.includes("<details"), "используется native details");
+  assert.ok(KITCHEN_PAGE.includes("<summary"), "используется native summary");
+  // Закрыт по умолчанию: атрибут open не выставляется.
+  assert.ok(!/<details[^>]*\sopen/.test(KITCHEN_PAGE), "details не открыт по умолчанию");
+});
+
+test("точный заголовок «Меню» без старого блока", () => {
+  assert.ok(KITCHEN_PAGE.includes(">Меню</span>"), "есть точный заголовок «Меню»");
+  assert.ok(!KITCHEN_PAGE.includes("Меню и доступность"));
+  assert.ok(!KITCHEN_PAGE.includes("Открыть меню"));
+  assert.ok(
+    !KITCHEN_PAGE.includes(
+      "Отключение блюд и управление доступностью находятся в отдельном",
+    ),
+  );
+});
+
+test("раскрытый блок использует существующий MenuAvailabilitySection в embedded", () => {
+  assert.ok(KITCHEN_PAGE.includes("<MenuAvailabilitySection"));
+  assert.ok(KITCHEN_PAGE.includes("embedded"));
+  // Chevron скрыт от скринридера, отдельной кнопки внутри summary нет.
+  assert.ok(KITCHEN_PAGE.includes("ChevronDown"));
+  const summaryStart = KITCHEN_PAGE.indexOf("<summary");
+  const summaryEnd = KITCHEN_PAGE.indexOf("</summary>");
+  const summaryMarkup = KITCHEN_PAGE.slice(summaryStart, summaryEnd);
+  assert.ok(!summaryMarkup.includes("<button"), "внутри summary нет кнопки");
+  assert.ok(!summaryMarkup.includes("<Link"), "внутри summary нет ссылки");
+  assert.ok(summaryMarkup.includes('aria-hidden="true"'), "chevron aria-hidden");
+});
+
+// 9/10 — embedded-режим и отдельная страница ---------------------------------
+
+test("embedded-режим не показывает второй заголовок «Доступность меню»", () => {
+  assert.ok(OPERATIONS.includes("embedded = false"), "по умолчанию embedded=false");
+  assert.ok(
+    OPERATIONS.includes("embedded ? null : ("),
+    "заголовок скрывается только во встроенном режиме",
+  );
+  assert.ok(
+    OPERATIONS.includes("embedded ? styles.menuEmbedded : styles.section"),
+    "во встроенном режиме нет второй тяжёлой рамки",
+  );
+});
+
+test("/restaurant/menu использует обычный не-embedded режим", () => {
+  assert.ok(MENU_PAGE.includes("<MenuAvailabilitySection"));
+  assert.ok(!MENU_PAGE.includes("embedded"), "на отдельной странице режим прежний");
+});

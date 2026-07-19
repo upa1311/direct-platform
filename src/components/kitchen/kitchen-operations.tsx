@@ -644,13 +644,23 @@ function MenuAvailabilityRow({
   );
 }
 
-/** §9–14: секция «Доступность меню» — плотный операционный список. */
+/**
+ * §9–14: секция «Доступность меню» — плотный операционный список.
+ *
+ * `embedded` — только presentation: секция уже находится внутри раскрывающегося
+ * блока (внизу экрана заказов), поэтому свой заголовок и вторая тяжёлая рамка не
+ * нужны, а внутренние отступы компактнее. Бизнес-логика, фильтры, список,
+ * массовые действия и журнал одинаковы в обоих режимах; по умолчанию
+ * embedded=false, и отдельная страница /restaurant/menu не меняется.
+ */
 export function MenuAvailabilitySection({
   restaurant,
   nowMs,
+  embedded = false,
 }: {
   restaurant: Restaurant;
   nowMs: number;
+  embedded?: boolean;
 }) {
   const { state, pauseCategory, restoreCategory } = usePrototype();
   const [search, setSearch] = useState("");
@@ -698,8 +708,11 @@ export function MenuAvailabilitySection({
   const events = getRestaurantOperationalEvents(state, restaurant.id, 10);
 
   return (
-    <section className={styles.section}>
-      <h2 className={styles.sectionTitle}>Доступность меню</h2>
+    <section className={embedded ? styles.menuEmbedded : styles.section}>
+      {/* Во встроенном режиме заголовок даёт строка «Меню» самого блока. */}
+      {embedded ? null : (
+        <h2 className={styles.sectionTitle}>Доступность меню</h2>
+      )}
       <div className={styles.filters}>
         <label className={styles.field}>
           <span>Поиск блюда</span>

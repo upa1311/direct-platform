@@ -815,6 +815,112 @@
   font-weight: 750;
 }
 
+/* --- Compact menu availability panel (bottom of the orders screen) -------- */
+/* Закрытый блок занимает примерно высоту одной строки управления: без крупной
+   карточки и заливок на всю ширину — тонкая граница, точка статуса и chevron. */
+.menuPanel {
+  margin-top: 20px;
+  border: 1px solid var(--kds-border);
+  border-radius: 8px;
+  background: var(--kds-surface);
+}
+
+.menuSummary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* Собственный chevron есть — стандартный маркер браузера убираем. */
+.menuSummary::-webkit-details-marker {
+  display: none;
+}
+
+.menuSummary:focus-visible {
+  outline: 2px solid var(--kds-action);
+  outline-offset: -2px;
+}
+
+.menuSummaryTitle {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--kds-text);
+}
+
+/* Компактный статус: маленькая точка + текст, без заливки на всю ширину. */
+.menuStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--kds-muted);
+  overflow-wrap: anywhere;
+}
+
+.menuStatusDot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--kds-muted);
+}
+
+.menuToneOk .menuStatusDot {
+  background: var(--kds-success);
+}
+
+.menuTonePartial .menuStatusDot {
+  background: var(--kds-warning);
+}
+
+.menuToneDown .menuStatusDot {
+  background: var(--kds-danger);
+}
+
+.menuToneOk {
+  color: var(--kds-success);
+}
+
+.menuTonePartial {
+  color: var(--kds-warning);
+}
+
+.menuToneDown {
+  color: var(--kds-danger);
+}
+
+/* Chevron прижат вправо и плавно поворачивается при раскрытии. */
+.menuChevron {
+  margin-left: auto;
+  flex: none;
+  color: var(--kds-muted);
+  transition: transform 0.18s ease;
+}
+
+.menuPanel[open] .menuChevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menuChevron {
+    transition: none;
+  }
+}
+
+/* Встроенная секция доступности: без второй рамки и компактнее по отступам. */
+.menuEmbedded {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--kds-border);
+  background: transparent;
+}
+
 /* --- High value cash order warning --------------------------------------- */
 /* Информационная подсказка о крупном заказе с оплатой при получении. Заметная,
    но не ошибка: предупреждающий цвет, ничего не блокирует. */
