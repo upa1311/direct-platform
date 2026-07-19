@@ -815,17 +815,6 @@
   font-weight: 750;
 }
 
-.cancelSummary {
-  margin: 0 0 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--kds-border);
-  border-left: 4px solid var(--kds-danger);
-  border-radius: 7px;
-  background: var(--kds-surface);
-  font-size: 14px;
-  font-weight: 700;
-}
-
 /* --- Reject dialog ------------------------------------------------------- */
 .dialog {
   display: grid;

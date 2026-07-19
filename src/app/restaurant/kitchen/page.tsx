@@ -53,7 +53,6 @@ import {
   getRestaurantCancellationUiState,
   getOrderReadySince,
   getOrderStatusSince,
-  getPendingCancellationRequestsForRestaurant,
   getPickupNoShowEligibleAtIso,
   getRestaurant,
   isPickupNoShowEligibleAt,
@@ -1083,10 +1082,6 @@ export default function RestaurantKitchenPage() {
   );
   const preparingOrders = getKitchenPreparingOrders(state, selectedRestaurantId);
   const readyOrders = getKitchenReadyOrders(state, selectedRestaurantId);
-  const pendingRequests = getPendingCancellationRequestsForRestaurant(
-    state,
-    selectedRestaurantId,
-  );
 
   // Единый тик экрана: часы для отсчётов и расписания сигнала.
   useEffect(() => {
@@ -1187,12 +1182,6 @@ export default function RestaurantKitchenPage() {
                 ))}
               </div>
             </section>
-          ) : null}
-
-          {pendingRequests.length > 0 ? (
-            <p className={kds.cancelSummary} role="status">
-              Запросы на отмену — {pendingRequests.length}
-            </p>
           ) : null}
 
           {/* SPLIT: отдельная кухня не принимает новые заказы — колонка «Новые»
