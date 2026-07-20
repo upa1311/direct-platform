@@ -188,6 +188,41 @@ test("невозможные комбинации не маскируются н
   );
 });
 
+test("повреждённый paymentInstrument отклоняется, а не считается картой", () => {
+  const corrupted = "BONUS" as unknown as BankFeeInput["paymentInstrument"];
+  // PLATFORM_DRIVER: без явной проверки "BONUS" прошёл бы как карта.
+  const platform = allocateBankFee({
+    deliveryMode: "PLATFORM_DRIVER",
+    moneyCollector: "DIRECT",
+    paymentInstrument: corrupted,
+    foodSubtotalCents: 10_000,
+    customerTotalCents: 10_500,
+  });
+  assert.equal(platform.ok, false);
+  assert.ok(!platform.ok && /канал оплаты/.test(platform.error));
+  // PICKUP: тот же fail-closed.
+  const pickup = allocateBankFee({
+    deliveryMode: "PICKUP",
+    moneyCollector: "RESTAURANT",
+    paymentInstrument: corrupted,
+    foodSubtotalCents: 10_000,
+    customerTotalCents: 10_000,
+  });
+  assert.equal(pickup.ok, false);
+  assert.ok(!pickup.ok && /канал оплаты/.test(pickup.error));
+  // Ошибка возвращается ДО финансового расчёта: даже суммы, которые сами по
+  // себе провалили бы валидацию, не достигаются — ошибка именно про канал.
+  const beforeMath = allocateBankFee({
+    deliveryMode: "PLATFORM_DRIVER",
+    moneyCollector: "DIRECT",
+    paymentInstrument: corrupted,
+    foodSubtotalCents: Number.NaN,
+    customerTotalCents: -1,
+  });
+  assert.equal(beforeMath.ok, false);
+  assert.ok(!beforeMath.ok && /канал оплаты/.test(beforeMath.error));
+});
+
 // 9 — онлайн для курьера ресторана ---------------------------------------------
 
 test("онлайн-оплата для собственного курьера ресторана отклоняется", () => {

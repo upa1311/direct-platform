@@ -118,6 +118,15 @@ function validateCombination(input: BankFeeInput): string | null {
  * возвращают ошибку, а не правдоподобный ноль.
  */
 export function allocateBankFee(input: BankFeeInput): BankFeeResult {
+  // Fail-closed по каналу оплаты ДО любого расчёта: повреждённое значение
+  // (например, "BONUS") не должно молча обрабатываться как карта. Fallback
+  // «всё, что не CASH, — это CARD» запрещён.
+  if (
+    input.paymentInstrument !== "CARD" &&
+    input.paymentInstrument !== "CASH"
+  ) {
+    return fail("Неизвестный канал оплаты.");
+  }
   if (!isValidCents(input.foodSubtotalCents)) {
     return fail("Стоимость еды должна быть целым неотрицательным числом центов.");
   }
