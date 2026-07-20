@@ -132,6 +132,7 @@ test("доставка Direct со small-order fee: доплата в чисто
     smallOrderFeeCents: 150,
     customerTotalCents: 1_450,
     restaurantCommissionCents: 120,
+    driverPayoutCents: 500,
   });
   assert.equal(m.totalBankFeeCents, 15); // round(14.5)
   assert.equal(m.restaurantBankFeeCents, 8);
@@ -194,6 +195,7 @@ test("все результаты — целые неотрицательные 
     smallOrderFeeCents: 1,
     customerTotalCents: 10_501,
     restaurantCommissionCents: 1_499,
+    driverPayoutCents: 501,
   });
   assert.equal(m.totalBankFeeCents, 105);
   assert.equal(m.restaurantBankFeeCents, 100);
@@ -292,17 +294,94 @@ test("комиссия больше еды и повреждённые сумм�
   assert.equal(negativeNet.ok, false);
 });
 
+// 16 — инвариант выплаты водителю Direct ---------------------------------------
+
+test("PLATFORM_DRIVER: выплата водителю обязательна и равна доставке", () => {
+  // Отсутствует → ошибка.
+  const { driverPayoutCents: _omitted, ...withoutPayout } = platformOnline();
+  void _omitted;
+  const missing = computeOrderMoneyMovement(withoutPayout);
+  assert.equal(missing.ok, false);
+  assert.ok(!missing.ok && /обязательна/.test(missing.error));
+  // Меньше доставки → ошибка.
+  const less = computeOrderMoneyMovement({
+    ...platformOnline(),
+    driverPayoutCents: 0,
+  });
+  assert.equal(less.ok, false);
+  assert.ok(!less.ok && /стоимости доставки/.test(less.error));
+  // Больше доставки → ошибка.
+  const more = computeOrderMoneyMovement({
+    ...platformOnline(),
+    driverPayoutCents: 1_000,
+  });
+  assert.equal(more.ok, false);
+  // Точно равна доставке → успех (уже покрыто и базовым сценарием).
+  assert.equal(computeOrderMoneyMovement(platformOnline()).ok, true);
+  // Бесплатная доставка: 0 и 0 допустимы.
+  const freeDelivery = okMovement({
+    deliveryMode: "PLATFORM_DRIVER",
+    paymentChannel: "ONLINE_CARD",
+    foodSubtotalCents: 10_000,
+    deliveryFeeCents: 0,
+    smallOrderFeeCents: 0,
+    customerTotalCents: 10_000,
+    restaurantCommissionCents: 1_500,
+    driverPayoutCents: 0,
+  });
+  assert.equal(freeDelivery.directOwesRestaurantCents, 10_000 - 1_500 - 100);
+});
+
+test("PICKUP и RESTAURANT_DELIVERY: выплаты водителю Direct не бывает", () => {
+  // Положительная выплата у самовывоза → ошибка.
+  const pickupPaid = computeOrderMoneyMovement({
+    ...pickupCard(),
+    driverPayoutCents: 500,
+  });
+  assert.equal(pickupPaid.ok, false);
+  assert.ok(!pickupPaid.ok && /водитель Direct/.test(pickupPaid.error));
+  // Положительная выплата у собственного курьера ресторана → ошибка.
+  const courierInput: OrderMoneyMovementInput = {
+    deliveryMode: "RESTAURANT_DELIVERY",
+    paymentChannel: "CASH_TO_RESTAURANT_COURIER",
+    foodSubtotalCents: 10_000,
+    deliveryFeeCents: 350,
+    smallOrderFeeCents: 0,
+    customerTotalCents: 10_350,
+    restaurantCommissionCents: 700,
+  };
+  const courierPaid = computeOrderMoneyMovement({
+    ...courierInput,
+    driverPayoutCents: 350,
+  });
+  assert.equal(courierPaid.ok, false);
+  // Отсутствие поля и явный 0 существующие сценарии не ломают.
+  assert.equal(computeOrderMoneyMovement(pickupCard()).ok, true);
+  assert.equal(
+    computeOrderMoneyMovement({ ...pickupCard(), driverPayoutCents: 0 }).ok,
+    true,
+  );
+  assert.equal(computeOrderMoneyMovement(courierInput).ok, true);
+  assert.equal(
+    computeOrderMoneyMovement({ ...courierInput, driverPayoutCents: 0 }).ok,
+    true,
+  );
+});
+
 // 15 — денежное равенство примеров ---------------------------------------------
 
 test("денежное равенство сходится до цента", () => {
-  // Доставка Direct: транзакция клиента распределяется без остатка.
-  const platform = okMovement(platformOnline());
+  // Доставка Direct: транзакция клиента распределяется без остатка. Доля
+  // водителя — ПРОВЕРЕННАЯ доменом выплата из входа заказа (инвариант
+  // driverPayoutCents === deliveryFeeCents), а не зашитая вручную сумма.
+  const platformInput = platformOnline();
+  const platform = okMovement(platformInput);
   assert.equal(
     platform.directOwesRestaurantCents + // ресторану
-      500 + // водителю (стоимость доставки)
+      (platformInput.driverPayoutCents ?? Number.NaN) + // водителю
       platform.directNetRevenueCents + // Direct
       platform.totalBankFeeCents, // банку
-    10_500,
+    platformInput.customerTotalCents,
   );
   // Самовывоз картой: платёж на точке распределяется без остатка.
   const pickup = okMovement(pickupCard());

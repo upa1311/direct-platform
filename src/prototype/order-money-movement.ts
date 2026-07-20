@@ -47,9 +47,12 @@ export interface OrderMoneyMovementInput {
   /** Уже рассчитанная комиссия Direct (15%/7% от еды), целые центы. */
   restaurantCommissionCents: number;
   /**
-   * Выплата водителю Direct, если она уже рассчитана. Информационная: в
-   * формулы чистых итогов не входит (доставка предназначена водителю и не
-   * является доходом Direct).
+   * Выплата водителю Direct. Для PLATFORM_DRIVER поле ОБЯЗАТЕЛЬНО и обязано
+   * равняться deliveryFeeCents: стоимость доставки водителем Direct полностью
+   * получает водитель. Для PICKUP и RESTAURANT_DELIVERY выплаты водителю
+   * Direct не существует — поле отсутствует либо явно равно 0 (собственного
+   * курьера оплачивает ресторан вне Direct). Контрольный входной инвариант:
+   * в формулы чистых итогов не входит и в канонический результат не попадает.
    */
   driverPayoutCents?: number;
 }
@@ -180,6 +183,25 @@ export function computeOrderMoneyMovement(
   }
   if (input.driverPayoutCents !== undefined && !isValidCents(input.driverPayoutCents)) {
     return fail("Некорректная сумма (выплата водителю): нужны целые неотрицательные центы.");
+  }
+  // Инвариант выплаты водителю. PLATFORM_DRIVER: стоимость доставки полностью
+  // получает водитель Direct — поле обязательно и равно deliveryFeeCents
+  // (0 допустим только при бесплатной доставке). PICKUP/RESTAURANT_DELIVERY:
+  // водителя Direct в заказе нет — допускается только отсутствие поля или 0.
+  if (input.deliveryMode === "PLATFORM_DRIVER") {
+    if (input.driverPayoutCents === undefined) {
+      return fail("Для доставки водителем Direct выплата водителю обязательна.");
+    }
+    if (input.driverPayoutCents !== input.deliveryFeeCents) {
+      return fail(
+        "Выплата водителю Direct должна равняться стоимости доставки.",
+      );
+    }
+  } else if (
+    input.driverPayoutCents !== undefined &&
+    input.driverPayoutCents !== 0
+  ) {
+    return fail("В этом заказе не участвует водитель Direct — выплаты быть не должно.");
   }
 
   if (input.foodSubtotalCents > input.customerTotalCents) {
