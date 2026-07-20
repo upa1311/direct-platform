@@ -7,6 +7,7 @@ import { ClientOrderActions } from "@/components/order-flow/client-order-actions
 import { OrderHistory } from "@/components/order-flow/order-history";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
+import { formatMenuPortion } from "@/prototype/menu-catalog";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type { Order } from "@/prototype/models";
@@ -186,6 +187,9 @@ export default function ClientOrderPage() {
                   {item.name}
                   {item.selectedVariantName && item.variantPriceDeltaCents !== 0
                     ? ` · ${item.selectedVariantName}`
+                    : ""}
+                  {formatMenuPortion(item.portionSnapshot ?? null)
+                    ? ` · ${formatMenuPortion(item.portionSnapshot ?? null)}`
                     : ""}{" "}
                   × {item.quantity}
                   {item.cookingComment ? (

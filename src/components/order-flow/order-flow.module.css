@@ -1019,6 +1019,12 @@
   gap: 10px;
 }
 
+/* Порция выбранного варианта (или базовая) в клиентской карточке блюда. */
+.menuPortion {
+  font-size: 13px;
+  color: #68716b;
+}
+
 .menuQuantity {
   min-height: 42px;
   display: inline-grid;

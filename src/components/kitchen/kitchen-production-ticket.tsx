@@ -29,6 +29,7 @@ export function KitchenProductionTicket({
             <div className={styles.itemLine}>
               {item.quantity} × {item.name}
               {item.variantName ? ` · ${item.variantName}` : ""}
+              {item.portionText ? ` · ${item.portionText}` : ""}
             </div>
             {item.cookingComment ? (
               <div className={styles.comment}>ВАЖНО: {item.cookingComment}</div>

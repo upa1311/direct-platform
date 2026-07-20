@@ -8,6 +8,8 @@ import type {
   DriverProfile,
   DriverStatus,
   MenuItem,
+  MenuItemSubmission,
+  MenuItemSubmissionStatus,
   MenuItemVariant,
   OperationalEvent,
   OperationalPause,
@@ -577,6 +579,69 @@ export function getRestaurantMenu(
   return state.menuItems.filter(
     (menuItem) => menuItem.restaurantId === restaurantId,
   );
+}
+
+/**
+ * Русские подписи статусов заявок на новые блюда. Только для ресторанного и
+ * админского UI — технические имена enum пользователю не показываются.
+ */
+export const menuSubmissionStatusLabels: Record<
+  MenuItemSubmissionStatus,
+  string
+> = {
+  DRAFT: "Черновик",
+  PENDING_REVIEW: "На проверке Direct",
+  REJECTED: "Нужно исправить",
+  APPROVED: "Одобрено и опубликовано",
+};
+
+/**
+ * Заявки на новые блюда выбранного ресторана, свежие первыми. Единственный
+ * канонический список для оператора, кухни и общего экрана — отдельных копий
+ * по ролям нет.
+ */
+export function getRestaurantMenuSubmissions(
+  state: PrototypeState,
+  restaurantId: string,
+): MenuItemSubmission[] {
+  return state.menuItemSubmissions
+    .filter((submission) => submission.restaurantId === restaurantId)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+/**
+ * Заявки, ожидающие проверки Direct: самые старые ожидающие первыми, чтобы
+ * администратор разбирал очередь в порядке поступления.
+ */
+export function getPendingMenuSubmissions(
+  state: PrototypeState,
+): MenuItemSubmission[] {
+  return state.menuItemSubmissions
+    .filter((submission) => submission.status === "PENDING_REVIEW")
+    .sort(
+      (a, b) =>
+        Date.parse(a.submittedAt ?? a.updatedAt) -
+        Date.parse(b.submittedAt ?? b.updatedAt),
+    );
+}
+
+/**
+ * Существующие категории меню ресторана для подсказки в конструкторе блюда.
+ * Собираются ТОЛЬКО из опубликованного меню выбранного ресторана; глобального
+ * справочника категорий нет, категория остаётся обычной строкой.
+ */
+export function getRestaurantMenuCategories(
+  state: PrototypeState,
+  restaurantId: string,
+): string[] {
+  const seen = new Map<string, string>();
+  for (const menuItem of getRestaurantMenu(state, restaurantId)) {
+    const category = menuItem.category?.trim();
+    if (!category) continue;
+    const key = category.toLocaleLowerCase("ru-RU");
+    if (!seen.has(key)) seen.set(key, category);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, "ru-RU"));
 }
 
 /** Разрешает вариант размера позиции: по id, иначе вариант по умолчанию. */

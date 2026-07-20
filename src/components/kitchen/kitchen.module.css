@@ -895,9 +895,70 @@
   color: var(--kds-danger);
 }
 
+/* Компактная кнопка «Добавить новое блюдо» (Plus) в закрытой строке меню.
+   Прижимает chevron: сама встаёт справа перед ним. */
+.menuAddButton {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: 1px solid var(--kds-border);
+  border-radius: 7px;
+  background: var(--kds-surface);
+  color: var(--kds-text);
+  cursor: pointer;
+}
+
+.menuAddButton:hover {
+  border-color: var(--kds-action);
+  color: var(--kds-action);
+}
+
+.menuAddButton:focus-visible {
+  outline: 2px solid var(--kds-action);
+  outline-offset: 2px;
+}
+
+/* Действия раскрытой панели: обычная кнопка добавления и ссылка на заявки. */
+.menuPanelActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 0;
+  border-top: 1px solid var(--kds-border);
+}
+
+.menuPanelAddLink {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--kds-action);
+  color: var(--kds-on-action, #fff);
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.menuPanelAddLink:focus-visible,
+.menuPanelSubmissionsLink:focus-visible {
+  outline: 2px solid var(--kds-action);
+  outline-offset: 2px;
+}
+
+.menuPanelSubmissionsLink {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--kds-muted);
+  text-decoration: underline;
+}
+
 /* Chevron прижат вправо и плавно поворачивается при раскрытии. */
 .menuChevron {
-  margin-left: auto;
   flex: none;
   color: var(--kds-muted);
   transition: transform 0.18s ease;

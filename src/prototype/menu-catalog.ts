@@ -19,7 +19,7 @@ import type {
  */
 
 /** Публичные подписи единиц порции. */
-const PORTION_UNIT_LABELS: Record<MenuPortionUnit, string> = {
+export const PORTION_UNIT_LABELS: Record<MenuPortionUnit, string> = {
   G: "г",
   ML: "мл",
   PCS: "шт.",

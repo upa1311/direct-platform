@@ -1,0 +1,105 @@
+/* Конструктор нового блюда: полноширинная форма для компьютера, планшета и
+   телефона. Основная типографика полей — из order-flow.module.css. */
+
+.builderScreen {
+  padding-bottom: 32px;
+}
+
+.builderCard {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.builderTop {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.builderSection {
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 0;
+  min-width: 0;
+}
+
+.builderSection:disabled {
+  opacity: 0.75;
+}
+
+.sectionLegend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+
+.photoZone {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hiddenFileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.charCounter {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.variantRow {
+  border: 1px dashed color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.variantControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* Список заявок ресторана. */
+.submissionCard {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.submissionCardBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.submissionMetaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+@media (max-width: 560px) {
+  .submissionCard {
+    flex-direction: column;
+  }
+}

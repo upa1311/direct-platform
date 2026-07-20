@@ -1,0 +1,42 @@
+/* Фотографии блюд: единый кадр и нейтральный placeholder. */
+
+.mediaFrame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  object-fit: cover;
+  overflow: hidden;
+  color: inherit;
+}
+
+img.mediaFrame {
+  object-fit: cover;
+}
+
+.placeholderIcon {
+  width: 28px;
+  height: 28px;
+  opacity: 0.35;
+}
+
+/* Компактная миниатюра для списков заявок и карточек. */
+.mediaThumb {
+  width: 96px;
+  min-width: 96px;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+}
+
+/* Фото в клиентской карточке блюда. */
+.mediaClientCard {
+  margin-bottom: 10px;
+}
+
+/* Предпросмотр в конструкторе. */
+.mediaBuilderPreview {
+  max-width: 360px;
+}

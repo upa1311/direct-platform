@@ -6,6 +6,8 @@ import { useEffect, useState, type MouseEvent } from "react";
 import { Gift } from "lucide-react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import mediaStyles from "@/components/menu/menu-media.module.css";
+import { MenuMediaImage } from "@/components/menu/menu-media-image";
 import { ClientRestaurantSchedule } from "@/components/order-flow/client-restaurant-schedule";
 import { useClientAddressConfirmation } from "@/components/order-flow/client-address-confirmation";
 import { useClientCartUi } from "@/components/order-flow/client-cart-ui";
@@ -24,6 +26,10 @@ import {
   resolveVariant,
 } from "@/prototype/selectors";
 import { shouldAutoConfirmAddress } from "@/prototype/pricing-engine";
+import {
+  effectiveMenuItemVariantPortion,
+  formatMenuPortion,
+} from "@/prototype/menu-catalog";
 
 export default function ClientRestaurantPage() {
   const params = useParams<{ restaurantId: string }>();
@@ -205,6 +211,13 @@ export default function ClientRestaurantPage() {
           const isEligible =
             promotion?.eligibleMenuItemIds.includes(menuItem.id) ?? false;
           const itemAvailable = isMenuItemAvailableAt(menuItem, nowMs);
+          // Порция выбранного варианта важнее базовой; без порции строки нет.
+          const portionText = formatMenuPortion(
+            effectiveMenuItemVariantPortion(
+              menuItem.portion ?? null,
+              selectedVariant?.portion ?? null,
+            ),
+          );
 
           return (
             <article
@@ -214,6 +227,13 @@ export default function ClientRestaurantPage() {
               key={menuItem.id}
             >
               <div>
+                {menuItem.imageMediaId ? (
+                  <MenuMediaImage
+                    mediaId={menuItem.imageMediaId}
+                    alt={`Фото: ${menuItem.name}`}
+                    className={mediaStyles.mediaClientCard}
+                  />
+                ) : null}
                 <h2>{menuItem.name}</h2>
                 <p>{menuItem.description}</p>
                 <div className={flowStyles.cardMeta}>
@@ -256,6 +276,9 @@ export default function ClientRestaurantPage() {
                 <span className={flowStyles.price}>
                   {formatMoney(unitPriceCents, menuItem.currencyCode)}
                 </span>
+                {portionText ? (
+                  <span className={flowStyles.menuPortion}>{portionText}</span>
+                ) : null}
                 {quantity > 0 && itemAvailable && canOrder ? (
                   <div
                     className={flowStyles.menuQuantity}

@@ -2,6 +2,7 @@ import type { DeliveryMode, Order } from "@/prototype/models";
 // Импорт относительный: модуль проверяется node:test, где alias «@/» не
 // резолвится. Типы стираются при стриппинге, значения — нет.
 import { formatClock24 } from "../../prototype/selectors";
+import { formatMenuPortion } from "../../prototype/menu-catalog";
 import { getVisibleCookingComment } from "./cooking-comment";
 
 /**
@@ -21,6 +22,8 @@ export interface KitchenProductionTicketItem {
   name: string;
   /** Название выбранного варианта из снимка заказа; null — варианта нет. */
   variantName: string | null;
+  /** Порция из снимка заказа («350 г»); null — печатать нечего. */
+  portionText: string | null;
   /** Комментарий к приготовлению после trim; null — печатать нечего. */
   cookingComment: string | null;
 }
@@ -101,6 +104,8 @@ export function buildKitchenProductionTicketData(
     quantity: item.quantity,
     name: item.name,
     variantName: item.selectedVariantName ?? null,
+    // Порция — из НЕИЗМЕНЯЕМОГО portionSnapshot заказа, не из текущего меню.
+    portionText: formatMenuPortion(item.portionSnapshot ?? null),
     cookingComment: getVisibleCookingComment(item.cookingComment),
   }));
 

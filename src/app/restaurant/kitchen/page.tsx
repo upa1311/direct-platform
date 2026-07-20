@@ -5,6 +5,7 @@ import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
+import { formatMenuPortion } from "@/prototype/menu-catalog";
 import { HighValueCashOrderWarning } from "@/components/kitchen/high-value-cash-order-warning";
 import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
 import { OperatorPackageLabelPrintButton } from "@/components/operator/operator-package-label-print";
@@ -152,8 +153,11 @@ function KitchenItems({ order }: { order: Order }) {
         <li key={`${item.menuItemId}-${item.selectedVariantId ?? "base"}`}>
           <span className={kds.itemLine}>
             {item.name}
-            {item.selectedVariantName ? ` · ${item.selectedVariantName}` : ""} ×{" "}
-            {item.quantity}
+            {item.selectedVariantName ? ` · ${item.selectedVariantName}` : ""}
+            {formatMenuPortion(item.portionSnapshot ?? null)
+              ? ` · ${formatMenuPortion(item.portionSnapshot ?? null)}`
+              : ""}{" "}
+            × {item.quantity}
           </span>
           <CookingCommentBlock comment={item.cookingComment ?? ""} />
         </li>

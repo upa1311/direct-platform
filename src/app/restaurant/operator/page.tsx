@@ -6,6 +6,7 @@ import { Printer, TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
+import { formatMenuPortion } from "@/prototype/menu-catalog";
 import { HighValueCashOrderWarning } from "@/components/kitchen/high-value-cash-order-warning";
 import { formatOperatorDeliveryAddress } from "@/components/kitchen/operator-delivery-address";
 import { PreparationProblemResolveBlock } from "@/components/kitchen/preparation-problem-resolve";
@@ -150,6 +151,9 @@ function OperatorOrderItems({ order }: { order: Order }) {
               <span className={kds.itemLine}>
                 {item.quantity} × {item.name}
                 {item.selectedVariantName ? ` · ${item.selectedVariantName}` : ""}
+                {formatMenuPortion(item.portionSnapshot ?? null)
+                  ? ` · ${formatMenuPortion(item.portionSnapshot ?? null)}`
+                  : ""}
               </span>
               {comment ? (
                 <div className={kds.itemComment}>
