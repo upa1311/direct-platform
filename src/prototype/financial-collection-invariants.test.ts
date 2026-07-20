@@ -8,7 +8,8 @@ import {
   updateCartAddress,
 } from "./actions.ts";
 import { createDefaultState } from "./default-state.ts";
-import { computeCompletedOrderAccountingEntries } from "./restaurant-accounting.ts";
+import { computeCompletedOrderAccounting } from "./restaurant-accounting.ts";
+import { finalizePickupMoneyMovement } from "./money-movement-snapshot.ts";
 import type { FinancialSnapshot, Order, PrototypeState } from "./models.ts";
 
 /** Создаёт валидный новый заказ штатным путём и возвращает его снимок. */
@@ -81,24 +82,48 @@ test("штатный builder не создаёт MIXED: ровно одно coll
 test("accounting entries соответствуют collector: ровно одна запись, без двойного учёта", () => {
   for (const sc of SCENARIOS) {
     const { order } = makeOrder(sc.itemId, sc.fulfillment);
-    // Завершаем заказ (для recognition), не трогая финансовый снимок.
+    // Завершаем заказ (для recognition). Самовывоз при выдаче фиксирует
+    // фактический канал (наличные) — как это делает completePickupAtRestaurant.
+    let financials = order.financials;
+    if (sc.fulfillment === "PICKUP") {
+      const finalized = finalizePickupMoneyMovement(order.financials, "CASH");
+      assert.ok(finalized.ok, sc.label);
+      financials = {
+        ...order.financials,
+        moneyMovementStatus: finalized.moneyMovementStatus,
+        moneyMovement: finalized.moneyMovement,
+      };
+    }
     const completed: Order = {
       ...order,
       status: sc.fulfillment === "PICKUP" ? "PICKED_UP" : "DELIVERED",
+      financials,
     };
-    const entries = computeCompletedOrderAccountingEntries(completed, []);
+    const res = computeCompletedOrderAccounting(completed, []);
+    assert.equal(res.ok, true, `${sc.label}: ${res.error ?? ""}`);
+    const entries = res.entries;
     assert.equal(entries.length, 1, `ровно одна запись (${sc.label})`);
     const entry = entries[0];
+    const movement = completed.financials.moneyMovement;
+    assert.ok(movement, sc.label);
     if (sc.collector === "RESTAURANT") {
       // Ресторан собрал → должен Direct комиссию (payout не создаётся).
+      // Сумма — из канонического движения денег снимка.
       assert.equal(entry.direction, "RESTAURANT_OWES_DIRECT", sc.label);
       assert.equal(entry.type, "PLATFORM_COMMISSION", sc.label);
-      assert.equal(entry.amountCents, order.financials.platformCommissionReceivableCents, sc.label);
+      assert.equal(entry.amountCents, movement.restaurantOwesDirectCents, sc.label);
     } else {
       // Direct собрал → должен ресторану выплату (комиссия не создаётся).
+      // Выплата уже уменьшена на банковскую часть ресторана.
       assert.equal(entry.direction, "DIRECT_OWES_RESTAURANT", sc.label);
       assert.equal(entry.type, "RESTAURANT_PAYOUT", sc.label);
-      assert.equal(entry.amountCents, order.financials.restaurantNetAfterPlatformCommissionCents, sc.label);
+      assert.equal(entry.amountCents, movement.directOwesRestaurantCents, sc.label);
+      assert.equal(
+        entry.amountCents,
+        order.financials.restaurantPayoutBeforeBankFeeCents -
+          movement.restaurantBankFeeCents,
+        sc.label,
+      );
     }
   }
 });
@@ -134,12 +159,15 @@ test("исторический snapshot не пересчитывается пр
 
 // 5 --------------------------------------------------------------------------
 
-test("теоретический MIXED недостижим штатно, но при повреждении дал бы две записи", () => {
-  // Документируем риск: MIXED-снимок штатно не создаётся (тест 2). Если бы он
-  // возник (повреждённое/ручное состояние), bilateral accounting создал бы ОБЕ
-  // записи — полную комиссию И полную выплату. Здесь конструируем такой снимок
-  // ВРУЧНУЮ только чтобы зафиксировать поведение, не меняя runtime.
+test("повреждённый MIXED-movement отклоняется fail-closed, а не даёт две записи", () => {
+  // MIXED-снимок штатно не создаётся (тест 2), а канонический movement с двумя
+  // положительными сторонами невозможен по построению. Если он всё же возник
+  // (повреждённое/ручное состояние), accounting обязан отказать — взаимозачёт
+  // и двойные записи внутри одного заказа не выполняются. Смешанные
+  // legacy-collected-поля при этом источником суммы не являются.
   const { order } = makeOrder("restaurant-1-item-1", "DELIVERY");
+  const movement = order.financials.moneyMovement;
+  assert.ok(movement);
   const corruptedMixed: Order = {
     ...order,
     status: "DELIVERED",
@@ -149,12 +177,15 @@ test("теоретический MIXED недостижим штатно, но �
       platformCollectedFromCustomerCents: 500,
       platformCommissionReceivableCents: 100,
       restaurantNetAfterPlatformCommissionCents: 400,
+      moneyMovement: {
+        ...movement,
+        restaurantOwesDirectCents: 100,
+        directOwesRestaurantCents: 400,
+      },
     },
   };
-  const entries = computeCompletedOrderAccountingEntries(corruptedMixed, []);
-  // Две записи — подтверждает, что защита от MIXED должна жить на уровне builder
-  // (он гарантирует mutual exclusivity), а не в accounting.
-  assert.equal(entries.length, 2);
-  assert.ok(entries.some((e) => e.type === "PLATFORM_COMMISSION"));
-  assert.ok(entries.some((e) => e.type === "RESTAURANT_PAYOUT"));
+  const res = computeCompletedOrderAccounting(corruptedMixed, []);
+  assert.equal(res.ok, false);
+  assert.equal(res.entries.length, 0);
+  assert.ok(/Встречные обязательства/.test(res.error ?? ""));
 });

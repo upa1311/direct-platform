@@ -35,85 +35,133 @@ function accountingEntryId(orderId: string, type: RestaurantAccountingType): str
   return `accounting-${orderId}-${type}`;
 }
 
+/** Результат канонического расчёта обязательств завершённого заказа. */
+export interface CompletedOrderAccountingResult {
+  ok: boolean;
+  error: string | null;
+  /** Новые обязательства (пусто — идемпотентный no-op или законное отсутствие). */
+  entries: RestaurantAccountingEntry[];
+}
+
 /**
  * Обязательства, которые СЛЕДУЕТ создать для завершённого заказа, но которых ещё
- * нет. Чистая функция: заказ и financials не мутируются. Дедупликация по identity
- * (orderId, type) — источник (snapshot/legacy) в identity НЕ входит, поэтому
- * повторный вызов, гонка и уже мигрированная legacy-комиссия дубликат не создают.
- * recognizedAt берётся из реального completedAt заказа.
+ * нет. Чистая функция: заказ и financials не мутируются.
  *
- * A. Деньги клиента собрал ресторан (restaurantCollectedFromCustomerCents > 0):
- *    ресторан должен Direct комиссию (platformCommissionReceivableCents), если > 0.
- * B. Деньги клиента собрал Direct (platformCollectedFromCustomerCents > 0):
- *    Direct должен ресторану выплату (restaurantNetAfterPlatformCommissionCents),
- *    если > 0.
- * Смешанный случай (обе стороны собрали) — обе записи по правилам выше.
+ * ЕДИНСТВЕННЫЙ источник суммы — каноническое движение денег снимка
+ * (order.financials.moneyMovement). Старые поля снимка
+ * (platformCommissionReceivableCents, restaurantNetAfterPlatformCommissionCents,
+ * restaurant/platformCollectedFromCustomerCents, restaurantPayoutBeforeBankFeeCents)
+ * остаются для совместимости, но источником accounting-суммы больше НЕ являются;
+ * комиссии, банковские расходы и выплаты здесь не пересчитываются. Банковская
+ * комиссия отдельной записью не создаётся — она уже учтена внутри
+ * restaurantOwesDirectCents / directOwesRestaurantCents.
+ *
+ * Правила при moneyMovementStatus === COMPLETE:
+ * - restaurantOwesDirectCents > 0 → RESTAURANT_OWES_DIRECT / PLATFORM_COMMISSION;
+ * - directOwesRestaurantCents > 0 → DIRECT_OWES_RESTAURANT / RESTAURANT_PAYOUT;
+ * - обе суммы 0 → запись не создаётся;
+ * - обе положительные → fail-closed (взаимозачёт внутри заказа не выполняется).
+ * PENDING_PAYMENT_CHANNEL и REVIEW_REQUIRED запись не создают (без fallback на
+ * старые поля и без правдоподобных сумм); COMPLETE без movement — повреждённое
+ * состояние, fail-closed.
+ *
+ * Идемпотентность по identity (orderId, type, direction): существующая запись
+ * того же заказа, полностью совпадающая с каноническим движением (включая
+ * сумму — например, мигрированный legacy settlement той же комиссии), делает
+ * вызов no-op. Любая существующая запись заказа, противоречащая движению
+ * (другая сумма, направление или тип), — fail-closed: молча не исправляется и
+ * не заменяется. recognizedAt берётся из реального completedAt заказа.
  */
-export function computeCompletedOrderAccountingEntries(
+export function computeCompletedOrderAccounting(
   order: Order,
   existingEntries: readonly RestaurantAccountingEntry[],
-): RestaurantAccountingEntry[] {
-  if (!COMPLETED_STATUSES.has(order.status)) return [];
-  const fin = order.financials;
-  const recognizedAt = getOrderCompletedAt(order);
-
-  // Identity обязательства — (orderId, type), источник в неё НЕ входит: legacy
-  // PLATFORM_COMMISSION того же заказа блокирует создание второй snapshot-комиссии
-  // (и наоборот). Одно экономическое обязательство — одна запись на orderId/type.
-  const hasEntry = (type: RestaurantAccountingType): boolean =>
-    existingEntries.some(
-      (entry) => entry.orderId === order.id && entry.type === type,
-    );
-
-  const make = (
-    direction: RestaurantAccountingEntry["direction"],
-    type: RestaurantAccountingType,
-    amountCents: number,
-  ): RestaurantAccountingEntry => ({
-    id: accountingEntryId(order.id, type),
-    orderId: order.id,
-    restaurantId: order.restaurant.id,
-    direction,
-    type,
-    amountCents,
-    currencyCode: fin.currencyCode,
-    status: "OPEN",
-    recognizedAt,
-    settledAt: null,
-    source: "ORDER_FINANCIAL_SNAPSHOT",
-    legacySettlementId: null,
+): CompletedOrderAccountingResult {
+  const ok = (
+    entries: RestaurantAccountingEntry[],
+  ): CompletedOrderAccountingResult => ({ ok: true, error: null, entries });
+  const fail = (error: string): CompletedOrderAccountingResult => ({
+    ok: false,
+    error,
+    entries: [],
   });
 
-  const entries: RestaurantAccountingEntry[] = [];
-  // A. Ресторан собрал деньги → должен Direct комиссию.
+  if (!COMPLETED_STATUSES.has(order.status)) return ok([]);
+  const fin = order.financials;
+
+  // Канал оплаты ещё неизвестен либо legacy-данные требуют ручного разбора:
+  // обязательство не признаётся, правдоподобная сумма не выдумывается.
   if (
-    fin.restaurantCollectedFromCustomerCents > 0 &&
-    fin.platformCommissionReceivableCents > 0 &&
-    !hasEntry("PLATFORM_COMMISSION")
+    fin.moneyMovementStatus === "PENDING_PAYMENT_CHANNEL" ||
+    fin.moneyMovementStatus === "REVIEW_REQUIRED"
   ) {
-    entries.push(
-      make(
-        "RESTAURANT_OWES_DIRECT",
-        "PLATFORM_COMMISSION",
-        fin.platformCommissionReceivableCents,
-      ),
-    );
+    return ok([]);
   }
-  // B. Direct собрал деньги → должен ресторану выплату.
+  if (fin.moneyMovementStatus !== "COMPLETE") {
+    return fail("Неизвестный статус движения денег заказа.");
+  }
+  const movement = fin.moneyMovement;
+  if (!movement) {
+    return fail("Снимок повреждён: движение денег отмечено, но отсутствует.");
+  }
   if (
-    fin.platformCollectedFromCustomerCents > 0 &&
-    fin.restaurantNetAfterPlatformCommissionCents > 0 &&
-    !hasEntry("RESTAURANT_PAYOUT")
+    movement.restaurantOwesDirectCents > 0 &&
+    movement.directOwesRestaurantCents > 0
   ) {
-    entries.push(
-      make(
-        "DIRECT_OWES_RESTAURANT",
-        "RESTAURANT_PAYOUT",
-        fin.restaurantNetAfterPlatformCommissionCents,
-      ),
-    );
+    return fail("Встречные обязательства по одному заказу невозможны.");
   }
-  return entries;
+
+  let direction: RestaurantAccountingEntry["direction"];
+  let type: RestaurantAccountingType;
+  let amountCents: number;
+  if (movement.restaurantOwesDirectCents > 0) {
+    direction = "RESTAURANT_OWES_DIRECT";
+    type = "PLATFORM_COMMISSION";
+    amountCents = movement.restaurantOwesDirectCents;
+  } else if (movement.directOwesRestaurantCents > 0) {
+    direction = "DIRECT_OWES_RESTAURANT";
+    type = "RESTAURANT_PAYOUT";
+    amountCents = movement.directOwesRestaurantCents;
+  } else {
+    // Нулевое обязательство: записи нет.
+    return ok([]);
+  }
+
+  // Один обычный заказ — максимум одна accounting entry. Существующие записи
+  // заказа: полное совпадение с каноном — идемпотентный no-op; любое
+  // противоречие — fail-closed без «тихого ремонта».
+  const existingForOrder = existingEntries.filter(
+    (entry) => entry.orderId === order.id,
+  );
+  if (existingForOrder.length > 0) {
+    const matches = existingForOrder.every(
+      (entry) =>
+        entry.type === type &&
+        entry.direction === direction &&
+        entry.amountCents === amountCents,
+    );
+    return matches
+      ? ok([])
+      : fail(
+          "Существующее обязательство заказа противоречит каноническому движению денег.",
+        );
+  }
+
+  return ok([
+    {
+      id: accountingEntryId(order.id, type),
+      orderId: order.id,
+      restaurantId: order.restaurant.id,
+      direction,
+      type,
+      amountCents,
+      currencyCode: fin.currencyCode,
+      status: "OPEN",
+      recognizedAt: getOrderCompletedAt(order),
+      settledAt: null,
+      source: "ORDER_FINANCIAL_SNAPSHOT",
+      legacySettlementId: null,
+    },
+  ]);
 }
 
 /** Результат признания обязательств завершённого заказа. */
@@ -150,10 +198,14 @@ export function recognizeCompletedOrderAccounting(
     return fail("Обязательства признаются только у завершённого заказа.");
   }
 
-  const newEntries = computeCompletedOrderAccountingEntries(
+  const computed = computeCompletedOrderAccounting(
     order,
     state.restaurantAccountingEntries,
   );
+  if (!computed.ok) {
+    return fail(computed.error ?? "Не удалось признать обязательства заказа.");
+  }
+  const newEntries = computed.entries;
   if (newEntries.length === 0) {
     // Идемпотентно: обязательства уже признаны — state не меняется.
     return { state, result: { ok: true, error: null, recognizedCount: 0 } };

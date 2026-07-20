@@ -43,6 +43,9 @@ function order(id: string, overrides: Partial<Order> = {}): Order {
       platformCollectedFromCustomerCents: 0,
       platformCommissionReceivableCents: 0,
       restaurantNetAfterPlatformCommissionCents: 0,
+      // Минимальная фикстура без канонического движения: REVIEW_REQUIRED —
+      // завершение заказа проходит, accounting-запись законно не создаётся.
+      moneyMovementStatus: "REVIEW_REQUIRED",
     },
     ...overrides,
   } as unknown as Order;

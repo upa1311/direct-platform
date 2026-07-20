@@ -97,7 +97,7 @@ import {
   validateMenuItemSubmission,
   validateMenuItemSubmissionDraft,
 } from "./menu-catalog";
-import { computeCompletedOrderAccountingEntries } from "./restaurant-accounting";
+import { computeCompletedOrderAccounting } from "./restaurant-accounting";
 
 export interface ActionResult<T> {
   state: PrototypeState;
@@ -2704,6 +2704,16 @@ export function markOrderDeliveredWithResult(
     createdAt: now,
   };
 
+  // Двусторонний журнал: обязательства ТОЛЬКО из канонического движения денег
+  // снимка; противоречие существующим записям — fail-closed до мутации.
+  const accounting = computeCompletedOrderAccounting(
+    updatedOrder,
+    state.restaurantAccountingEntries,
+  );
+  if (!accounting.ok) {
+    return fail(accounting.error ?? "Не удалось признать обязательства заказа.");
+  }
+
   const nextState = finalizeMutation(
     state,
     {
@@ -2714,14 +2724,9 @@ export function markOrderDeliveredWithResult(
       settlements: alreadySettled
         ? state.settlements
         : [...state.settlements, settlement],
-      // Двусторонний журнал: признаём обязательства завершённого заказа из его
-      // снимка, идемпотентно (без дублей по orderId+type).
       restaurantAccountingEntries: [
         ...state.restaurantAccountingEntries,
-        ...computeCompletedOrderAccountingEntries(
-          updatedOrder,
-          state.restaurantAccountingEntries,
-        ),
+        ...accounting.entries,
       ],
     },
     now,
@@ -2901,19 +2906,25 @@ export function completePickupAtRestaurant(
     createdAt: now,
   };
 
+  // Двусторонний журнал: обязательства ТОЛЬКО из канонического движения денег
+  // снимка; противоречие существующим записям — fail-closed до мутации.
+  const accounting = computeCompletedOrderAccounting(
+    updatedOrder,
+    state.restaurantAccountingEntries,
+  );
+  if (!accounting.ok) {
+    return fail(accounting.error ?? "Не удалось признать обязательства заказа.");
+  }
+
   const nextState = finalizeMutation(
     state,
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
       settlements: [...state.settlements, settlement],
-      // Двусторонний журнал: признаём обязательства завершённого заказа.
       restaurantAccountingEntries: [
         ...state.restaurantAccountingEntries,
-        ...computeCompletedOrderAccountingEntries(
-          updatedOrder,
-          state.restaurantAccountingEntries,
-        ),
+        ...accounting.entries,
       ],
     },
     now,
@@ -4217,19 +4228,24 @@ export function markOrderDeliveredByDriverWithResult(
       ),
     ],
   };
+  // Двусторонний журнал: обязательства ТОЛЬКО из канонического движения денег
+  // снимка; противоречие существующим записям — fail-closed до мутации.
+  const accounting = computeCompletedOrderAccounting(
+    updatedOrder,
+    state.restaurantAccountingEntries,
+  );
+  if (!accounting.ok) {
+    return fail(accounting.error ?? "Не удалось признать обязательства заказа.");
+  }
   const nextState = finalizeMutation(
     state,
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
       drivers: releaseAssignedDriver(state, order.assignedDriverId, order.id),
-      // Двусторонний журнал: признаём обязательства завершённого заказа.
       restaurantAccountingEntries: [
         ...state.restaurantAccountingEntries,
-        ...computeCompletedOrderAccountingEntries(
-          updatedOrder,
-          state.restaurantAccountingEntries,
-        ),
+        ...accounting.entries,
       ],
     },
     now,
@@ -4537,19 +4553,25 @@ export function issuePickupWithoutCode(
     createdAt: now,
   };
 
+  // Двусторонний журнал: обязательства ТОЛЬКО из канонического движения денег
+  // снимка; противоречие существующим записям — fail-closed до мутации.
+  const accounting = computeCompletedOrderAccounting(
+    updatedOrder,
+    state.restaurantAccountingEntries,
+  );
+  if (!accounting.ok) {
+    return fail(accounting.error ?? "Не удалось признать обязательства заказа.");
+  }
+
   const nextState = finalizeMutation(
     state,
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
       settlements: [...state.settlements, settlement],
-      // Двусторонний журнал: признаём обязательства завершённого заказа.
       restaurantAccountingEntries: [
         ...state.restaurantAccountingEntries,
-        ...computeCompletedOrderAccountingEntries(
-          updatedOrder,
-          state.restaurantAccountingEntries,
-        ),
+        ...accounting.entries,
       ],
     },
     now,
