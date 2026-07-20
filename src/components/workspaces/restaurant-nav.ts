@@ -56,6 +56,44 @@ export function restaurantNavItems(
   return mode === "SPLIT_OPERATOR_KITCHEN" ? SPLIT_NAV : COMBINED_NAV;
 }
 
+/** Маршрут раздела «Меню и доступность». */
+export const RESTAURANT_MENU_PATH = "/restaurant/menu";
+
+/**
+ * Ссылка «Меню и доступность» с ЯВНЫМ навигационным контекстом роли: из
+ * кабинета оператора — OPERATOR, из кухни SPLIT — KITCHEN, в COMBINED —
+ * COMBINED. Query переживает reload; sessionStorage остаётся только резервной
+ * подсказкой. С экрана без известного контекста ссылка ведёт без query —
+ * страница меню тогда работает read-only, но не скрывается.
+ */
+export function menuNavHref(
+  mode: RestaurantOrderWorkflowMode,
+  pathname: string,
+): string {
+  if (mode !== "SPLIT_OPERATOR_KITCHEN") {
+    return `${RESTAURANT_MENU_PATH}?role=COMBINED`;
+  }
+  if (pathname.startsWith("/restaurant/operator")) {
+    return `${RESTAURANT_MENU_PATH}?role=OPERATOR`;
+  }
+  if (pathname.startsWith(RESTAURANT_KITCHEN_PATH)) {
+    return `${RESTAURANT_MENU_PATH}?role=KITCHEN`;
+  }
+  return RESTAURANT_MENU_PATH;
+}
+
+/** Навигация ресторана с ролевой ссылкой меню для текущего экрана. */
+export function restaurantNavItemsForPath(
+  mode: RestaurantOrderWorkflowMode,
+  pathname: string,
+): readonly WorkspaceNavItem[] {
+  return restaurantNavItems(mode).map((item) =>
+    item.href === RESTAURANT_MENU_PATH
+      ? { ...item, href: menuNavHref(mode, pathname) }
+      : item,
+  );
+}
+
 /** Порядок вариантов в popover. Названия режимов берутся из workflowModeLabels. */
 export const WORKFLOW_MODE_ORDER: readonly RestaurantOrderWorkflowMode[] = [
   "COMBINED",

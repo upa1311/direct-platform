@@ -553,14 +553,19 @@ function MenuAvailabilityRow({
   item: MenuItem;
   restaurant: Restaurant;
   nowMs: number;
-  workspaceRole: RestaurantWorkspaceRole;
+  /** null — read-only: строка видна, кнопки изменения не рендерятся. */
+  workspaceRole: RestaurantWorkspaceRole | null;
 }) {
   const { setMenuItemUnavailable, restoreMenuItem } = usePrototype();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const available = isMenuItemAvailableAt(item, nowMs);
+  // Read-only без роли: фальшивая KITCHEN/OPERATOR не подставляется, доменные
+  // actions не вызываются вовсе — кнопок изменения просто нет.
+  const canManage = workspaceRole !== null;
 
   const confirm = async (reason: string, choice: DurationChoice) => {
+    if (!canManage) return;
     const { mode, resumeAt } = durationToPause(choice);
     const res = await setMenuItemUnavailable(
       restaurant.id,
@@ -569,7 +574,7 @@ function MenuAvailabilityRow({
       mode,
       resumeAt,
       "RESTAURANT",
-      workspaceRole,
+      workspaceRole ?? undefined,
     );
     if (!res.ok) {
       setError(res.error);
@@ -580,11 +585,12 @@ function MenuAvailabilityRow({
   };
 
   const restore = async () => {
+    if (!canManage) return;
     const res = await restoreMenuItem(
       restaurant.id,
       item.id,
       "RESTAURANT",
-      workspaceRole,
+      workspaceRole ?? undefined,
     );
     setError(res.ok ? null : res.error);
   };
@@ -608,7 +614,7 @@ function MenuAvailabilityRow({
           </span>
         ) : null}
       </div>
-      {available ? (
+      {!canManage ? null : available ? (
         <button
           className={`${styles.btn} ${styles.btnRedOutline}`}
           type="button"
@@ -636,7 +642,7 @@ function MenuAvailabilityRow({
           <span className={styles.error}>{error}</span>
         </p>
       ) : null}
-      {open && available ? (
+      {open && available && canManage ? (
         <div className={styles.menuRowPanel}>
           <ReasonDurationPanel
             reasons={ITEM_REASONS}
@@ -673,10 +679,16 @@ export function MenuAvailabilitySection({
   restaurant: Restaurant;
   nowMs: number;
   embedded?: boolean;
-  /** Реальная роль экрана: она же попадает в аудит операционных событий. */
-  workspaceRole: RestaurantWorkspaceRole;
+  /**
+   * Реальная роль экрана: она же попадает в аудит операционных событий.
+   * null — read-only режим (нет валидного рабочего контекста): список,
+   * фильтры, статусы и журнал видны, но кнопки изменения не рендерятся и
+   * доменные actions не вызываются. Фальшивая роль не подставляется.
+   */
+  workspaceRole: RestaurantWorkspaceRole | null;
 }) {
   const { state, pauseCategory, restoreCategory } = usePrototype();
+  const canManage = workspaceRole !== null;
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState<
@@ -776,7 +788,7 @@ export function MenuAvailabilitySection({
         </label>
       </div>
 
-      {bulkCategory ? (
+      {bulkCategory && canManage ? (
         <div>
           <div className={styles.bulkBar}>
             <span className={styles.bulkCategory}>Категория: {bulkCategory}</span>
@@ -798,7 +810,7 @@ export function MenuAvailabilitySection({
                   restaurant.id,
                   bulkCategory,
                   "RESTAURANT",
-                  workspaceRole,
+                  workspaceRole ?? undefined,
                 );
                 setBulkError(res.ok ? null : res.error);
               }}
@@ -827,7 +839,7 @@ export function MenuAvailabilitySection({
                   mode,
                   resumeAt,
                   "RESTAURANT",
-                  workspaceRole,
+                  workspaceRole ?? undefined,
                 );
                 if (!res.ok) {
                   setBulkError(res.error);
@@ -843,11 +855,11 @@ export function MenuAvailabilitySection({
             />
           ) : null}
         </div>
-      ) : (
+      ) : canManage ? (
         <p className={styles.bulkHint}>
           Выберите конкретную категорию для массового действия.
         </p>
-      )}
+      ) : null}
 
       {visible.length === 0 ? (
         <div className={styles.empty}>Блюда не найдены.</div>

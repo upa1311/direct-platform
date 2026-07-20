@@ -1,11 +1,10 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, useSyncExternalStore } from "react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { MenuAvailabilitySection } from "@/components/kitchen/kitchen-operations";
-import { DishBuilderRoleError } from "@/components/menu/restaurant-dish-builder";
 import { RestaurantMenuCatalogActions } from "@/components/menu/restaurant-menu-catalog-actions";
 import { resolveMenuPageRole } from "@/components/menu/dish-builder-form";
 import {
@@ -17,17 +16,20 @@ import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
 import { getRestaurant } from "@/prototype/selectors";
 
+/** sessionStorage не эмитит событий — подписка пустая, snapshot читается сам. */
+function subscribeToNothing(): () => void {
+  return () => {};
+}
+
 /**
- * Этап 10: отдельная страница «Меню и доступность». Использует тот же единый
- * state и компонент доступности меню, что и экран заказов, а сверху — общие
- * действия каталога («Добавить новое блюдо» и «Мои заявки»), видимые сразу,
- * без прокрутки и раскрытия панелей.
- *
- * Роль НЕ угадывается: в SPLIT страницу открывают и оператор, и кухня, поэтому
- * реальный рабочий экран приходит навигационным контекстом (query-параметр или
- * session-подсказка кабинета). Оператор не превращается молча в KITCHEN;
- * повреждённый контекст — fail-closed. Домен дополнительно проверяет право на
- * каждом действии.
+ * Этап 10: отдельная страница «Меню и доступность». Раздел показывается ВСЕГДА,
+ * когда ресторан найден: список блюд, категории, поиск, статусы и журнал не
+ * зависят от рабочей роли. Роль (валидируемый query `role`, затем резервная
+ * session-подсказка кабинета) управляет только правами: с ролью доступны
+ * «Добавить новое блюдо», «Мои заявки» и изменение доступности; без роли раздел
+ * работает read-only с компактной подсказкой — fail-closed относится к
+ * мутациям и конструктору, а не к просмотру. Оператор не превращается молча в
+ * KITCHEN; домен дополнительно проверяет право на каждом действии.
  */
 function RestaurantMenuPageContent() {
   const { state, isHydrated } = usePrototype();
@@ -39,19 +41,28 @@ function RestaurantMenuPageContent() {
   const nowMs = useNowMs();
   const searchParams = useSearchParams();
 
+  // Session-подсказка — резервный внешний источник: на сервере snapshot null,
+  // поэтому SSR и первый клиентский рендер совпадают, а sessionStorage не
+  // становится источником расхождения (query остаётся первичным контекстом).
+  const sessionHint = useSyncExternalStore(
+    subscribeToNothing,
+    readMenuWorkspaceRoleHint,
+    () => null,
+  );
+
   const restaurant = getRestaurant(state, selectedRestaurantId);
-  const workspaceRole = restaurant
-    ? resolveMenuPageRole(
-        restaurant.orderWorkflowMode,
-        searchParams.get("role"),
-        readMenuWorkspaceRoleHint(),
-      )
-    : null;
+  const workspaceRole =
+    isHydrated && restaurant
+      ? resolveMenuPageRole(
+          restaurant.orderWorkflowMode,
+          searchParams.get("role"),
+          sessionHint,
+        )
+      : null;
 
   // Разрешённая роль запоминается как контекст: возврат на эту страницу после
   // конструктора или по общей ссылке навигации сохраняет тот же рабочий экран.
-  // ТОЛЬКО после hydration: до неё режим ресторана ещё дефолтный (COMBINED), и
-  // преждевременная запись затёрла бы настоящий контекст OPERATOR/KITCHEN.
+  // Только после hydration — до неё режим ресторана ещё дефолтный.
   useEffect(() => {
     if (isHydrated && workspaceRole) {
       rememberMenuWorkspaceRole(workspaceRole);
@@ -85,15 +96,20 @@ function RestaurantMenuPageContent() {
         <div className={kds.empty}>Загружаем меню…</div>
       ) : !restaurant ? (
         <div className={kds.empty}>Ресторан не найден.</div>
-      ) : workspaceRole === null ? (
-        <DishBuilderRoleError />
       ) : (
         <>
-          {/* Основная точка входа в конструктор — видна сразу под шапкой. */}
-          <RestaurantMenuCatalogActions
-            workspaceRole={workspaceRole}
-            variant="PAGE"
-          />
+          {workspaceRole ? (
+            // Основная точка входа в конструктор — видна сразу под шапкой.
+            <RestaurantMenuCatalogActions
+              workspaceRole={workspaceRole}
+              variant="PAGE"
+            />
+          ) : (
+            <p className={kds.menuReadOnlyNotice} role="status">
+              Откройте раздел из кабинета оператора или кухни, чтобы изменять
+              меню.
+            </p>
+          )}
           <MenuAvailabilitySection
             restaurant={restaurant}
             nowMs={nowMs}

@@ -31,7 +31,9 @@ export function WorkspaceNav({
       aria-label={ariaLabel}
     >
       {items.map((item) => {
-        const isActive = pathname === item.href;
+        // Ссылка может нести навигационный query (например role) — активность
+        // раздела определяется только путём.
+        const isActive = pathname === item.href.split("?")[0];
 
         return (
           <Link

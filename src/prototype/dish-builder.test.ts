@@ -159,7 +159,7 @@ test("роль страницы меню: OPERATOR/KITCHEN/COMBINED сохран
     resolveMenuPageRole("SPLIT_OPERATOR_KITCHEN", "COMBINED", null),
     null,
   );
-  // Кабинеты записывают контекст, страница показывает fail-closed заглушку.
+  // Кабинеты записывают контекст как резервную подсказку.
   assert.ok(
     OPERATOR_PAGE_SOURCE.includes('rememberMenuWorkspaceRole("OPERATOR")'),
   );
@@ -168,7 +168,73 @@ test("роль страницы меню: OPERATOR/KITCHEN/COMBINED сохран
       'rememberMenuWorkspaceRole(isSplit ? "KITCHEN" : "COMBINED")',
     ),
   );
-  assert.ok(MENU_PAGE_SOURCE.includes("DishBuilderRoleError"));
+});
+
+test("без роли страница меню видна read-only, а не заменяется заглушкой", () => {
+  // Раздел рендерится всегда: DishBuilderRoleError на странице меню больше
+  // не используется, секция получает workspaceRole (включая null=read-only).
+  assert.ok(!MENU_PAGE_SOURCE.includes("DishBuilderRoleError"));
+  assert.ok(MENU_PAGE_SOURCE.includes("<MenuAvailabilitySection"));
+  assert.ok(
+    MENU_PAGE_SOURCE.includes(
+      "Откройте раздел из кабинета оператора или кухни, чтобы изменять",
+    ),
+  );
+  // Без роли конструктор недоступен: действия каталога рендерятся только при
+  // валидной роли.
+  assert.ok(/\{workspaceRole \? \(/.test(MENU_PAGE_SOURCE));
+  // Session-подсказка — внешний источник с SSR-снимком null: sessionStorage не
+  // читается в render как источник расхождения SSR/client.
+  assert.ok(MENU_PAGE_SOURCE.includes("useSyncExternalStore"));
+  assert.ok(MENU_PAGE_SOURCE.includes("readMenuWorkspaceRoleHint,"));
+
+  // Read-only режим самой секции: null-роль отключает кнопки и доменные
+  // actions (canManage), фальшивая роль не подставляется.
+  const operations = readSource("../components/kitchen/kitchen-operations.tsx");
+  assert.ok(operations.includes("workspaceRole: RestaurantWorkspaceRole | null"));
+  assert.ok(operations.includes("const canManage = workspaceRole !== null;"));
+  assert.ok(operations.includes("{!canManage ? null : available ? ("));
+  assert.ok(operations.includes("bulkCategory && canManage"));
+
+  // Fail-closed заглушка осталась там, где без роли продолжить нельзя:
+  // страницы конструктора (создание/редактирование/отправка заявки).
+  const shell = readSource("../components/menu/dish-builder-page.tsx");
+  assert.ok(shell.includes("DishBuilderRoleError"));
+});
+
+test("навигация передаёт роль явно: query переживает reload", async () => {
+  const { menuNavHref, restaurantNavItemsForPath } = await import(
+    "../components/workspaces/restaurant-nav.ts"
+  );
+  // Из оператора — OPERATOR, из кухни SPLIT — KITCHEN, COMBINED — COMBINED.
+  assert.equal(
+    menuNavHref("SPLIT_OPERATOR_KITCHEN", "/restaurant/operator"),
+    "/restaurant/menu?role=OPERATOR",
+  );
+  assert.equal(
+    menuNavHref("SPLIT_OPERATOR_KITCHEN", "/restaurant/kitchen"),
+    "/restaurant/menu?role=KITCHEN",
+  );
+  assert.equal(
+    menuNavHref("COMBINED", "/restaurant/kitchen"),
+    "/restaurant/menu?role=COMBINED",
+  );
+  // Неизвестный экран в SPLIT — без query: страница остаётся видимой read-only.
+  assert.equal(
+    menuNavHref("SPLIT_OPERATOR_KITCHEN", "/restaurant/settlements"),
+    "/restaurant/menu",
+  );
+  // Ролевая ссылка подставляется в общий набор навигации.
+  const items = restaurantNavItemsForPath(
+    "SPLIT_OPERATOR_KITCHEN",
+    "/restaurant/operator",
+  );
+  assert.ok(
+    items.some((item) => item.href === "/restaurant/menu?role=OPERATOR"),
+  );
+  // Шапка ресторана использует ролевую навигацию.
+  const header = readSource("../components/workspaces/restaurant-header.tsx");
+  assert.ok(header.includes("restaurantNavItemsForPath(mode, pathname)"));
 });
 
 test("мобильная страница меню: действия переносятся без горизонтальной прокрутки", () => {
