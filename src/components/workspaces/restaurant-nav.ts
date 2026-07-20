@@ -62,9 +62,11 @@ export const RESTAURANT_MENU_PATH = "/restaurant/menu";
 /**
  * Ссылка «Меню и доступность» с ЯВНЫМ навигационным контекстом роли: из
  * кабинета оператора — OPERATOR, из кухни SPLIT — KITCHEN, в COMBINED —
- * COMBINED. Query переживает reload; sessionStorage остаётся только резервной
- * подсказкой. С экрана без известного контекста ссылка ведёт без query —
- * страница меню тогда работает read-only, но не скрывается.
+ * COMBINED. Query переживает reload; sessionStorage остаётся резервной
+ * подсказкой. С экрана без известного контекста (например, страницы
+ * конструктора) ссылка ведёт без query: страница меню сама восстановит роль из
+ * сохранённого workspace-контекста и канонизирует URL через router.replace —
+ * оператор не превратится в кухню, а кнопки не исчезнут.
  */
 export function menuNavHref(
   mode: RestaurantOrderWorkflowMode,
