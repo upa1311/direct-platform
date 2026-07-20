@@ -11,6 +11,7 @@ import type {
   OperationalEventAction,
   OperationalPauseMode,
   Restaurant,
+  RestaurantWorkspaceRole,
 } from "@/prototype/models";
 import {
   formatClock24,
@@ -547,10 +548,12 @@ function MenuAvailabilityRow({
   item,
   restaurant,
   nowMs,
+  workspaceRole,
 }: {
   item: MenuItem;
   restaurant: Restaurant;
   nowMs: number;
+  workspaceRole: RestaurantWorkspaceRole;
 }) {
   const { setMenuItemUnavailable, restoreMenuItem } = usePrototype();
   const [open, setOpen] = useState(false);
@@ -566,6 +569,7 @@ function MenuAvailabilityRow({
       mode,
       resumeAt,
       "RESTAURANT",
+      workspaceRole,
     );
     if (!res.ok) {
       setError(res.error);
@@ -576,7 +580,12 @@ function MenuAvailabilityRow({
   };
 
   const restore = async () => {
-    const res = await restoreMenuItem(restaurant.id, item.id, "RESTAURANT");
+    const res = await restoreMenuItem(
+      restaurant.id,
+      item.id,
+      "RESTAURANT",
+      workspaceRole,
+    );
     setError(res.ok ? null : res.error);
   };
 
@@ -659,10 +668,13 @@ export function MenuAvailabilitySection({
   restaurant,
   nowMs,
   embedded = false,
+  workspaceRole,
 }: {
   restaurant: Restaurant;
   nowMs: number;
   embedded?: boolean;
+  /** Реальная роль экрана: она же попадает в аудит операционных событий. */
+  workspaceRole: RestaurantWorkspaceRole;
 }) {
   const { state, pauseCategory, restoreCategory } = usePrototype();
   const [search, setSearch] = useState("");
@@ -782,7 +794,12 @@ export function MenuAvailabilitySection({
               className={`${styles.btn} ${styles.btnGreen}`}
               type="button"
               onClick={async () => {
-                const res = await restoreCategory(restaurant.id, bulkCategory, "RESTAURANT");
+                const res = await restoreCategory(
+                  restaurant.id,
+                  bulkCategory,
+                  "RESTAURANT",
+                  workspaceRole,
+                );
                 setBulkError(res.ok ? null : res.error);
               }}
             >
@@ -810,6 +827,7 @@ export function MenuAvailabilitySection({
                   mode,
                   resumeAt,
                   "RESTAURANT",
+                  workspaceRole,
                 );
                 if (!res.ok) {
                   setBulkError(res.error);
@@ -840,6 +858,7 @@ export function MenuAvailabilitySection({
               item={item}
               restaurant={restaurant}
               nowMs={nowMs}
+              workspaceRole={workspaceRole}
               key={item.id}
             />
           ))}

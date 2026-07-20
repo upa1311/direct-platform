@@ -3134,6 +3134,24 @@ export interface BulkOperationalResult {
   affected: number;
 }
 
+/**
+ * Реальная рабочая роль ресторана для аудита операционных событий. Меню ведут
+ * все три ресторанные роли, поэтому в журнал попадает именно та, что выполнила
+ * действие; у ADMIN и SYSTEM ресторанной роли нет.
+ */
+function operationalWorkspaceRole(
+  state: PrototypeState,
+  restaurantId: string,
+  actor: OperationalActor,
+  workspaceRole?: RestaurantWorkspaceRole,
+): RestaurantWorkspaceRole | undefined {
+  if (actor !== "RESTAURANT") return undefined;
+  const workflowMode =
+    state.restaurants.find((r) => r.id === restaurantId)?.orderWorkflowMode ??
+    "COMBINED";
+  return resolveRestaurantWorkspaceRole(workflowMode, workspaceRole) ?? undefined;
+}
+
 function makeOperationalEvent(
   index: number,
   occurredAt: string,
@@ -3143,6 +3161,8 @@ function makeOperationalEvent(
   menuItemId: string | null,
   reason: string,
   resumeAt: string | null,
+  /** Реальная роль экрана; для ADMIN/SYSTEM ресторанной роли нет. */
+  restaurantWorkspaceRole?: RestaurantWorkspaceRole,
 ): OperationalEvent {
   return {
     id: `op-${restaurantId}-${menuItemId ?? "restaurant"}-${index}`,
@@ -3153,6 +3173,7 @@ function makeOperationalEvent(
     menuItemId,
     reason,
     resumeAt,
+    restaurantWorkspaceRole,
   };
 }
 
@@ -3420,6 +3441,7 @@ export function setMenuItemOperationallyUnavailable(
     menuItemId,
     normReason,
     resolved.resumeAt,
+    operationalWorkspaceRole(state, restaurantId, actor, workspaceRole),
   );
   const nextState = finalizeMutation(
     state,
@@ -3488,6 +3510,7 @@ export function restoreMenuItemAvailability(
     menuItemId,
     message,
     null,
+    operationalWorkspaceRole(state, restaurantId, actor, workspaceRole),
   );
   const nextState = finalizeMutation(
     state,
@@ -3572,6 +3595,7 @@ export function pauseCategoryItems(
       m.id,
       normReason,
       resolved.resumeAt,
+      operationalWorkspaceRole(state, restaurantId, actor, workspaceRole),
     ),
   );
   const nextState = finalizeMutation(
@@ -3641,6 +3665,7 @@ export function restoreCategoryItems(
       m.id,
       "Категория возвращена в меню",
       null,
+      operationalWorkspaceRole(state, restaurantId, actor, workspaceRole),
     ),
   );
   const nextState = finalizeMutation(

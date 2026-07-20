@@ -5,7 +5,21 @@ import { MenuAvailabilitySection } from "@/components/kitchen/kitchen-operations
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
+import type { Restaurant, RestaurantWorkspaceRole } from "@/prototype/models";
 import { getRestaurant } from "@/prototype/selectors";
+
+/**
+ * Роль отдельной страницы меню выводится из режима работы ресторана, а не из
+ * URL: в COMBINED это общий экран, в SPLIT страницу ведёт кухня. Доменные
+ * действия роль не угадывают — она приходит сюда явно.
+ */
+function resolveMenuWorkspaceRole(
+  restaurant: Restaurant,
+): RestaurantWorkspaceRole {
+  return restaurant.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN"
+    ? "KITCHEN"
+    : "COMBINED";
+}
 
 /**
  * Этап 10: отдельная страница «Меню и доступность». Использует тот же единый
@@ -49,7 +63,11 @@ export default function RestaurantMenuPage() {
       {!isHydrated ? (
         <div className={kds.empty}>Загружаем меню…</div>
       ) : restaurant ? (
-        <MenuAvailabilitySection restaurant={restaurant} nowMs={nowMs} />
+        <MenuAvailabilitySection
+          restaurant={restaurant}
+          nowMs={nowMs}
+          workspaceRole={resolveMenuWorkspaceRole(restaurant)}
+        />
       ) : (
         <div className={kds.empty}>Ресторан не найден.</div>
       )}

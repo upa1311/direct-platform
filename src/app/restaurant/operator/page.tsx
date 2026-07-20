@@ -20,6 +20,7 @@ import {
   useNewOrderSound,
 } from "@/components/kitchen/new-order-sound";
 import { useOperatorOrderReadySound } from "@/components/operator/use-operator-order-ready-sound";
+import { RestaurantMenuAvailabilityPanel } from "@/components/kitchen/restaurant-menu-availability-panel";
 import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
@@ -993,6 +994,15 @@ export default function RestaurantOperatorPage() {
           </section>
         </div>
       )}
+      {/* Тот же компактный блок «Меню · статус», что и на экране заказов: общий
+          компонент, роль OPERATOR попадает в аудит операционных событий. */}
+      {isHydrated && !isCombined && restaurant ? (
+        <RestaurantMenuAvailabilityPanel
+          restaurant={restaurant}
+          nowMs={nowMs}
+          workspaceRole="OPERATOR"
+        />
+      ) : null}
     </div>
   );
 }

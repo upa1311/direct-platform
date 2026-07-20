@@ -51,6 +51,11 @@ const OPERATOR_ACTIONS: ReadonlySet<RestaurantWorkspaceAction> = new Set([
   "MANAGE_CANCELLATION",
   "MANAGE_DRIVER",
   "HANDOFF_ORDER",
+  // Меню ресторана ведут все три ресторанные роли: оператор так же отключает и
+  // возвращает блюда и категории и так же заводит заявку на новое блюдо.
+  // Публикация клиенту остаётся исключительно за ADMIN Direct.
+  "CHANGE_MENU_AVAILABILITY",
+  "MANAGE_MENU_CATALOG",
 ]);
 
 /** Данные, доступные кухне (приватное клиента/финансы/выдача — скрыты). */

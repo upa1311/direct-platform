@@ -16,10 +16,12 @@ import {
   markOrderReady,
   markOrderReadyWithResult,
   markPickupNoShow,
+  pauseCategoryItems,
   pauseRestaurantOrders,
   rejectRestaurantOrder,
   rejectRestaurantOrderWithResult,
   reportRestaurantPreparationProblem,
+  restoreCategoryItems,
   restoreMenuItemAvailability,
   setCartFulfillmentChoice,
   setMenuItemOperationallyUnavailable,
@@ -572,22 +574,86 @@ test("SPLIT: пауза ресторана — кухня может, опера
   );
 });
 
-test("SPLIT: доступность меню — кухня может, оператор нет", () => {
+test("SPLIT: доступность меню ведут и кухня, и оператор — с реальной ролью", () => {
   const { state } = splitPickupState();
-  const operator = setMenuItemOperationallyUnavailable(
-    state, "restaurant-2", "restaurant-2-item-1", "Закончился", "MANUAL", null,
-    "RESTAURANT", "OPERATOR",
-  );
-  assert.equal(operator.result.ok, false);
+
+  // Кухня отключает блюдо; в аудите остаётся KITCHEN.
   const kitchen = setMenuItemOperationallyUnavailable(
     state, "restaurant-2", "restaurant-2-item-1", "Закончился", "MANUAL", null,
     "RESTAURANT", "KITCHEN",
   );
   assert.equal(kitchen.result.ok, true);
+  assert.equal(
+    kitchen.state.operationalEvents.at(-1)?.restaurantWorkspaceRole,
+    "KITCHEN",
+  );
+
+  // Оператор возвращает блюдо; действие разрешено и записано как OPERATOR,
+  // а не как кухонное.
   const restore = restoreMenuItemAvailability(
     kitchen.state, "restaurant-2", "restaurant-2-item-1", "RESTAURANT", "", "OPERATOR",
   );
-  assert.equal(restore.result.ok, false);
+  assert.equal(restore.result.ok, true);
+  const restoreEvent = restore.state.operationalEvents.at(-1);
+  assert.equal(restoreEvent?.restaurantWorkspaceRole, "OPERATOR");
+  assert.equal(restoreEvent?.actor, "RESTAURANT");
+
+  // Оператор может и отключить блюдо сам.
+  const operator = setMenuItemOperationallyUnavailable(
+    restore.state, "restaurant-2", "restaurant-2-item-1", "Закончился", "MANUAL", null,
+    "RESTAURANT", "OPERATOR",
+  );
+  assert.equal(operator.result.ok, true);
+  assert.equal(
+    operator.state.operationalEvents.at(-1)?.restaurantWorkspaceRole,
+    "OPERATOR",
+  );
+});
+
+test("SPLIT: оператор отключает и возвращает категорию с ролью OPERATOR", () => {
+  const { state } = splitPickupState();
+  const paused = pauseCategoryItems(
+    state, "restaurant-2", "Пиццы", "Закончилось тесто", "MANUAL", null,
+    "RESTAURANT", "OPERATOR",
+  );
+  assert.equal(paused.result.ok, true);
+  assert.ok(paused.result.affected > 0);
+  assert.equal(
+    paused.state.operationalEvents.at(-1)?.restaurantWorkspaceRole,
+    "OPERATOR",
+  );
+
+  const restored = restoreCategoryItems(
+    paused.state, "restaurant-2", "Пиццы", "RESTAURANT", "OPERATOR",
+  );
+  assert.equal(restored.result.ok, true);
+  assert.equal(
+    restored.state.operationalEvents.at(-1)?.restaurantWorkspaceRole,
+    "OPERATOR",
+  );
+  assert.equal(restored.state.operationalEvents.at(-1)?.actor, "RESTAURANT");
+});
+
+test("COMBINED ведёт меню с ролью COMBINED", () => {
+  let s = createDefaultState();
+  const res = setMenuItemOperationallyUnavailable(
+    s, "restaurant-2", "restaurant-2-item-1", "Закончился", "MANUAL", null,
+    "RESTAURANT", "COMBINED",
+  );
+  assert.equal(res.result.ok, true);
+  assert.equal(
+    res.state.operationalEvents.at(-1)?.restaurantWorkspaceRole,
+    "COMBINED",
+  );
+  s = res.state;
+  const back = restoreMenuItemAvailability(
+    s, "restaurant-2", "restaurant-2-item-1", "RESTAURANT", "", "COMBINED",
+  );
+  assert.equal(back.result.ok, true);
+  assert.equal(
+    back.state.operationalEvents.at(-1)?.restaurantWorkspaceRole,
+    "COMBINED",
+  );
 });
 
 test("клиентская история не раскрывает workspace-роль", () => {

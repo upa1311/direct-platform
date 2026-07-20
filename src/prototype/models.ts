@@ -224,6 +224,12 @@ export interface OperationalEvent {
   menuItemId: string | null;
   reason: string;
   resumeAt: string | null;
+  /**
+   * Реальная рабочая роль ресторана, выполнившая действие: меню ведут и кухня,
+   * и оператор, и общий экран, поэтому операторское действие не должно
+   * записываться как кухонное. Старые события без поля продолжают работать.
+   */
+  restaurantWorkspaceRole?: RestaurantWorkspaceRole;
 }
 
 /**

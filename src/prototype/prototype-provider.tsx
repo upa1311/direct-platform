@@ -199,6 +199,10 @@ export interface PrototypeContextValue {
     restaurantId: string,
     actor: OperationalActor,
   ) => Promise<OperationalActionResult>;
+  /**
+   * Доступность меню ведут все три ресторанные роли. Реальная роль приходит от
+   * экрана и попадает в аудит: операторское действие не записывается как KITCHEN.
+   */
   setMenuItemUnavailable: (
     restaurantId: string,
     menuItemId: string,
@@ -206,11 +210,13 @@ export interface PrototypeContextValue {
     mode: OperationalPauseMode,
     resumeAt: string | null,
     actor: OperationalActor,
+    workspaceRole: RestaurantWorkspaceRole,
   ) => Promise<OperationalActionResult>;
   restoreMenuItem: (
     restaurantId: string,
     menuItemId: string,
     actor: OperationalActor,
+    workspaceRole: RestaurantWorkspaceRole,
   ) => Promise<OperationalActionResult>;
   pauseCategory: (
     restaurantId: string,
@@ -219,11 +225,13 @@ export interface PrototypeContextValue {
     mode: OperationalPauseMode,
     resumeAt: string | null,
     actor: OperationalActor,
+    workspaceRole: RestaurantWorkspaceRole,
   ) => Promise<BulkOperationalResult>;
   restoreCategory: (
     restaurantId: string,
     category: string,
     actor: OperationalActor,
+    workspaceRole: RestaurantWorkspaceRole,
   ) => Promise<BulkOperationalResult>;
   acceptOrder: (
     orderId: string,
@@ -914,6 +922,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       mode: OperationalPauseMode,
       resumeAt: string | null,
       actor: OperationalActor,
+      workspaceRole: RestaurantWorkspaceRole,
     ) => {
       return runSerializedActionMutation({
         mutation: (baseState) =>
@@ -925,7 +934,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             mode,
             resumeAt,
             actor,
-            "KITCHEN",
+            workspaceRole,
           ),
         infrastructureFailure: (error) => ({ ok: false, error }),
       });
@@ -1028,7 +1037,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const restoreMenuItem = useCallback(
-    (restaurantId: string, menuItemId: string, actor: OperationalActor) => {
+    (
+      restaurantId: string,
+      menuItemId: string,
+      actor: OperationalActor,
+      workspaceRole: RestaurantWorkspaceRole,
+    ) => {
       return runSerializedActionMutation({
         mutation: (baseState) =>
           restoreMenuItemAvailability(
@@ -1037,7 +1051,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             menuItemId,
             actor,
             "",
-            "KITCHEN",
+            workspaceRole,
           ),
         infrastructureFailure: (error) => ({ ok: false, error }),
       });
@@ -1053,6 +1067,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       mode: OperationalPauseMode,
       resumeAt: string | null,
       actor: OperationalActor,
+      workspaceRole: RestaurantWorkspaceRole,
     ) => {
       return runSerializedActionMutation({
         mutation: (baseState) =>
@@ -1064,7 +1079,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             mode,
             resumeAt,
             actor,
-            "KITCHEN",
+            workspaceRole,
           ),
         infrastructureFailure: (error) => ({ ok: false, error, affected: 0 }),
       });
@@ -1073,10 +1088,21 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const restoreCategory = useCallback(
-    (restaurantId: string, category: string, actor: OperationalActor) => {
+    (
+      restaurantId: string,
+      category: string,
+      actor: OperationalActor,
+      workspaceRole: RestaurantWorkspaceRole,
+    ) => {
       return runSerializedActionMutation({
         mutation: (baseState) =>
-          restoreCategoryItems(baseState, restaurantId, category, actor, "KITCHEN"),
+          restoreCategoryItems(
+            baseState,
+            restaurantId,
+            category,
+            actor,
+            workspaceRole,
+          ),
         infrastructureFailure: (error) => ({ ok: false, error, affected: 0 }),
       });
     },

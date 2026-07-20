@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
@@ -25,13 +25,9 @@ import { useSplitKitchenPreparingSound } from "@/components/kitchen/use-split-ki
 import { PreparationProblemResolveBlock } from "@/components/kitchen/preparation-problem-resolve";
 import {
   EtaAdjustPanel,
-  MenuAvailabilitySection,
   RestaurantPauseControl,
 } from "@/components/kitchen/kitchen-operations";
-import {
-  getMenuAvailabilitySummary,
-  type MenuAvailabilityTone,
-} from "@/components/kitchen/menu-availability-summary";
+import { RestaurantMenuAvailabilityPanel } from "@/components/kitchen/restaurant-menu-availability-panel";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { usePrototype } from "@/prototype/prototype-provider";
@@ -62,22 +58,10 @@ import {
   getPickupNoShowEligibleAtIso,
   getPickupPaymentChoices,
   getRestaurant,
-  getRestaurantMenu,
   isPickupNoShowEligibleAt,
   paymentStatusLabels,
   pickupPaymentMethodLabels,
 } from "@/prototype/selectors";
-
-/**
- * Визуальное состояние строки «Меню» задаётся машинным tone, а не разбором
- * русского текста статуса.
- */
-const MENU_TONE_CLASS: Record<MenuAvailabilityTone, string> = {
-  EMPTY: "",
-  OK: kds.menuToneOk,
-  PARTIAL: kds.menuTonePartial,
-  ALL_UNAVAILABLE: kds.menuToneDown,
-};
 
 /** Заметный блок уведомления кухни о запросе клиента на отмену (§11). */
 function CancellationRequestNotice({
@@ -1166,12 +1150,6 @@ export default function RestaurantKitchenPage() {
   );
   const preparingOrders = getKitchenPreparingOrders(state, selectedRestaurantId);
   const readyOrders = getKitchenReadyOrders(state, selectedRestaurantId);
-  // Живой статус доступности меню: считается от того же тика nowMs, поэтому
-  // отключение/восстановление блюда и истечение временной паузы видны сразу.
-  const menuSummary = getMenuAvailabilitySummary(
-    getRestaurantMenu(state, selectedRestaurantId),
-    nowMs,
-  );
 
   // Единый тик экрана: часы для отсчётов и расписания сигнала.
   useEffect(() => {
@@ -1354,27 +1332,11 @@ export default function RestaurantKitchenPage() {
               вторая реализация управления меню не создаётся. Отдельная страница
               /restaurant/menu остаётся и работает как прежде. */}
           {restaurant ? (
-            <details className={kds.menuPanel}>
-              <summary className={kds.menuSummary}>
-                <span className={kds.menuSummaryTitle}>Меню</span>
-                <span
-                  className={`${kds.menuStatus} ${MENU_TONE_CLASS[menuSummary.tone]}`}
-                >
-                  <span className={kds.menuStatusDot} aria-hidden="true" />
-                  {menuSummary.text}
-                </span>
-                <ChevronDown
-                  className={kds.menuChevron}
-                  size={18}
-                  aria-hidden="true"
-                />
-              </summary>
-              <MenuAvailabilitySection
-                restaurant={restaurant}
-                nowMs={nowMs}
-                embedded
-              />
-            </details>
+            <RestaurantMenuAvailabilityPanel
+              restaurant={restaurant}
+              nowMs={nowMs}
+              workspaceRole={isSplit ? "KITCHEN" : "COMBINED"}
+            />
           ) : null}
         </>
       )}
