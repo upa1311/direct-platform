@@ -1284,18 +1284,63 @@ export function comparePreparingByReadyAt(a: Order, b: Order): number {
   return ta - tb;
 }
 
+/** Режим работы ресторана; отсутствующий ресторан — COMBINED-совместимо. */
+function restaurantWorkflowMode(
+  state: PrototypeState,
+  restaurantId: string,
+): RestaurantOrderWorkflowMode {
+  return (
+    state.restaurants.find((r) => r.id === restaurantId)?.orderWorkflowMode ??
+    "COMBINED"
+  );
+}
+
+/**
+ * «Новые» для кухни в SPLIT: заказ уже принят оператором (и оплачен, если
+ * оплата онлайн), но кухня ещё не нажала «Начать готовить». Приготовление не
+ * идёт, поэтому таймера у такого заказа нет.
+ *
+ * В COMBINED подэтапа ожидания не существует (начало ставится автоматически при
+ * переходе в PREPARING), поэтому возвращается пустой список.
+ *
+ * Сортировка: раньше переданные кухне — первыми; при равном времени стабильный
+ * tie-breaker по id, чтобы порядок не «прыгал» между тиками.
+ */
+export function getKitchenPendingStartOrders(
+  state: PrototypeState,
+  restaurantId: string,
+): Order[] {
+  if (restaurantWorkflowMode(state, restaurantId) !== "SPLIT_OPERATOR_KITCHEN") {
+    return [];
+  }
+  return kitchenOrders(state, restaurantId, ["PREPARING"])
+    .filter((order) => order.kitchenStartedAt === null)
+    .sort((a, b) => {
+      const ta = Date.parse(getOrderStatusSince(a, "PREPARING"));
+      const tb = Date.parse(getOrderStatusSince(b, "PREPARING"));
+      if (ta !== tb) return ta - tb;
+      return a.id.localeCompare(b.id);
+    });
+}
+
 /**
  * «Готовятся» — PREPARING. Сортировка по expectedReadyAt по возрастанию:
  * просроченные (наименьшее время) первыми, затем ближайшие; заказы без
  * expectedReadyAt — в конце.
+ *
+ * В SPLIT сюда попадают только заказы, которые кухня реально начала готовить
+ * (kitchenStartedAt !== null): ожидающие подтверждения живут в «Новых», поэтому
+ * один заказ никогда не находится в обоих списках. COMBINED не меняется.
  */
 export function getKitchenPreparingOrders(
   state: PrototypeState,
   restaurantId: string,
 ): Order[] {
-  return kitchenOrders(state, restaurantId, ["PREPARING"]).sort(
-    comparePreparingByReadyAt,
-  );
+  const isSplit =
+    restaurantWorkflowMode(state, restaurantId) === "SPLIT_OPERATOR_KITCHEN";
+  return kitchenOrders(state, restaurantId, ["PREPARING"])
+    .filter((order) => (isSplit ? order.kitchenStartedAt !== null : true))
+    .sort(comparePreparingByReadyAt);
 }
 
 /** «Готовы» — READY и READY_FOR_PICKUP, самые давно готовые сверху. */
@@ -1315,12 +1360,31 @@ export function getKitchenReadyOrders(
 // --- Отмена и запросы на отмену ----------------------------------------------
 
 /**
+ * Заказ уже принят (и оплачен, если оплата онлайн), но кухня ещё не начала
+ * готовить. Приготовление не идёт, поэтому ни отсчёта, ни ожидаемого времени
+ * готовности у такого заказа нет. В COMBINED это состояние не встречается:
+ * там начало фиксируется автоматически при переходе в PREPARING.
+ */
+export function isAwaitingKitchenStart(order: Order): boolean {
+  return order.status === "PREPARING" && order.kitchenStartedAt === null;
+}
+
+/** Нейтральный клиентский статус до фактического начала приготовления. */
+export const CLIENT_AWAITING_KITCHEN_START_TEXT =
+  "Ресторан принял заказ. Ожидаем начала приготовления.";
+
+/**
  * Показывать ли клиенту нейтральное уведомление об обновлённом времени
  * готовности (§10). Только для активного PREPARING с хотя бы одной
- * корректировкой; для READY/завершённых — не показываем как активное.
+ * корректировкой; для READY/завершённых — не показываем как активное. Пока
+ * кухня не начала, времени готовности нет — показывать его нечем.
  */
 export function hasActiveEtaUpdate(order: Order): boolean {
-  return order.status === "PREPARING" && order.etaAdjustments.length > 0;
+  return (
+    order.status === "PREPARING" &&
+    !isAwaitingKitchenStart(order) &&
+    order.etaAdjustments.length > 0
+  );
 }
 
 /** Часы HH:MM актуального ожидаемого времени заказа в часовом поясе ресторана. */

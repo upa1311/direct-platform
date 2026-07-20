@@ -109,19 +109,16 @@ test("Приём pickup: prep/expectedReadyAt/оплата/финансы выс
   const { state, orderId } = splitPickupState();
   const before = getOrder(state, orderId);
   const finBefore = JSON.stringify(before.financials);
-  const acceptedAtMs = Date.now();
   const res = acceptRestaurantOrderWithResult(
     state, orderId, 20, "RESTAURANT", "OPERATOR",
   );
   assert.equal(res.result.ok, true);
   const order = getOrder(res.state, orderId);
   assert.equal(order.status, "PREPARING");
-  // Выбранное время сохранено, ожидаемая готовность ≈ now + 20 минут.
+  // Выбранное время сохранено, но отсчёт начнётся только с подтверждения кухни.
   assert.equal(order.preparationMinutes, 20);
-  assert.ok(order.expectedReadyAt);
-  const deltaMin =
-    (Date.parse(order.expectedReadyAt as string) - acceptedAtMs) / 60_000;
-  assert.ok(deltaMin > 19 && deltaMin < 21, `deltaMin=${deltaMin}`);
+  assert.equal(order.kitchenStartedAt, null);
+  assert.equal(order.expectedReadyAt, null);
   // Оплата при получении сохраняется, финансовый снимок не пересчитан.
   assert.equal(order.paymentStatus, "DUE_AT_PICKUP");
   assert.equal(order.financials.deliveryFeeCents, 0);
@@ -257,8 +254,14 @@ test("Повторная готовность pickup: ошибка без соб
 
 test("SPLIT: оператор не меняет ETA, кухня меняет", () => {
   const { state, orderId } = splitPickupState();
-  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
-  // expectedReadyAt задан от реального now внутри приёмки — берём тот же базис.
+  // Корректировать время можно только у начатого заказа: expectedReadyAt
+  // появляется вместе с подтверждением кухни.
+  const prepared = startKitchenPreparation(
+    acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR"),
+    orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  );
   const now = new Date().toISOString();
   // Оператор блокируется правами до любых проверок времени.
   const opTry = adjustOrderEtaFromIntent(prepared, orderId, { kind: "DELAY", minutes: 10 }, "Задержка", "RESTAURANT", now, "OPERATOR");
@@ -269,7 +272,13 @@ test("SPLIT: оператор не меняет ETA, кухня меняет", (
 
 test("SPLIT: кухня меняет ETA — событие с ролью KITCHEN, ревизия +1, инварианты", () => {
   const { state, orderId } = splitPickupState();
-  const prepared = acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR");
+  // ETA существует только у начатого заказа.
+  const prepared = startKitchenPreparation(
+    acceptRestaurantOrder(state, orderId, 20, "RESTAURANT", "OPERATOR"),
+    orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  );
   const before = getOrder(prepared, orderId);
   const finBefore = JSON.stringify(before.financials);
   const now = new Date().toISOString();

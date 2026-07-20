@@ -120,13 +120,72 @@ test("SPLIT KITCHEN: подтверждение начала ставит kitche
   assert.equal(ev?.actor, "RESTAURANT");
   assert.equal(ev?.restaurantWorkspaceRole, "KITCHEN");
   assert.equal(ev?.occurredAt, order.kitchenStartedAt);
-  // Инварианты: ревизия +1, финансы/оплата/ETA/settlements не тронуты.
+  // Отсчёт запускается ИМЕННО отсюда: до подтверждения времени готовности не
+  // было, после — оно равно моменту клика плюс время приготовления.
+  assert.equal(before.expectedReadyAt, null);
+  assert.ok(order.expectedReadyAt);
+  const deltaMin =
+    (Date.parse(order.expectedReadyAt as string) -
+      Date.parse(order.kitchenStartedAt as string)) /
+    60_000;
+  assert.equal(deltaMin, order.preparationMinutes);
+  // Инварианты: ревизия +1, финансы/оплата/settlements не тронуты.
   assert.equal(res.state.revision, state.revision + 1);
   assert.deepEqual(order.financials, before.financials);
   assert.equal(order.preparationMinutes, before.preparationMinutes);
-  assert.equal(order.expectedReadyAt, before.expectedReadyAt);
   assert.equal(order.paymentStatus, before.paymentStatus);
   assert.deepEqual(res.state.settlements, state.settlements);
+});
+
+test("legacy: устаревшее ожидаемое время пересчитывается от клика кухни", () => {
+  const base = preparingOrder("SPLIT_OPERATOR_KITCHEN");
+  // Заказ из старого состояния: начала нет, но время готовности уже шло.
+  const staleIso = new Date(Date.now() - 60 * 60_000).toISOString();
+  const legacy: PrototypeState = {
+    ...base.state,
+    orders: base.state.orders.map((o) =>
+      o.id === base.orderId ? { ...o, expectedReadyAt: staleIso } : o,
+    ),
+  };
+
+  const res = startKitchenPreparationWithResult(
+    legacy,
+    base.orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  );
+  assert.equal(res.result.ok, true);
+  const order = getOrder(res.state, base.orderId);
+  assert.notEqual(order.expectedReadyAt, staleIso, "старое время не продолжаем");
+  const deltaMin =
+    (Date.parse(order.expectedReadyAt as string) -
+      Date.parse(order.kitchenStartedAt as string)) /
+    60_000;
+  assert.equal(deltaMin, order.preparationMinutes);
+});
+
+test("некорректное время приготовления не начинает приготовление", () => {
+  const base = preparingOrder("SPLIT_OPERATOR_KITCHEN");
+  for (const bad of [null, 0, -5, 12.5, Number.NaN]) {
+    const broken: PrototypeState = {
+      ...base.state,
+      orders: base.state.orders.map((o) =>
+        o.id === base.orderId
+          ? { ...o, preparationMinutes: bad as number | null }
+          : o,
+      ),
+    };
+    const res = startKitchenPreparationWithResult(
+      broken,
+      base.orderId,
+      "RESTAURANT",
+      "KITCHEN",
+    );
+    assert.equal(res.result.ok, false, String(bad));
+    assert.equal(res.result.error, "Не задано корректное время приготовления.");
+    assert.equal(res.state, broken, "state тем же объектом");
+    assert.equal(getOrder(res.state, base.orderId).kitchenStartedAt, null);
+  }
 });
 
 // 4 — OPERATOR / COMBINED / ADMIN не могут вызвать кухонное действие ------------

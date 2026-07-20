@@ -8,6 +8,7 @@ import {
   adjustOrderEtaFromIntent,
   createOrderFromCart,
   setCartFulfillmentChoice,
+  startKitchenPreparationWithResult,
 } from "./actions.ts";
 import {
   comparePreparingByReadyAt,
@@ -98,7 +99,9 @@ test("preparationMinutes выставлено оператором при при
   ).state;
   const order = getOrder(accepted, orderId);
   assert.equal(order.preparationMinutes, 25);
-  assert.ok(order.expectedReadyAt);
+  // В SPLIT принятие сохраняет оценку, но таймер стартует только с кухни.
+  assert.equal(order.kitchenStartedAt, null);
+  assert.equal(order.expectedReadyAt, null);
 });
 
 test("отображается именно последняя причина корректировки ETA", () => {
@@ -109,6 +112,14 @@ test("отображается именно последняя причина к
     25,
     "RESTAURANT",
     "OPERATOR",
+  ).state;
+  // Корректировать время можно только у уже начатого заказа: до подтверждения
+  // кухни ожидаемого времени готовности вообще нет.
+  s = startKitchenPreparationWithResult(
+    s,
+    orderId,
+    "RESTAURANT",
+    "KITCHEN",
   ).state;
 
   const firstNow = getOrder(s, orderId).updatedAt;

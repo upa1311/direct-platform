@@ -684,6 +684,26 @@ function orderRestaurantWorkflowMode(
   );
 }
 
+/** Ожидаемая готовность = момент старта + время приготовления. */
+function expectedReadyAtFrom(
+  startIso: string,
+  preparationMinutes: number,
+): string {
+  return new Date(
+    new Date(startIso).getTime() + preparationMinutes * 60_000,
+  ).toISOString();
+}
+
+/** Корректное время приготовления: конечное целое больше нуля. */
+function isValidPreparationMinutes(value: number | null): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value > 0
+  );
+}
+
 /**
  * Значение kitchenStartedAt в момент перехода заказа в PREPARING. В COMBINED
  * подтверждения кухни нет — начало ставится автоматически (now). В SPLIT
@@ -858,9 +878,17 @@ export function acceptRestaurantOrderWithResult(
   ) {
     const isCourierCash =
       targetOrder.paymentMethod === "CASH_TO_RESTAURANT_COURIER";
-    const expectedReadyAt = new Date(
-      new Date(now).getTime() + preparationMinutes * 60_000,
-    ).toISOString();
+    // COMBINED — начало фиксируется автоматически, отсчёт идёт сразу. SPLIT ждёт
+    // подтверждения кухни: пока начала нет, нет и ожидаемого времени готовности,
+    // иначе таймер шёл бы от принятия оператором, а не от реальной работы кухни.
+    const kitchenStartedAt = kitchenStartedAtOnPreparing(
+      state,
+      targetOrder,
+      now,
+    );
+    const expectedReadyAt = kitchenStartedAt
+      ? expectedReadyAtFrom(now, preparationMinutes)
+      : null;
     const nextState = replaceOrder(
       state,
       orderId,
@@ -869,9 +897,7 @@ export function acceptRestaurantOrderWithResult(
         status: "PREPARING",
         preparationMinutes,
         expectedReadyAt,
-        // COMBINED — начало приготовления фиксируется автоматически; SPLIT ждёт
-        // подтверждения кухни (остаётся null).
-        kitchenStartedAt: kitchenStartedAtOnPreparing(state, order, now),
+        kitchenStartedAt,
         updatedAt: now,
         history: [
           ...order.history,
@@ -1722,9 +1748,13 @@ export function simulateSuccessfulOnlinePaymentWithResult(
 
   const now = new Date().toISOString();
   const preparationMinutes = order.preparationMinutes ?? 25;
-  const expectedReadyAt = new Date(
-    new Date(now).getTime() + preparationMinutes * 60_000,
-  ).toISOString();
+  // COMBINED фиксирует начало автоматически и сразу запускает отсчёт. В SPLIT
+  // оплата ещё не означает, что кухня взялась за заказ: ожидаемое время
+  // появится только после её подтверждения.
+  const kitchenStartedAt = kitchenStartedAtOnPreparing(state, order, now);
+  const expectedReadyAt = kitchenStartedAt
+    ? expectedReadyAtFrom(now, preparationMinutes)
+    : null;
   const nextHistoryNumber = order.history.length + 1;
 
   const nextState = replaceOrder(
@@ -1736,8 +1766,7 @@ export function simulateSuccessfulOnlinePaymentWithResult(
       paidAt: now,
       status: "PREPARING",
       expectedReadyAt,
-      // COMBINED фиксирует начало автоматически; SPLIT ждёт подтверждения кухни.
-      kitchenStartedAt: kitchenStartedAtOnPreparing(state, current, now),
+      kitchenStartedAt,
       updatedAt: now,
       history: [
         ...current.history,
@@ -1931,6 +1960,12 @@ export function startKitchenPreparationWithResult(
   if (targetOrder.kitchenStartedAt !== null) {
     return fail("Кухня уже подтвердила начало приготовления.");
   }
+  // Отсчёт запускается от фактического клика кухни, поэтому время приготовления
+  // обязано быть корректным. Fail-closed: без него приготовление не начинаем.
+  if (!isValidPreparationMinutes(targetOrder.preparationMinutes)) {
+    return fail("Не задано корректное время приготовления.");
+  }
+  const preparationMinutes = targetOrder.preparationMinutes;
 
   const now = new Date().toISOString();
   const nextState = replaceOrder(
@@ -1939,6 +1974,9 @@ export function startKitchenPreparationWithResult(
     (order) => ({
       ...order,
       kitchenStartedAt: now,
+      // Ожидаемая готовность считается ИМЕННО от подтверждения кухни. У legacy
+      // заказа устаревшее время, шедшее до подтверждения, заменяется новым.
+      expectedReadyAt: expectedReadyAtFrom(now, preparationMinutes),
       updatedAt: now,
       history: [
         ...order.history,

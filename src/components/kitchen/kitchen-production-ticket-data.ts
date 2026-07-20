@@ -57,6 +57,9 @@ const DELIVERY_LABELS: Record<DeliveryMode, string> = {
  * - READY / READY_FOR_PICKUP → «ЗАКАЗ ГОТОВ»;
  * - есть канонический expectedReadyAt → «ОЖИДАЕМАЯ ГОТОВНОСТЬ: К HH:MM» в часовом
  *   поясе ресторана;
+ * - заказ уже в PREPARING, но кухня ещё не начала (SPLIT) → честное «КУХНЯ ЕЩЁ
+ *   НЕ НАЧАЛА» и время приготовления: фиктивное время готовности не выдумываем,
+ *   и про оплату не пишем — она к этому моменту уже пройдена;
  * - иначе (напр. AWAITING_PAYMENT после принятия, время ещё не задано), но есть
  *   первоначальная оценка → «ПРИГОТОВЛЕНИЕ ПОСЛЕ ОПЛАТЫ · N МИН».
  * Никогда не выводим «не задана»: рамка всегда содержательна.
@@ -70,6 +73,11 @@ export function getTicketReadyLine(order: Order, timeZone: string): string {
       order.expectedReadyAt,
       timeZone || DEFAULT_TIME_ZONE,
     )}`;
+  }
+  if (order.status === "PREPARING" && order.kitchenStartedAt === null) {
+    return order.preparationMinutes != null
+      ? `КУХНЯ ЕЩЁ НЕ НАЧАЛА · ВРЕМЯ ПРИГОТОВЛЕНИЯ: ${order.preparationMinutes} МИН`
+      : "КУХНЯ ЕЩЁ НЕ НАЧАЛА";
   }
   if (order.preparationMinutes != null) {
     return `ПРИГОТОВЛЕНИЕ ПОСЛЕ ОПЛАТЫ · ${order.preparationMinutes} МИН`;

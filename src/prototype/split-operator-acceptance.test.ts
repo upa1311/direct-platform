@@ -15,7 +15,11 @@ import {
   updateCartAddress,
   RESTAURANT_RESPONSE_TIMEOUT_MS,
 } from "./actions.ts";
-import { getKitchenNewOrders, getKitchenPreparingOrders } from "./selectors.ts";
+import {
+  getKitchenNewOrders,
+  getKitchenPendingStartOrders,
+  getKitchenPreparingOrders,
+} from "./selectors.ts";
 import type { PrototypeState, RestaurantOrderWorkflowMode } from "./models.ts";
 
 /**
@@ -56,7 +60,6 @@ test("SPLIT: оператор принимает новый заказ — од�
   const { state, orderId } = orderState("SPLIT_OPERATOR_KITCHEN");
   const before = getOrder(state, orderId);
   assert.equal(before.status, "RESTAURANT_REVIEW");
-  const acceptedAtMs = Date.now();
 
   const res = acceptRestaurantOrderWithResult(
     state,
@@ -70,10 +73,10 @@ test("SPLIT: оператор принимает новый заказ — од�
   const order = getOrder(res.state, orderId);
   assert.equal(order.status, "PREPARING");
   assert.equal(order.preparationMinutes, 25);
-  assert.ok(order.expectedReadyAt);
-  const deltaMin =
-    (Date.parse(order.expectedReadyAt as string) - acceptedAtMs) / 60_000;
-  assert.ok(deltaMin > 24 && deltaMin < 26, `deltaMin=${deltaMin}`);
+  // Принятие оператором ещё не запускает кухонный таймер: время готовности
+  // появится только после подтверждения кухни.
+  assert.equal(order.kitchenStartedAt, null);
+  assert.equal(order.expectedReadyAt, null);
 
   // Ровно одно STATUS-событие приёма, actor RESTAURANT, роль OPERATOR.
   assert.equal(order.history.length, before.history.length + 1);
@@ -195,7 +198,8 @@ test("видимость: новый заказ есть у кухни в COMBIN
   // Сам заказ существует и ждёт решения — он просто не кухонный.
   assert.equal(getOrder(split.state, split.orderId).status, "RESTAURANT_REVIEW");
 
-  // После приёма оператором заказ появляется у кухни как готовящийся.
+  // После приёма оператором заказ приходит кухне как НОВЫЙ: она его ещё не
+  // начала, поэтому в «Готовятся» его нет.
   const accepted = acceptRestaurantOrderWithResult(
     split.state,
     split.orderId,
@@ -204,7 +208,20 @@ test("видимость: новый заказ есть у кухни в COMBIN
     "OPERATOR",
   ).state;
   assert.equal(getKitchenNewOrders(accepted, "restaurant-2").length, 0);
-  const preparing = getKitchenPreparingOrders(accepted, "restaurant-2");
+  const pending = getKitchenPendingStartOrders(accepted, "restaurant-2");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].id, split.orderId);
+  assert.equal(getKitchenPreparingOrders(accepted, "restaurant-2").length, 0);
+
+  // Только после подтверждения кухни заказ переходит в «Готовятся».
+  const started = startKitchenPreparationWithResult(
+    accepted,
+    split.orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  ).state;
+  assert.equal(getKitchenPendingStartOrders(started, "restaurant-2").length, 0);
+  const preparing = getKitchenPreparingOrders(started, "restaurant-2");
   assert.equal(preparing.length, 1);
   assert.equal(preparing[0].id, split.orderId);
 });
@@ -236,9 +253,17 @@ test("SPLIT: онлайн-оплата — приём даёт AWAITING_PAYMENT,
 
   const paid = simulateSuccessfulOnlinePaymentWithResult(accepted.state, orderId);
   assert.equal(paid.result.ok, true);
-  assert.equal(getOrder(paid.state, orderId).status, "PREPARING");
-  const preparing = getKitchenPreparingOrders(paid.state, "restaurant-2");
-  assert.equal(preparing.length, 1, "после оплаты заказ появляется у кухни");
+  const paidOrder = getOrder(paid.state, orderId);
+  assert.equal(paidOrder.status, "PREPARING");
+  // Оплата передаёт заказ кухне как НОВЫЙ: таймер ещё не идёт.
+  assert.equal(paidOrder.kitchenStartedAt, null);
+  assert.equal(paidOrder.expectedReadyAt, null);
+  assert.equal(
+    getKitchenPendingStartOrders(paid.state, "restaurant-2").length,
+    1,
+    "после оплаты заказ появляется у кухни как новый",
+  );
+  assert.equal(getKitchenPreparingOrders(paid.state, "restaurant-2").length, 0);
 });
 
 test("SPLIT: кухня подтверждает начало, готовит и отмечает готовность", () => {

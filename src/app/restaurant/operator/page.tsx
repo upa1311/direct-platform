@@ -701,18 +701,30 @@ function OperatorPreparingTiming({
   const kitchenTimeZone =
     getRestaurant(state, order.restaurant.id)?.timeZone || "Europe/Chisinau";
 
+  // Пока кухня не начала, приготовление не идёт: показываем только ожидание и
+  // первоначальную оценку. Обратный отсчёт, задержка и ожидаемое время появятся
+  // после фактического старта — иначе оператор видел бы несуществующий таймер.
+  if (order.kitchenStartedAt === null) {
+    return (
+      <>
+        <div className={kds.startNotice} role="status">
+          <p className={kds.startNoticeTitle}>
+            Ожидаем, когда кухня начнёт готовить
+          </p>
+        </div>
+        <div className={kds.metaLine}>
+          Первоначальная оценка: {order.preparationMinutes ?? "—"} мин
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
-      {order.kitchenStartedAt ? (
-        <p className={kds.startedLine}>
-          Кухня начала готовить в{" "}
-          {formatClock24(order.kitchenStartedAt, kitchenTimeZone)}
-        </p>
-      ) : (
-        <div className={kds.startNotice} role="status">
-          <p className={kds.startNoticeTitle}>Ожидаем подтверждения кухни</p>
-        </div>
-      )}
+      <p className={kds.startedLine}>
+        Кухня начала готовить в{" "}
+        {formatClock24(order.kitchenStartedAt, kitchenTimeZone)}
+      </p>
       {overdue ? <span className={kds.delayBadge}>Задержка</span> : null}
       <div className={kds.metaLine}>
         Первоначальная оценка: {order.preparationMinutes ?? "—"} мин

@@ -444,7 +444,14 @@ test("Regression 5: PLATFORM_DRIVER — оплата, приготовление
 
 test("Regression 6: ETA — корректировка не трогает статус, финансы и оплату", () => {
   const { state, orderId } = makeOrder("restaurant-2", "PICKUP", "SPLIT_OPERATOR_KITCHEN");
-  const accepted = acceptRestaurantOrderWithResult(state, orderId, 20, "RESTAURANT", "OPERATOR").state;
+  // ETA существует только после подтверждения кухни: до старта корректировать
+  // нечего, поэтому заказ сначала переводится в работу.
+  const accepted = startKitchenPreparationWithResult(
+    acceptRestaurantOrderWithResult(state, orderId, 20, "RESTAURANT", "OPERATOR").state,
+    orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  ).state;
   const prep = getOrder(accepted, orderId);
   const baseSettlements = accepted.settlements.length;
 

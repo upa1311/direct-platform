@@ -11,6 +11,7 @@ import { PageHeading } from "@/components/workspaces/route-content";
 import { usePrototype } from "@/prototype/prototype-provider";
 import type { Order } from "@/prototype/models";
 import {
+  CLIENT_AWAITING_KITCHEN_START_TEXT,
   deliveryModeLabels,
   formatMoney,
   formatOrderEtaClock,
@@ -18,6 +19,7 @@ import {
   getDeliveryModeProviderLabel,
   getOrder,
   hasActiveEtaUpdate,
+  isAwaitingKitchenStart,
   orderStatusLabels,
   paymentMethodLabels,
   paymentStatusLabels,
@@ -176,6 +178,12 @@ export default function ClientOrderPage() {
               </div>
             ) : null}
           </dl>
+          {/* Кухня ещё не начала: ложный отсчёт и «готов к HH:MM» не показываем. */}
+          {isAwaitingKitchenStart(order) ? (
+            <div className={flowStyles.zoneNotice} role="status">
+              {CLIENT_AWAITING_KITCHEN_START_TEXT}
+            </div>
+          ) : null}
           {hasActiveEtaUpdate(order) ? (
             <div className={flowStyles.zoneNotice} role="status">
               Ресторан обновил время готовности заказа.

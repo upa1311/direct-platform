@@ -49,6 +49,7 @@ import {
   getCancellationRequestForOrder,
   getKitchenAwaitingPaymentOrders,
   getKitchenNewOrders,
+  getKitchenPendingStartOrders,
   getKitchenPreparingOrders,
   getKitchenReadyOrders,
   getLatestResolvedPreparationProblem,
@@ -603,6 +604,63 @@ function NewOrderCard({
   );
 }
 
+/**
+ * SPLIT: карточка заказа, который оператор уже принял (и клиент оплатил, если
+ * оплата онлайн), но кухня ещё не начала готовить. Приготовление не идёт,
+ * поэтому здесь нет ни обратного отсчёта, ни задержки, ни ожидаемого времени,
+ * ни готовности, ни корректировки ETA — только состав, оценка и старт.
+ */
+function KitchenPendingStartCard({ order }: { order: Order }) {
+  const { startKitchenPreparation } = usePrototype();
+  const {
+    error: startError,
+    pending: startPending,
+    run: runStart,
+  } = useMutationGuard();
+
+  return (
+    <article className={`${kds.card} ${kds.cardAttention}`}>
+      <div className={kds.cardHead}>
+        <div>
+          <h3 className={kds.orderNumber}>{order.publicNumber}</h3>
+          <div className={kds.cardMeta}>
+            <span>{kitchenDeliveryLabel(order.deliveryMode)}</span>
+          </div>
+        </div>
+        <span className={kds.attentionBadge}>Новый</span>
+      </div>
+      <p className={kds.units}>Заказ принят оператором и передан на кухню.</p>
+      <KitchenItems order={order} />
+      <p className={kds.units}>Всего единиц: {totalUnits(order)}</p>
+      {/* Только первоначальная оценка: фактический отсчёт начнётся с клика. */}
+      <div className={kds.metaLine}>
+        Первоначальная оценка: {order.preparationMinutes ?? "—"} мин
+      </div>
+      <div className={kds.btnRow}>
+        <button
+          className={`${kds.btn} ${kds.btnDark}`}
+          type="button"
+          disabled={startPending}
+          onClick={() =>
+            void runStart(() =>
+              startKitchenPreparation(order.id, "RESTAURANT", "KITCHEN"),
+            )
+          }
+        >
+          {startPending ? "Подтверждаем…" : "Начать готовить"}
+        </button>
+      </div>
+      {startError ? (
+        <p className={kds.pickupError} role="alert">
+          {startError}
+        </p>
+      ) : null}
+      {/* Сообщить о проблеме кухня может и до начала приготовления. */}
+      <PreparationProblemPanel order={order} isSplit />
+    </article>
+  );
+}
+
 function PreparingCard({
   order,
   nowMs,
@@ -614,20 +672,13 @@ function PreparingCard({
   timeZone: string;
   isSplit: boolean;
 }) {
-  const { state, markReady, startKitchenPreparation } = usePrototype();
+  const { state, markReady } = usePrototype();
   // Исправление 7: готовность — await с pending и русской ошибкой (гонка двух
   // экранов, устаревший статус, отказ хранилища не проходят молча).
   const {
     error: readyError,
     pending: readyPending,
     run: runReady,
-  } = useMutationGuard();
-  // Подтверждение начала приготовления — отдельный guard: своя ошибка и pending,
-  // не смешиваются с готовностью.
-  const {
-    error: startError,
-    pending: startPending,
-    run: runStart,
   } = useMutationGuard();
   const restaurant = getRestaurant(state, order.restaurant.id);
   const openProblem = getOpenPreparationProblem(order);
@@ -636,9 +687,6 @@ function PreparingCard({
   const [etaOpen, setEtaOpen] = useState(false);
   const [etaConfirm, setEtaConfirm] = useState(false);
   const lastEta = order.etaAdjustments.at(-1) ?? null;
-  // SPLIT: пока кухня не подтвердила начало (kitchenStartedAt === null), заказ
-  // ждёт подтверждения — готовность недоступна, идёт повторяющийся сигнал.
-  const awaitingKitchenStart = isSplit && order.kitchenStartedAt === null;
   const startedClock = order.kitchenStartedAt
     ? formatClock24(order.kitchenStartedAt, timeZone || "Europe/Chisinau")
     : null;
@@ -683,35 +731,9 @@ function PreparingCard({
       >
         {countdown.overdue ? countdown.text : `До готовности: ${countdown.text}`}
       </div>
-      {/* SPLIT: пока кухня не подтвердила начало — заметный блок передачи заказа
-          с основной кнопкой «Начать готовить». После подтверждения — спокойная
-          строка «Начато в HH:MM». В COMBINED начало ставится автоматически, блок
-          не показывается. */}
-      {awaitingKitchenStart ? (
-        <div className={kds.startNotice} role="status">
-          <p className={kds.startNoticeTitle}>Заказ передан на кухню</p>
-          <p>Подтвердите начало приготовления, чтобы отметить заказ в работе.</p>
-          <div className={kds.btnRow}>
-            <button
-              className={`${kds.btn} ${kds.btnDark}`}
-              type="button"
-              disabled={startPending}
-              onClick={() =>
-                void runStart(() =>
-                  startKitchenPreparation(order.id, "RESTAURANT", "KITCHEN"),
-                )
-              }
-            >
-              {startPending ? "Подтверждаем…" : "Начать готовить"}
-            </button>
-          </div>
-          {startError ? (
-            <p className={kds.pickupError} role="alert">
-              {startError}
-            </p>
-          ) : null}
-        </div>
-      ) : isSplit && startedClock ? (
+      {/* В SPLIT сюда попадают только уже начатые заказы: ожидающие старта живут
+          в колонке «Новые». Спокойная строка фиксирует момент начала. */}
+      {isSplit && startedClock ? (
         <p className={kds.startedLine}>Начато в {startedClock}</p>
       ) : null}
       <div className={kds.changeTimeRow}>
@@ -731,30 +753,25 @@ function PreparingCard({
           Сначала дождитесь решения проблемы приготовления.
         </p>
       ) : null}
-      {/* Готовность доступна только после подтверждения начала (в SPLIT). Пока
-          заказ ждёт подтверждения кухни, кнопку не показываем; доменный markReady
-          дополнительно fail-closed запрещает готовность. */}
-      {awaitingKitchenStart ? null : (
-        <>
-          <div className={kds.btnRow}>
-            <button
-              className={`${kds.btn} ${kds.btnGreen}`}
-              type="button"
-              disabled={readyPending || openProblem !== null}
-              onClick={() =>
-                void runReady(() => markReady(order.id, "RESTAURANT", "KITCHEN"))
-              }
-            >
-              {readyPending ? "Сохраняем…" : readyLabel}
-            </button>
-          </div>
-          {readyError ? (
-            <p className={kds.pickupError} role="alert">
-              {readyError}
-            </p>
-          ) : null}
-        </>
-      )}
+      {/* Готовность доступна только у начатого заказа: ожидающие старта сюда не
+          попадают, а доменный markReady дополнительно fail-closed это запрещает. */}
+      <div className={kds.btnRow}>
+        <button
+          className={`${kds.btn} ${kds.btnGreen}`}
+          type="button"
+          disabled={readyPending || openProblem !== null}
+          onClick={() =>
+            void runReady(() => markReady(order.id, "RESTAURANT", "KITCHEN"))
+          }
+        >
+          {readyPending ? "Сохраняем…" : readyLabel}
+        </button>
+      </div>
+      {readyError ? (
+        <p className={kds.pickupError} role="alert">
+          {readyError}
+        </p>
+      ) : null}
       {etaOpen && restaurant ? (
         <EtaAdjustPanel
           order={order}
@@ -1149,6 +1166,12 @@ export default function RestaurantKitchenPage() {
     state,
     selectedRestaurantId,
   );
+  // SPLIT: принятые и оплаченные заказы, которые кухня ещё не начала готовить.
+  // В COMBINED список пуст — там подэтапа ожидания не существует.
+  const pendingStartOrders = getKitchenPendingStartOrders(
+    state,
+    selectedRestaurantId,
+  );
   const preparingOrders = getKitchenPreparingOrders(state, selectedRestaurantId);
   const readyOrders = getKitchenReadyOrders(state, selectedRestaurantId);
 
@@ -1280,29 +1303,40 @@ export default function RestaurantKitchenPage() {
             </section>
           ) : null}
 
-          {/* SPLIT: отдельная кухня не принимает новые заказы — колонка «Новые»
-              не рендерится, доска сжимается до двух равных колонок. */}
-          <div className={isSplit ? `${kds.board} ${kds.boardSplit}` : kds.board}>
-            {isSplit ? null : (
-              <section className={kds.column}>
-                <h2 className={kds.columnHead}>
-                  Новые <span>— {newOrders.length}</span>
-                </h2>
-                {newOrders.length === 0 ? (
+          {/* В COMBINED «Новые» — это заказы на решение (принять/отклонить).
+              В SPLIT решение принимает оператор, поэтому «Новые» для кухни —
+              это уже принятые и оплаченные заказы, которые она ещё не начала
+              готовить: доска остаётся из трёх колонок. */}
+          <div className={kds.board}>
+            <section className={kds.column}>
+              <h2 className={kds.columnHead}>
+                Новые{" "}
+                <span>
+                  — {isSplit ? pendingStartOrders.length : newOrders.length}
+                </span>
+              </h2>
+              {isSplit ? (
+                pendingStartOrders.length === 0 ? (
                   <div className={kds.empty}>Новых заказов нет.</div>
                 ) : (
-                  newOrders.map((order) => (
-                    <NewOrderCard
-                      order={order}
-                      nowMs={nowMs}
-                      isSplit={isSplit}
-                      onRequestPrint={requestPrint}
-                      key={order.id}
-                    />
+                  pendingStartOrders.map((order) => (
+                    <KitchenPendingStartCard order={order} key={order.id} />
                   ))
-                )}
-              </section>
-            )}
+                )
+              ) : newOrders.length === 0 ? (
+                <div className={kds.empty}>Новых заказов нет.</div>
+              ) : (
+                newOrders.map((order) => (
+                  <NewOrderCard
+                    order={order}
+                    nowMs={nowMs}
+                    isSplit={isSplit}
+                    onRequestPrint={requestPrint}
+                    key={order.id}
+                  />
+                ))
+              )}
+            </section>
 
             <section className={kds.column}>
               <h2 className={kds.columnHead}>

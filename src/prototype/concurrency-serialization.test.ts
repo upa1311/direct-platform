@@ -18,6 +18,7 @@ import {
   setCartFulfillmentChoice,
   setMenuItemOperationallyUnavailable,
   startKitchenPreparation,
+  startKitchenPreparationWithResult,
   updateCartAddress,
   type ActionResult,
 } from "./actions.ts";
@@ -525,6 +526,11 @@ test("ETA mutation после принятия: не откатывает ста
 
   store.runUnderLock(acceptingTab, (base) =>
     acceptRestaurantOrderWithResult(base, orderId, 20, "RESTAURANT", "OPERATOR"),
+  );
+  // ETA появляется только после подтверждения кухни — до него корректировать
+  // нечего, поэтому сначала кухня начинает готовить.
+  store.runUnderLock(acceptingTab, (base) =>
+    startKitchenPreparationWithResult(base, orderId, "RESTAURANT", "KITCHEN"),
   );
   const before = getOrder(store.read(), orderId).expectedReadyAt;
   assert.ok(before);
