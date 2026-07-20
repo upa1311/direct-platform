@@ -80,6 +80,10 @@ import {
 } from "./pricing-engine";
 import { isValidMenuMediaId } from "./media-store";
 import {
+  buildCreationMoneyMovement,
+  finalizePickupMoneyMovement,
+} from "./money-movement-snapshot";
+import {
   computeEtaFromIntent,
   ETA_REASON_MAX_LENGTH,
   validateEtaCandidate,
@@ -543,6 +547,23 @@ export function createOrderFromCart(
     lineTotalCents: view.lineTotalCents - view.promotionDiscountCents,
   }));
 
+  // Каноническое движение денег (v10). Канал заранее известен для доставки
+  // Direct (онлайн-карта) и собственного курьера (наличные) — фиксируется
+  // сразу; для самовывоза канал не угадывается (клиент заплатит на точке).
+  // Ошибка канонического расчёта — fail-closed: заказ с правдоподобными
+  // нулями не создаётся.
+  const creationMovement = buildCreationMoneyMovement({
+    deliveryMode,
+    foodSubtotalCents: pricing.foodSubtotalCents,
+    deliveryFeeCents: pricing.deliveryFeeCents,
+    smallOrderFeeCents: pricing.smallOrderFeeCents,
+    customerTotalCents,
+    restaurantCommissionCents,
+  });
+  if (!creationMovement.ok) {
+    return fail(creationMovement.error);
+  }
+
   const now = new Date().toISOString();
   const orderId = `order-${state.nextOrderNumber}`;
   const publicNumber = `DIR-${String(state.nextOrderNumber).padStart(4, "0")}`;
@@ -615,6 +636,10 @@ export function createOrderFromCart(
       platformCollectedFromCustomerCents,
       platformCommissionReceivableCents,
       restaurantNetAfterPlatformCommissionCents,
+      moneyMovementStatus: creationMovement.moneyMovementStatus,
+      ...(creationMovement.moneyMovementStatus === "COMPLETE"
+        ? { moneyMovement: creationMovement.moneyMovement }
+        : {}),
     },
     history: [
       {
@@ -2802,6 +2827,17 @@ export function completePickupAtRestaurant(
     return fail("Начисление по заказу уже создано.");
   }
 
+  // Однократная фиксация фактического канала оплаты в каноническом движении
+  // денег (v10): расчёт — только computeOrderMoneyMovement; повтор того же
+  // канала идемпотентен, смена уже зафиксированного канала fail-closed.
+  const finalizedMovement = finalizePickupMoneyMovement(
+    order.financials,
+    paidWith,
+  );
+  if (!finalizedMovement.ok) {
+    return fail(finalizedMovement.error);
+  }
+
   const now = nowIso;
   const nextHistoryNumber = order.history.length + 1;
   const paymentMessage =
@@ -2823,6 +2859,11 @@ export function completePickupAtRestaurant(
     paidAt: now,
     pickupCodeUsed: true,
     pickupPaidWith: paidWith,
+    financials: {
+      ...order.financials,
+      moneyMovementStatus: finalizedMovement.moneyMovementStatus,
+      moneyMovement: finalizedMovement.moneyMovement,
+    },
     updatedAt: now,
     history: [
       ...order.history,
@@ -4435,6 +4476,15 @@ export function issuePickupWithoutCode(
     return fail("Начисление по заказу уже создано.");
   }
 
+  // Тот же канонический контур фиксации канала, что и обычная выдача (v10).
+  const finalizedMovement = finalizePickupMoneyMovement(
+    order.financials,
+    paidWith,
+  );
+  if (!finalizedMovement.ok) {
+    return fail(finalizedMovement.error);
+  }
+
   const now = nowIso;
   const nextHistoryNumber = order.history.length + 1;
   const paymentMessage =
@@ -4448,6 +4498,11 @@ export function issuePickupWithoutCode(
     paidAt: now,
     pickupCodeUsed: true,
     pickupPaidWith: paidWith,
+    financials: {
+      ...order.financials,
+      moneyMovementStatus: finalizedMovement.moneyMovementStatus,
+      moneyMovement: finalizedMovement.moneyMovement,
+    },
     updatedAt: now,
     history: [
       ...order.history,

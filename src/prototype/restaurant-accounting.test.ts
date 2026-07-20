@@ -26,6 +26,7 @@ import {
 } from "./actions.ts";
 import { createDefaultState } from "./default-state.ts";
 import { parseStoredState } from "./prototype-store.ts";
+import { PROTOTYPE_SCHEMA_VERSION } from "./models.ts";
 import type {
   DeliveryMode,
   FinancialSnapshot,
@@ -607,7 +608,7 @@ test("настоящий v7 legacy state: parse создаёт ровно одн
 
   const parsed = parseStoredState(JSON.stringify(raw));
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 9);
+  assert.equal(parsed.schemaVersion, PROTOTYPE_SCHEMA_VERSION);
   const migrated = parsed.restaurantAccountingEntries.filter(
     (e) => e.orderId === "o-v7",
   );
@@ -1111,7 +1112,7 @@ test("миграция schema: старое состояние получает 
 
   const parsed = parseStoredState(JSON.stringify(raw));
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 9);
+  assert.equal(parsed.schemaVersion, PROTOTYPE_SCHEMA_VERSION);
   assert.deepEqual(parsed.restaurantAccountingResolutionEvents, []);
   // Существующие accounting-записи не потеряны.
   assert.ok(parsed.restaurantAccountingEntries.some((e) => e.id === "keep"));

@@ -97,7 +97,15 @@ test("выдача по коду: paymentStatus PAID_AT_RESTAURANT", () => {
 
 test("COMBINED-выдача: оба события несут роль COMBINED, snapshot и Order не тронуты", () => {
   const { state, orderId, code } = makeReadyPickup();
-  const finBefore = JSON.stringify(getOrder(state, orderId).financials);
+  // v10: выдача дополняет снимок каноническим движением денег (фиксация
+  // фактического канала) — рассчитанные суммы сравниваем без этих полей.
+  const stripMovement = (f: Order["financials"]) => {
+    const { moneyMovement, moneyMovementStatus, ...rest } = f;
+    void moneyMovement;
+    void moneyMovementStatus;
+    return JSON.stringify(rest);
+  };
+  const finBefore = stripMovement(getOrder(state, orderId).financials);
   const res = completePickupWithCode(state, orderId, code, "CASH", "RESTAURANT", NOW);
   assert.equal(res.result.ok, true);
   const order = getOrder(res.state, orderId);
@@ -106,8 +114,14 @@ test("COMBINED-выдача: оба события несут роль COMBINED,
   assert.equal(paymentEv.restaurantWorkspaceRole, "COMBINED");
   assert.equal(statusEv.type, "STATUS");
   assert.equal(statusEv.restaurantWorkspaceRole, "COMBINED");
-  // Финансовый снимок не пересчитан, доставка самовывоза бесплатна.
-  assert.equal(JSON.stringify(order.financials), finBefore);
+  // Финансовый снимок не пересчитан, доставка самовывоза бесплатна; выдача
+  // зафиксировала канонический канал наличных.
+  assert.equal(stripMovement(order.financials), finBefore);
+  assert.equal(order.financials.moneyMovementStatus, "COMPLETE");
+  assert.equal(
+    order.financials.moneyMovement?.paymentChannel,
+    "CASH_AT_RESTAURANT",
+  );
   assert.equal(order.financials.deliveryFeeCents, 0);
   // Один Order остаётся одним Order; ревизия выросла ровно на один.
   assert.equal(res.state.orders.filter((o) => o.id === orderId).length, 1);

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { canPlacePrototypeOrder } from "./selectors.ts";
 import { upgradeToV6 } from "./prototype-store.ts";
+import { PROTOTYPE_SCHEMA_VERSION } from "./models.ts";
 
 /**
  * Собирает legacy-состояние schemaVersion 2 с одним рестораном и одним старым
@@ -78,8 +79,8 @@ test("legacy v2 → v6: paymentMethods ['QR','CASH'] → ['ONLINE'], ресто�
   // НЕ затронуты нормализацией delivery paymentMethods.
   assert.deepStrictEqual(restaurant.pickupPaymentMethods, ["CASH", "CARD"]);
 
-  // Схема поднята до текущей (v9).
-  assert.equal(migrated.schemaVersion, 9);
+  // Схема поднята до текущей версии.
+  assert.equal(migrated.schemaVersion, PROTOTYPE_SCHEMA_VERSION);
   // Legacy-ресторан получает режим работы по умолчанию (Этап 2).
   assert.equal(migrated.restaurants[0].orderWorkflowMode, "COMBINED");
 

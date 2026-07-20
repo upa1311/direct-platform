@@ -3,8 +3,25 @@ import type {
   RestaurantDeliveryProvider,
   RestaurantDeliverySettings,
 } from "./pricing-engine";
+import type { OrderMoneyMovement } from "./order-money-movement";
 
-export const PROTOTYPE_SCHEMA_VERSION = 9 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 10 as const;
+
+export type { OrderMoneyMovement } from "./order-money-movement";
+
+/**
+ * Статус канонического движения денег в финансовом снимке заказа (v10).
+ * COMPLETE — движение рассчитано canonical-функцией и зафиксировано;
+ * PENDING_PAYMENT_CHANNEL — фактический канал оплаты ещё неизвестен
+ * (самовывоз до выдачи: клиент заплатит наличными или картой на точке);
+ * REVIEW_REQUIRED — legacy-данные не позволяют восстановить движение без
+ * ручной проверки (нет фактического способа оплаты, суммы не сходятся) —
+ * правдоподобный баланс не выдумывается.
+ */
+export type MoneyMovementStatus =
+  | "COMPLETE"
+  | "PENDING_PAYMENT_CHANNEL"
+  | "REVIEW_REQUIRED";
 
 export type {
   FulfillmentChoice,
@@ -529,6 +546,15 @@ export interface FinancialSnapshot {
   /** Сколько ресторан должен Direct (комиссия + small-order fee, если есть). */
   platformCommissionReceivableCents: number;
   restaurantNetAfterPlatformCommissionCents: number;
+  /**
+   * Каноническое движение денег заказа (v10): банковские части, взаимные
+   * обязательства и чистые итоги, рассчитанные ТОЛЬКО computeOrderMoneyMovement.
+   * После COMPLETE не пересчитывается: изменение настроек ресторана, цен,
+   * комиссий или меню финансовую историю заказа не меняет.
+   */
+  moneyMovement?: OrderMoneyMovement;
+  /** Статус движения денег; см. MoneyMovementStatus. */
+  moneyMovementStatus: MoneyMovementStatus;
 }
 
 export interface OrderHistoryEvent {

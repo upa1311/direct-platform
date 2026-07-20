@@ -330,7 +330,15 @@ test("SPLIT: выдача оператором — оплата, один settle
   const prepared = startKitchenPreparation(accepted, orderId, "RESTAURANT", "KITCHEN");
   const ready = markOrderReady(prepared, orderId, "RESTAURANT", "KITCHEN");
   const before = getOrder(ready, orderId);
-  const finBefore = JSON.stringify(before.financials);
+  // v10: выдача легитимно дополняет снимок каноническим движением денег
+  // (фиксация фактического канала) — рассчитанные суммы сравниваем без него.
+  const stripMovement = (f: Order["financials"]) => {
+    const { moneyMovement, moneyMovementStatus, ...rest } = f;
+    void moneyMovement;
+    void moneyMovementStatus;
+    return JSON.stringify(rest);
+  };
+  const finBefore = stripMovement(before.financials);
   assert.equal(before.pickupCodeUsed, false);
   assert.equal(before.paymentStatus, "DUE_AT_PICKUP");
   assert.equal(ready.settlements.length, 0);
@@ -360,8 +368,14 @@ test("SPLIT: выдача оператором — оплата, один settle
   assert.equal(order.paidAt, NOW);
   assert.equal(order.pickupCodeUsed, true);
   assert.equal(order.pickupPaidWith, "CARD");
-  // Финансы не пересчитываются, самовывоз без платы за доставку.
-  assert.equal(JSON.stringify(order.financials), finBefore);
+  // Финансы не пересчитываются, самовывоз без платы за доставку; выдача
+  // зафиксировала канонический канал оплаты картой.
+  assert.equal(stripMovement(order.financials), finBefore);
+  assert.equal(order.financials.moneyMovementStatus, "COMPLETE");
+  assert.equal(
+    order.financials.moneyMovement?.paymentChannel,
+    "CARD_AT_RESTAURANT",
+  );
   assert.equal(order.financials.deliveryFeeCents, 0);
   // Ровно один settlement PICKUP_COMMISSION из исторического снимка.
   assert.equal(res.state.settlements.length, 1);

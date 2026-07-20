@@ -27,6 +27,11 @@ import {
 } from "./default-state";
 import { migrateFulfillmentChoice } from "./pricing-engine";
 import { migrateLegacySettlementsToAccounting } from "./restaurant-accounting";
+import {
+  isValidStoredMoneyMovement,
+  recoverMoneyMovement,
+  type MoneyMovementRecoveryContext,
+} from "./money-movement-snapshot";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
@@ -87,11 +92,12 @@ function hasPrototypeStateShape(value: unknown): boolean {
 /**
  * Схемы, принимаемые из текущего ключа хранилища v7. Каждая следующая версия —
  * надмножество предыдущей (v8 добавил restaurantAccountingEntries, v9 —
- * restaurantAccountingResolutionEvents), поэтому состояние прежней версии
- * безопасно принимается и доводится нормализацией до текущей без потери данных.
- * Ключ хранилища не меняется.
+ * restaurantAccountingResolutionEvents, v10 — каноническое движение денег в
+ * FinancialSnapshot), поэтому состояние прежней версии безопасно принимается и
+ * доводится нормализацией до текущей без потери данных. Ключ хранилища не
+ * меняется.
  */
-const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([7, 8, 9]);
+const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([7, 8, 9, 10]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
   const schemaVersion = (value as { schemaVersion?: unknown }).schemaVersion;
@@ -173,11 +179,12 @@ function normalizeOrderItem(value: unknown): OrderItemSnapshot {
 function normalizeFinancials(
   value: unknown,
   deliveryMode: DeliveryMode,
+  movementContext: MoneyMovementRecoveryContext,
 ): FinancialSnapshot {
   const raw = isRecord(value) ? value : {};
   const foodSubtotalCents = num(raw.foodSubtotalCents, 0);
   const isPickup = deliveryMode === "PICKUP";
-  return {
+  const base: Omit<FinancialSnapshot, "moneyMovementStatus" | "moneyMovement"> = {
     currencyCode: "USD",
     deliveryMode,
     deliveryProvider:
@@ -240,6 +247,53 @@ function normalizeFinancials(
       raw.restaurantNetAfterPlatformCommissionCents,
       0,
     ),
+  };
+
+  // v10: каноническое движение денег. Валидное сохранённое значение
+  // принимается КАК ЕСТЬ — зафиксированная финансовая история заказа не
+  // пересчитывается ни при каких изменениях настроек. Иначе движение
+  // восстанавливается fail-closed: COMPLETE только через каноническую
+  // функцию при однозначно известном канале, незавершённый самовывоз —
+  // PENDING_PAYMENT_CHANNEL, всё сомнительное — REVIEW_REQUIRED (никаких
+  // правдоподобных нулей вместо отсутствующих банковских сумм).
+  if (
+    raw.moneyMovementStatus === "COMPLETE" &&
+    isValidStoredMoneyMovement(raw.moneyMovement)
+  ) {
+    return {
+      ...base,
+      moneyMovementStatus: "COMPLETE",
+      moneyMovement: raw.moneyMovement,
+    };
+  }
+  if (raw.moneyMovementStatus === "REVIEW_REQUIRED") {
+    return { ...base, moneyMovementStatus: "REVIEW_REQUIRED" };
+  }
+  if (
+    raw.moneyMovementStatus === "PENDING_PAYMENT_CHANNEL" &&
+    isPickup &&
+    movementContext.pickupPaidWith === null &&
+    !movementContext.pickupSettled
+  ) {
+    return { ...base, moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" };
+  }
+  const recovered = recoverMoneyMovement(
+    {
+      deliveryMode,
+      foodSubtotalCents: base.foodSubtotalCents,
+      deliveryFeeCents: base.deliveryFeeCents,
+      smallOrderFeeCents: base.smallOrderFeeCents,
+      customerTotalCents: base.customerTotalCents,
+      restaurantCommissionCents: base.restaurantCommissionCents,
+    },
+    movementContext,
+  );
+  return {
+    ...base,
+    moneyMovementStatus: recovered.moneyMovementStatus,
+    ...(recovered.moneyMovement
+      ? { moneyMovement: recovered.moneyMovement }
+      : {}),
   };
 }
 
@@ -411,7 +465,17 @@ function normalizeOrder(
     driverAssignedAt:
       typeof raw.driverAssignedAt === "string" ? raw.driverAssignedAt : null,
     items: Array.isArray(raw.items) ? raw.items.map(normalizeOrderItem) : [],
-    financials: normalizeFinancials(raw.financials, deliveryMode),
+    financials: normalizeFinancials(raw.financials, deliveryMode, {
+      pickupPaidWith,
+      // Самовывоз фактически оплачен/выдан: клиент уже платил на точке, и
+      // отсутствие сохранённого способа оплаты — повод для REVIEW, а не для
+      // догадок о канале.
+      pickupSettled:
+        deliveryMode === "PICKUP" &&
+        (safeStatus === "PICKED_UP" ||
+          raw.paymentStatus === "PAID_AT_RESTAURANT" ||
+          raw.pickupCodeUsed === true),
+    }),
     history,
     etaAdjustments,
   };
