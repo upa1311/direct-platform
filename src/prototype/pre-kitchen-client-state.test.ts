@@ -6,6 +6,7 @@ import {
   acceptRestaurantOrderWithResult,
   addCartItem,
   cancelOrderByClient,
+  completePickupAtRestaurant,
   createOrderFromCart,
   markOrderArriving,
   markOrderDelivered,
@@ -406,4 +407,128 @@ test("терминальные статусы: отмена и запрос не
   assert.equal(delivered.status, "DELIVERED");
   assert.equal(getClientCancellationMode(delivered), "UNAVAILABLE");
   assert.equal(cancelOrderByClient(s, deliveredId, "Поздно").result.ok, false);
+});
+
+// 13 — доменный запрет запроса для DIRECT_CANCEL -------------------------------
+
+test("запрос запрещён для неоплаченного самовывоза до старта: атомарная ошибка", () => {
+  const { state, orderId } = splitPayAtRestaurantPreparing();
+  const order = orderOf(state, orderId);
+  assert.equal(getClientCancellationMode(order), "DIRECT_CANCEL");
+
+  const res = requestOrderCancellationByClient(state, orderId, "Передумал");
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Этот заказ можно отменить сразу без запроса.");
+  // Атомарность: исходный state тем же объектом, ничего не мутировано.
+  assert.equal(res.state, state);
+  assert.equal(res.state.revision, state.revision);
+  assert.equal(res.state.cancellationRequests.length, 0);
+  assert.equal(orderOf(res.state, orderId), order);
+});
+
+test("запрос запрещён для неоплаченных наличных курьеру до старта", () => {
+  const { state, orderId } = splitCourierCashPreparing();
+  const order = orderOf(state, orderId);
+  assert.equal(getClientCancellationMode(order), "DIRECT_CANCEL");
+
+  const res = requestOrderCancellationByClient(state, orderId, "Передумал");
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Этот заказ можно отменить сразу без запроса.");
+  assert.equal(res.state, state);
+  assert.equal(res.state.cancellationRequests.length, 0);
+  assert.equal(orderOf(res.state, orderId), order);
+});
+
+// 14 — запрос после старта для всех способов оплаты ----------------------------
+
+test("после старта кухни запрос создаётся для всех способов оплаты", () => {
+  const flows = [
+    splitPayAtRestaurantPreparing,
+    splitCourierCashPreparing,
+    splitOnlinePaidPreparing,
+  ];
+  for (const make of flows) {
+    const { state, orderId } = make();
+    const started = startKitchen(state, orderId);
+    const res = requestOrderCancellationByClient(started, orderId, "Передумал");
+    assert.equal(res.result.ok, true, res.result.error ?? "");
+    const request = res.state.cancellationRequests.find(
+      (r) => r.orderId === orderId,
+    );
+    assert.equal(request?.status, "PENDING");
+  }
+});
+
+// 15 — READY_FOR_PICKUP в SPLIT (READY/OUT_FOR_DELIVERY/ARRIVING покрывает
+// cancellation.test.ts) --------------------------------------------------------
+
+test("READY_FOR_PICKUP: запрос по-прежнему создаётся", () => {
+  const { state, orderId } = splitPayAtRestaurantPreparing();
+  let s = startKitchen(state, orderId);
+  s = markOrderReady(s, orderId, "RESTAURANT", "KITCHEN");
+  assert.equal(orderOf(s, orderId).status, "READY_FOR_PICKUP");
+  const res = requestOrderCancellationByClient(s, orderId, "Передумал");
+  assert.equal(res.result.ok, true, res.result.error ?? "");
+});
+
+// 16 — до принятия/оплаты используется прямая отмена ---------------------------
+
+test("RESTAURANT_REVIEW и AWAITING_PAYMENT: точная ошибка про прямую отмену", () => {
+  // RESTAURANT_REVIEW.
+  let s = setCartFulfillmentChoice(createDefaultState(), "PICKUP");
+  s = addCartItem(s, "restaurant-2-item-1").state;
+  const created = createOrderFromCart(s);
+  const reviewId = created.result.orderId as string;
+  const reviewRes = requestOrderCancellationByClient(created.state, reviewId, "x");
+  assert.equal(reviewRes.result.ok, false);
+  assert.equal(
+    reviewRes.result.error,
+    "Этот заказ можно отменить сразу без запроса.",
+  );
+  assert.equal(reviewRes.state, created.state);
+
+  // AWAITING_PAYMENT (доставка ONLINE, принят, не оплачен).
+  let d = updateCartAddress(createDefaultState(), ADDR);
+  d = addCartItem(d, "restaurant-2-item-1").state;
+  const dCreated = createOrderFromCart(d);
+  const awaitingId = dCreated.result.orderId as string;
+  const accepted = acceptRestaurantOrderWithResult(
+    dCreated.state,
+    awaitingId,
+    20,
+    "RESTAURANT",
+    "COMBINED",
+  ).state;
+  assert.equal(orderOf(accepted, awaitingId).status, "AWAITING_PAYMENT");
+  const awaitingRes = requestOrderCancellationByClient(accepted, awaitingId, "x");
+  assert.equal(awaitingRes.result.ok, false);
+  assert.equal(
+    awaitingRes.result.error,
+    "Этот заказ можно отменить сразу без запроса.",
+  );
+  assert.equal(awaitingRes.state, accepted);
+});
+
+// 17 — терминальный PICKED_UP и защита от дубля --------------------------------
+
+test("PICKED_UP: запрос недоступен", () => {
+  const { state, orderId } = combinedPreparing();
+  const ready = markOrderReady(state, orderId);
+  const done = completePickupAtRestaurant(ready, orderId, "CASH");
+  assert.equal(done.result.ok, true, done.result.error ?? "");
+  assert.equal(orderOf(done.state, orderId).status, "PICKED_UP");
+  const res = requestOrderCancellationByClient(done.state, orderId, "x");
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, "Для этого заказа запрос на отмену недоступен.");
+  assert.equal(res.state, done.state);
+});
+
+test("повторный запрос: защита от дубля сохранена", () => {
+  const { state, orderId } = splitOnlinePaidPreparing();
+  const first = requestOrderCancellationByClient(state, orderId, "Передумал");
+  assert.equal(first.result.ok, true);
+  const second = requestOrderCancellationByClient(first.state, orderId, "Ещё");
+  assert.equal(second.result.ok, false);
+  assert.equal(second.result.error, "Запрос на отмену уже отправлен.");
+  assert.equal(second.state.cancellationRequests.length, 1);
 });

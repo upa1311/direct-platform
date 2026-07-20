@@ -1229,15 +1229,6 @@ export function expireUnansweredRestaurantOrders(
   return finalizeMutation(state, { ...state, orders }, nowIso);
 }
 
-/** Статусы заказа, в которых доступен только ЗАПРОС на отмену (§10). */
-const CANCELLATION_REQUEST_STATUSES: readonly OrderStatus[] = [
-  "PREPARING",
-  "READY",
-  "READY_FOR_PICKUP",
-  "OUT_FOR_DELIVERY",
-  "ARRIVING",
-];
-
 export interface RequestCancellationResult {
   ok: boolean;
   error: string | null;
@@ -1249,10 +1240,13 @@ function cancellationRequestId(orderId: string): string {
 
 /**
  * Клиентский запрос на отмену уже готовящегося заказа (§10). Не меняет статус
- * заказа, оплату, snapshot; settlement не создаётся. Разрешён только для
- * активных статусов приготовления/доставки; RESTAURANT_REVIEW/AWAITING_PAYMENT
- * используют бесплатную отмену, терминальные — запрещены. Один запрос на заказ:
- * повторный вызов при уже существующем запросе не создаёт дубликат.
+ * заказа, оплату, snapshot; settlement не создаётся. Право определяет ТОЛЬКО
+ * getClientCancellationMode по актуальному Order (единый источник истины с UI
+ * и cancelOrderByClient, отдельного списка статусов нет): DIRECT_CANCEL-заказы
+ * (до принятия/оплаты и неоплаченные до старта кухни) отменяются напрямую и
+ * запрос для них запрещён, UNAVAILABLE (терминальные) — запрос недоступен.
+ * Один запрос на заказ: повторный вызов при уже существующем запросе не
+ * создаёт дубликат. Любая ошибка возвращает исходный state тем же объектом.
  */
 export function requestOrderCancellationByClient(
   state: PrototypeState,
@@ -1267,7 +1261,11 @@ export function requestOrderCancellationByClient(
   if (!order) {
     return fail("Заказ не найден.");
   }
-  if (!CANCELLATION_REQUEST_STATUSES.includes(order.status)) {
+  const mode = getClientCancellationMode(order);
+  if (mode === "DIRECT_CANCEL") {
+    return fail("Этот заказ можно отменить сразу без запроса.");
+  }
+  if (mode !== "REQUEST_CANCEL") {
     return fail("Для этого заказа запрос на отмену недоступен.");
   }
   const normalizedReason = reason.trim();

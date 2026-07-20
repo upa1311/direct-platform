@@ -13,6 +13,7 @@ import {
   resolveRestaurantPreparationProblem,
   setCartFulfillmentChoice,
   simulateSuccessfulOnlinePaymentWithResult,
+  startKitchenPreparationWithResult,
   updateCartAddress,
 } from "./actions.ts";
 import { createDefaultState } from "./default-state.ts";
@@ -420,9 +421,18 @@ test("APPROVED: заказ CANCELED, финансы сохранены, води
 
 test("legacy/client request: undefined requestedBy трактуется как CLIENT", () => {
   // Клиентский flow работает как раньше и помечает запрос requestedBy CLIENT.
+  // Неоплаченный SPLIT-заказ до старта кухни отменяется напрямую (DIRECT_CANCEL),
+  // поэтому запрос создаётся после фактического старта кухни.
   const prepared = makePreparingOrder("SPLIT_OPERATOR_KITCHEN");
-  const clientReq = requestOrderCancellationByClient(
+  const preparedStarted = startKitchenPreparationWithResult(
     prepared.state,
+    prepared.orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  );
+  assert.equal(preparedStarted.result.ok, true, preparedStarted.result.error ?? "");
+  const clientReq = requestOrderCancellationByClient(
+    preparedStarted.state,
     prepared.orderId,
     "Передумал",
   );
@@ -435,8 +445,15 @@ test("legacy/client request: undefined requestedBy трактуется как C
 
   // Клиентский PENDING-запрос не блокирует resolve (только RESTAURANT-запрос).
   const open = reportOpenProblem("SPLIT_OPERATOR_KITCHEN");
-  const withClient = requestOrderCancellationByClient(
+  const openStarted = startKitchenPreparationWithResult(
     open.state,
+    open.orderId,
+    "RESTAURANT",
+    "KITCHEN",
+  );
+  assert.equal(openStarted.result.ok, true, openStarted.result.error ?? "");
+  const withClient = requestOrderCancellationByClient(
+    openStarted.state,
     open.orderId,
     "Передумал",
   );
