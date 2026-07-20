@@ -164,28 +164,26 @@ test("tone не выводится из русского текста: поля 
 
 // 7/8 — нижний блок экрана заказов -------------------------------------------
 
-const KITCHEN_PAGE = readFileSync(
-  new URL("../../app/restaurant/kitchen/page.tsx", import.meta.url),
-  "utf8",
-);
-const OPERATOR_PAGE = readFileSync(
-  new URL("../../app/restaurant/operator/page.tsx", import.meta.url),
-  "utf8",
-);
+/**
+ * Переводы строк нормализуем: рабочая копия на Windows может быть с CRLF, а в
+ * CI файл выгружается с LF. Без этого контрактные проверки по исходникам ведут
+ * себя по-разному на разных ОС.
+ */
+function readSource(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
+}
+
+const KITCHEN_PAGE = readSource("../../app/restaurant/kitchen/page.tsx");
+const OPERATOR_PAGE = readSource("../../app/restaurant/operator/page.tsx");
+const PROVIDER = readSource("../../prototype/prototype-provider.tsx");
 // Компактный блок вынесен в переиспользуемый компонент: разметку details/summary
 // проверяем в нём, а страницы — только на использование этого компонента.
-const PANEL = readFileSync(
-  new URL("./restaurant-menu-availability-panel.tsx", import.meta.url),
-  "utf8",
-);
-const MENU_PAGE = readFileSync(
-  new URL("../../app/restaurant/menu/page.tsx", import.meta.url),
-  "utf8",
-);
-const OPERATIONS = readFileSync(
-  new URL("./kitchen-operations.tsx", import.meta.url),
-  "utf8",
-);
+const PANEL = readSource("./restaurant-menu-availability-panel.tsx");
+const MENU_PAGE = readSource("../../app/restaurant/menu/page.tsx");
+const OPERATIONS = readSource("./kitchen-operations.tsx");
 
 test("компактный блок — native details/summary, закрытый по умолчанию", () => {
   assert.ok(PANEL.includes("<details"), "используется native details");
@@ -234,9 +232,34 @@ test("обе рабочие страницы используют один и т
 
 test("роль не угадывается внутри секции: она приходит пропом", () => {
   assert.ok(OPERATIONS.includes("workspaceRole: RestaurantWorkspaceRole"));
-  // Жёстко зашитой роли в вызовах доступности больше нет.
-  assert.ok(!OPERATIONS.includes('"KITCHEN",\n      );'));
+  assert.ok(
+    OPERATIONS.includes("workspaceRole={workspaceRole}"),
+    "секция передаёт роль в строку блюда",
+  );
   assert.ok(!PANEL.includes('"KITCHEN"'), "панель не зашивает роль");
+});
+
+test("provider не зашивает роль в действия доступности меню", () => {
+  // Четыре метода принимают реальную роль экрана вместо литерала «KITCHEN».
+  // Проверяем тело каждого useCallback, а не весь файл: роль KITCHEN законно
+  // остаётся в кухонных действиях (например, корректировка ETA).
+  for (const fn of [
+    "setMenuItemUnavailable",
+    "restoreMenuItem",
+    "pauseCategory",
+    "restoreCategory",
+  ]) {
+    const start = PROVIDER.indexOf(`const ${fn} = useCallback(`);
+    assert.ok(start > -1, `${fn} найден`);
+    // Границей тела служит следующее объявление верхнего уровня в компоненте.
+    const end = PROVIDER.indexOf("\n  const ", start + 1);
+    const body = PROVIDER.slice(start, end === -1 ? PROVIDER.length : end);
+    assert.ok(
+      body.includes("workspaceRole: RestaurantWorkspaceRole"),
+      `${fn} принимает роль`,
+    );
+    assert.ok(!body.includes('"KITCHEN"'), `${fn} не зашивает KITCHEN`);
+  }
 });
 
 // 9/10 — embedded-режим и отдельная страница ---------------------------------
