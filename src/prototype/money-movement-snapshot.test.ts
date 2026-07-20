@@ -294,6 +294,210 @@ test("повреждённые старые суммы получают REVIEW_R
   assert.equal(f.moneyMovement, undefined);
 });
 
+// --- Fail-closed: неполные исходные суммы --------------------------------------
+
+/** Legacy-снимок без movement и без перечисленных полей сумм. */
+function stripFields(
+  financials: FinancialSnapshot,
+  fields: readonly string[],
+): FinancialSnapshot {
+  const clone = { ...stripMovement(financials) };
+  for (const field of fields) {
+    delete clone[field];
+  }
+  return clone as unknown as FinancialSnapshot;
+}
+
+test("отсутствующие legacy-суммы дают REVIEW_REQUIRED, а не нулевой COMPLETE", () => {
+  // PLATFORM_DRIVER без комиссии.
+  const platform = platformOrder();
+  const p = orderOf(
+    normalizePrototypeState(
+      withOrder(platform.state, platform.orderId, (o) => ({
+        ...o,
+        financials: stripFields(o.financials, ["restaurantCommissionCents"]),
+      })),
+    ),
+    platform.orderId,
+  ).financials;
+  assert.equal(p.moneyMovementStatus, "REVIEW_REQUIRED");
+  assert.equal(p.moneyMovement, undefined);
+
+  // RESTAURANT_DELIVERY без комиссии.
+  const courier = courierOrder();
+  const c = orderOf(
+    normalizePrototypeState(
+      withOrder(courier.state, courier.orderId, (o) => ({
+        ...o,
+        financials: stripFields(o.financials, ["restaurantCommissionCents"]),
+      })),
+    ),
+    courier.orderId,
+  ).financials;
+  assert.equal(c.moneyMovementStatus, "REVIEW_REQUIRED");
+  assert.equal(c.moneyMovement, undefined);
+
+  // Завершённый pickup без customerTotalCents.
+  const pickup = pickupReady();
+  const done = completePickupAtRestaurant(pickup.state, pickup.orderId, "CASH").state;
+  const f = orderOf(
+    normalizePrototypeState(
+      withOrder(done, pickup.orderId, (o) => ({
+        ...o,
+        financials: stripFields(o.financials, ["customerTotalCents"]),
+      })),
+    ),
+    pickup.orderId,
+  ).financials;
+  assert.equal(f.moneyMovementStatus, "REVIEW_REQUIRED");
+  assert.equal(f.moneyMovement, undefined);
+
+  // Полностью отсутствующие суммы НЕ становятся «успешным нулевым заказом».
+  const bare = orderOf(
+    normalizePrototypeState(
+      withOrder(platform.state, platform.orderId, (o) => ({
+        ...o,
+        financials: stripFields(o.financials, [
+          "foodSubtotalCents",
+          "deliveryFeeCents",
+          "smallOrderFeeCents",
+          "customerTotalCents",
+          "restaurantCommissionCents",
+          "driverPayoutCents",
+        ]),
+      })),
+    ),
+    platform.orderId,
+  ).financials;
+  assert.equal(bare.moneyMovementStatus, "REVIEW_REQUIRED");
+  assert.equal(bare.moneyMovement, undefined);
+});
+
+test("незавершённый pickup без сумм и канала остаётся PENDING_PAYMENT_CHANNEL", () => {
+  const { state, orderId } = pickupReady();
+  const f = orderOf(
+    normalizePrototypeState(
+      withOrder(state, orderId, (o) => ({
+        ...o,
+        financials: stripFields(o.financials, [
+          "foodSubtotalCents",
+          "customerTotalCents",
+        ]),
+      })),
+    ),
+    orderId,
+  ).financials;
+  assert.equal(f.moneyMovementStatus, "PENDING_PAYMENT_CHANNEL");
+  assert.equal(f.moneyMovement, undefined);
+});
+
+// --- Fail-closed: семантика сохранённого COMPLETE ------------------------------
+
+/** Выданный CASH-самовывоз с испорченным сохранённым движением. */
+function corruptedPickupState(
+  corrupt: (movement: NonNullable<FinancialSnapshot["moneyMovement"]>) =>
+    Partial<NonNullable<FinancialSnapshot["moneyMovement"]>>,
+): { state: PrototypeState; orderId: string } {
+  const { state, orderId } = pickupReady();
+  const done = completePickupAtRestaurant(state, orderId, "CASH").state;
+  const mutated = withOrder(done, orderId, (o) => {
+    const movement = o.financials.moneyMovement;
+    assert.ok(movement);
+    return {
+      ...o,
+      financials: {
+        ...o.financials,
+        moneyMovement: { ...movement, ...corrupt(movement) },
+      },
+    };
+  });
+  return { state: mutated, orderId };
+}
+
+test("ложный сохранённый COMPLETE уходит в REVIEW_REQUIRED", () => {
+  // Неверный payment channel.
+  const wrongChannel = corruptedPickupState(() => ({
+    paymentChannel: "CARD_AT_RESTAURANT",
+  }));
+  assert.equal(
+    orderOf(normalizePrototypeState(wrongChannel.state), wrongChannel.orderId)
+      .financials.moneyMovementStatus,
+    "REVIEW_REQUIRED",
+  );
+  // Неверный получатель денег.
+  const wrongRecipient = corruptedPickupState(() => ({
+    customerMoneyRecipient: "DIRECT",
+  }));
+  assert.equal(
+    orderOf(
+      normalizePrototypeState(wrongRecipient.state),
+      wrongRecipient.orderId,
+    ).financials.moneyMovementStatus,
+    "REVIEW_REQUIRED",
+  );
+  // Банковская комиссия, сдвинутая на один цент (структурно согласованная).
+  const wrongBank = corruptedPickupState((m) => ({
+    totalBankFeeCents: m.totalBankFeeCents + 1,
+    restaurantBankFeeCents: m.restaurantBankFeeCents + 1,
+  }));
+  const bankFin = orderOf(
+    normalizePrototypeState(wrongBank.state),
+    wrongBank.orderId,
+  ).financials;
+  assert.equal(bankFin.moneyMovementStatus, "REVIEW_REQUIRED");
+  assert.equal(bankFin.moneyMovement, undefined);
+});
+
+test("неправильный directOwesRestaurantCents у Direct-заказа отклоняется", () => {
+  const { state, orderId } = platformOrder();
+  const mutated = withOrder(state, orderId, (o) => {
+    const movement = o.financials.moneyMovement;
+    assert.ok(movement);
+    return {
+      ...o,
+      financials: {
+        ...o.financials,
+        moneyMovement: {
+          ...movement,
+          directOwesRestaurantCents: movement.directOwesRestaurantCents + 1,
+        },
+      },
+    };
+  });
+  const f = orderOf(normalizePrototypeState(mutated), orderId).financials;
+  assert.equal(f.moneyMovementStatus, "REVIEW_REQUIRED");
+  assert.equal(f.moneyMovement, undefined);
+});
+
+test("совпадающий COMPLETE сохраняется исходным объектом; normalization идемпотентна", () => {
+  const { state, orderId } = platformOrder();
+  const original = orderOf(state, orderId).financials.moneyMovement;
+  assert.ok(original);
+  const once = normalizePrototypeState(state);
+  // Тот же объект movement — без пересчёта и без замены новым объектом.
+  assert.equal(orderOf(once, orderId).financials.moneyMovement, original);
+  assert.equal(orderOf(once, orderId).financials.moneyMovementStatus, "COMPLETE");
+  // Повторная normalization идемпотентна для COMPLETE…
+  const twice = normalizePrototypeState(once);
+  assert.equal(orderOf(twice, orderId).financials.moneyMovement, original);
+  // …и для REVIEW_REQUIRED (испорченные данные не «дочиниваются» нулями).
+  const broken = withOrder(state, orderId, (o) => ({
+    ...o,
+    financials: stripFields(o.financials, ["restaurantCommissionCents"]),
+  }));
+  const brokenOnce = normalizePrototypeState(broken);
+  assert.equal(
+    orderOf(brokenOnce, orderId).financials.moneyMovementStatus,
+    "REVIEW_REQUIRED",
+  );
+  const brokenTwice = normalizePrototypeState(brokenOnce);
+  assert.equal(
+    orderOf(brokenTwice, orderId).financials.moneyMovementStatus,
+    "REVIEW_REQUIRED",
+  );
+  assert.equal(orderOf(brokenTwice, orderId).financials.moneyMovement, undefined);
+});
+
 test("старые Direct/restaurant-delivery восстанавливаются канонической функцией", () => {
   for (const make of [platformOrder, courierOrder]) {
     const { state, orderId } = make();

@@ -236,6 +236,137 @@ export interface MoneyMovementRecoveryContext {
   pickupSettled: boolean;
 }
 
+/**
+ * ПОДТВЕРЖДЁННЫЕ снимок-суммы из ИСХОДНЫХ legacy-данных — до любых
+ * fallback-нулей. Каждое обязательное поле должно реально присутствовать в
+ * исходном снимке и быть конечным целым неотрицательным числом; для
+ * PLATFORM_DRIVER дополнительно требуется исходный driverPayoutCents, равный
+ * deliveryFeeCents. Отсутствие поля НЕ является доказанным нулём: без
+ * подтверждённых сумм восстановление движения запрещено (null).
+ */
+export function readConfirmedSnapshotSums(
+  rawFinancials: unknown,
+  deliveryMode: DeliveryMode,
+): MoneyMovementSnapshotSums | null {
+  if (!rawFinancials || typeof rawFinancials !== "object") return null;
+  const raw = rawFinancials as Record<string, unknown>;
+  const required = [
+    raw.foodSubtotalCents,
+    raw.deliveryFeeCents,
+    raw.smallOrderFeeCents,
+    raw.customerTotalCents,
+    raw.restaurantCommissionCents,
+  ];
+  if (!required.every(isCents)) return null;
+  if (deliveryMode === "PLATFORM_DRIVER") {
+    if (!isCents(raw.driverPayoutCents)) return null;
+    if (raw.driverPayoutCents !== raw.deliveryFeeCents) return null;
+  }
+  return {
+    deliveryMode,
+    foodSubtotalCents: raw.foodSubtotalCents as number,
+    deliveryFeeCents: raw.deliveryFeeCents as number,
+    smallOrderFeeCents: raw.smallOrderFeeCents as number,
+    customerTotalCents: raw.customerTotalCents as number,
+    restaurantCommissionCents: raw.restaurantCommissionCents as number,
+  };
+}
+
+/** Ожидаемый канал по режиму и (для самовывоза) фактическому способу оплаты. */
+function expectedChannel(
+  deliveryMode: DeliveryMode,
+  context: MoneyMovementRecoveryContext,
+): OrderPaymentChannel | null {
+  if (deliveryMode === "PICKUP") {
+    return context.pickupPaidWith !== null
+      ? pickupChannelForPaidWith(context.pickupPaidWith)
+      : null;
+  }
+  return knownChannelForMode(deliveryMode);
+}
+
+/**
+ * Семантическая проверка сохранённого COMPLETE-движения: структура и простые
+ * инварианты недостаточны — канал, получатель и КАЖДАЯ сумма обязаны совпасть
+ * с результатом канонической функции от подтверждённых снимок-сумм
+ * (формулы не копируются — только computeOrderMoneyMovement). При полном
+ * совпадении возвращается ИСХОДНЫЙ объект движения (без замены и пересчёта);
+ * любое расхождение или неизвестный канал завершённого самовывоза — null,
+ * повреждённое движение молча не исправляется.
+ */
+export function verifyStoredCompleteMovement(
+  stored: unknown,
+  sums: MoneyMovementSnapshotSums,
+  context: MoneyMovementRecoveryContext,
+): OrderMoneyMovement | null {
+  if (!isValidStoredMoneyMovement(stored)) return null;
+  const channel = expectedChannel(sums.deliveryMode, context);
+  if (channel === null) return null;
+  const canonical = computeForChannel(sums, channel);
+  if (!canonical.ok) return null;
+  const expected = canonical.movement;
+  const matches =
+    stored.customerMoneyRecipient === expected.customerMoneyRecipient &&
+    stored.paymentChannel === expected.paymentChannel &&
+    stored.totalBankFeeCents === expected.totalBankFeeCents &&
+    stored.restaurantBankFeeCents === expected.restaurantBankFeeCents &&
+    stored.directBankFeeCents === expected.directBankFeeCents &&
+    stored.restaurantOwesDirectCents === expected.restaurantOwesDirectCents &&
+    stored.directOwesRestaurantCents === expected.directOwesRestaurantCents &&
+    stored.restaurantNetCents === expected.restaurantNetCents &&
+    stored.directNetRevenueCents === expected.directNetRevenueCents;
+  return matches ? stored : null;
+}
+
+/**
+ * Полная fail-closed нормализация движения денег legacy-снимка. Порядок:
+ * 1) подтверждение исходных сумм (fallback-нули существуют только для
+ *    совместимости прочих UI-полей и финансовыми данными НЕ являются);
+ * 2) сохранённый COMPLETE проверяется структурно И семантически — валидный
+ *    принимается исходным объектом, повреждённый уходит в REVIEW_REQUIRED;
+ * 3) сохранённый REVIEW_REQUIRED сохраняется (идемпотентность);
+ * 4) законный PENDING_PAYMENT_CHANNEL незавершённого самовывоза сохраняется;
+ * 5) recovery разрешён ТОЛЬКО при подтверждённых суммах; иначе —
+ *    REVIEW_REQUIRED либо законный PENDING незавершённого самовывоза.
+ */
+export function normalizeStoredMoneyMovement(
+  rawFinancials: unknown,
+  deliveryMode: DeliveryMode,
+  context: MoneyMovementRecoveryContext,
+): RecoveredMoneyMovement {
+  const raw =
+    rawFinancials && typeof rawFinancials === "object"
+      ? (rawFinancials as Record<string, unknown>)
+      : {};
+  const confirmed = readConfirmedSnapshotSums(rawFinancials, deliveryMode);
+  const pendingAllowed =
+    deliveryMode === "PICKUP" &&
+    context.pickupPaidWith === null &&
+    !context.pickupSettled;
+
+  if (raw.moneyMovementStatus === "COMPLETE") {
+    const verified = confirmed
+      ? verifyStoredCompleteMovement(raw.moneyMovement, confirmed, context)
+      : null;
+    return verified
+      ? { moneyMovementStatus: "COMPLETE", moneyMovement: verified }
+      : { moneyMovementStatus: "REVIEW_REQUIRED" };
+  }
+  if (raw.moneyMovementStatus === "REVIEW_REQUIRED") {
+    return { moneyMovementStatus: "REVIEW_REQUIRED" };
+  }
+  if (raw.moneyMovementStatus === "PENDING_PAYMENT_CHANNEL" && pendingAllowed) {
+    return { moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" };
+  }
+  if (confirmed === null) {
+    // Исходные суммы отсутствуют или повреждены: нулевой «успех» запрещён.
+    return pendingAllowed
+      ? { moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" }
+      : { moneyMovementStatus: "REVIEW_REQUIRED" };
+  }
+  return recoverMoneyMovement(confirmed, context);
+}
+
 export interface RecoveredMoneyMovement {
   moneyMovementStatus: SnapshotMoneyMovementStatus;
   moneyMovement?: OrderMoneyMovement;

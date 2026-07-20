@@ -28,8 +28,7 @@ import {
 import { migrateFulfillmentChoice } from "./pricing-engine";
 import { migrateLegacySettlementsToAccounting } from "./restaurant-accounting";
 import {
-  isValidStoredMoneyMovement,
-  recoverMoneyMovement,
+  normalizeStoredMoneyMovement,
   type MoneyMovementRecoveryContext,
 } from "./money-movement-snapshot";
 
@@ -249,43 +248,17 @@ function normalizeFinancials(
     ),
   };
 
-  // v10: каноническое движение денег. Валидное сохранённое значение
-  // принимается КАК ЕСТЬ — зафиксированная финансовая история заказа не
-  // пересчитывается ни при каких изменениях настроек. Иначе движение
-  // восстанавливается fail-closed: COMPLETE только через каноническую
-  // функцию при однозначно известном канале, незавершённый самовывоз —
-  // PENDING_PAYMENT_CHANNEL, всё сомнительное — REVIEW_REQUIRED (никаких
-  // правдоподобных нулей вместо отсутствующих банковских сумм).
-  if (
-    raw.moneyMovementStatus === "COMPLETE" &&
-    isValidStoredMoneyMovement(raw.moneyMovement)
-  ) {
-    return {
-      ...base,
-      moneyMovementStatus: "COMPLETE",
-      moneyMovement: raw.moneyMovement,
-    };
-  }
-  if (raw.moneyMovementStatus === "REVIEW_REQUIRED") {
-    return { ...base, moneyMovementStatus: "REVIEW_REQUIRED" };
-  }
-  if (
-    raw.moneyMovementStatus === "PENDING_PAYMENT_CHANNEL" &&
-    isPickup &&
-    movementContext.pickupPaidWith === null &&
-    !movementContext.pickupSettled
-  ) {
-    return { ...base, moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" };
-  }
-  const recovered = recoverMoneyMovement(
-    {
-      deliveryMode,
-      foodSubtotalCents: base.foodSubtotalCents,
-      deliveryFeeCents: base.deliveryFeeCents,
-      smallOrderFeeCents: base.smallOrderFeeCents,
-      customerTotalCents: base.customerTotalCents,
-      restaurantCommissionCents: base.restaurantCommissionCents,
-    },
+  // v10: каноническое движение денег — fail-closed нормализация по ИСХОДНЫМ
+  // данным снимка (см. normalizeStoredMoneyMovement). Fallback-нули base выше
+  // существуют только для совместимости прочих UI-полей: recovery движение из
+  // них не строит — отсутствующие суммы не являются доказанными нулями.
+  // Сохранённый COMPLETE проверяется структурно и семантически (канал,
+  // получатель и все суммы совпадают с канонической функцией) и принимается
+  // ИСХОДНЫМ объектом — история не пересчитывается; любое расхождение —
+  // REVIEW_REQUIRED; незавершённый самовывоз — законный PENDING.
+  const recovered = normalizeStoredMoneyMovement(
+    value,
+    deliveryMode,
     movementContext,
   );
   return {
