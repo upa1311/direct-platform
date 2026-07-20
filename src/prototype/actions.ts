@@ -78,6 +78,7 @@ import {
   computePickupSettlement,
   validatePickupPayment,
 } from "./pricing-engine";
+import { isValidMenuMediaId } from "./media-store";
 import {
   computeEtaFromIntent,
   ETA_REASON_MAX_LENGTH,
@@ -4909,6 +4910,20 @@ function canManageMenuCatalog(
   );
 }
 
+/** Доменная ошибка некорректной ссылки на фотографию. */
+export const MENU_MEDIA_ID_ERROR =
+  "Некорректный идентификатор фотографии блюда.";
+
+/**
+ * Доменная проверка ссылки на фотографию: разрешены ТОЛЬКО null и стабильный
+ * media id формата `media-*`. Data URI, base64, blob:, http(s)-URL, файловые
+ * пути и произвольные строки отклоняются — домен не полагается на UI.
+ */
+function validateSubmissionMediaId(mediaId: string | null): string | null {
+  if (mediaId === null) return null;
+  return isValidMenuMediaId(mediaId) ? null : MENU_MEDIA_ID_ERROR;
+}
+
 /** Нормализованная необязательная media-ссылка. */
 function normalizeMediaId(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
@@ -5051,6 +5066,11 @@ export function updateMenuItemSubmissionDraft(
     updatedAt: nowIso,
   };
 
+  const mediaError = validateSubmissionMediaId(candidate.imageMediaId);
+  if (mediaError !== null) {
+    return submissionFail(state, mediaError);
+  }
+
   const draftError = validateMenuItemSubmissionDraft(candidate);
   if (draftError !== null) {
     return submissionFail(state, draftError);
@@ -5090,6 +5110,13 @@ export function submitMenuItemSubmission(
   }
   if (!EDITABLE_SUBMISSION_STATUSES.includes(current.status)) {
     return submissionFail(state, "Заявка уже отправлена или обработана.");
+  }
+
+  // Ссылка на фото проверяется и при отправке: legacy-состояние могло
+  // содержать значение, которое update уже не пропустил бы.
+  const submitMediaError = validateSubmissionMediaId(current.imageMediaId);
+  if (submitMediaError !== null) {
+    return submissionFail(state, submitMediaError);
   }
 
   const validationError = validateMenuItemSubmission(current);
@@ -5150,6 +5177,13 @@ export function approveMenuItemSubmission(
   }
   if (current.status !== "PENDING_REVIEW") {
     return submissionFail(state, "Заявка не находится на проверке.");
+  }
+
+  // Повторная проверка ссылки на фото перед публикацией: сломанный media id не
+  // должен попасть в клиентское меню, даже если он появился в обход update.
+  const approveMediaError = validateSubmissionMediaId(current.imageMediaId);
+  if (approveMediaError !== null) {
+    return submissionFail(state, approveMediaError);
   }
 
   const validationError = validateMenuItemSubmission(current);

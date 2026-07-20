@@ -626,6 +626,28 @@ export function getPendingMenuSubmissions(
 }
 
 /**
+ * Ссылается ли кто-то на media id фотографии: любая заявка (кроме явно
+ * исключённой — обычно та, которую сейчас сохраняет форма) либо опубликованный
+ * MenuItem. Blob можно удалять из media store ТОЛЬКО когда ссылок не осталось —
+ * иначе сохранённая заявка или блюдо получат сломанную фотографию.
+ */
+export function isMenuMediaIdInUse(
+  state: PrototypeState,
+  mediaId: string | null,
+  exceptSubmissionId: string | null = null,
+): boolean {
+  if (!mediaId) return false;
+  if (state.menuItems.some((item) => item.imageMediaId === mediaId)) {
+    return true;
+  }
+  return state.menuItemSubmissions.some(
+    (submission) =>
+      submission.id !== exceptSubmissionId &&
+      submission.imageMediaId === mediaId,
+  );
+}
+
+/**
  * Существующие категории меню ресторана для подсказки в конструкторе блюда.
  * Собираются ТОЛЬКО из опубликованного меню выбранного ресторана; глобального
  * справочника категорий нет, категория остаётся обычной строкой.

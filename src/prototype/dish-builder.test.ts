@@ -9,10 +9,12 @@ import {
   dishBuilderBackHref,
   dishBuilderNewHref,
   emptyDishBuilderFormState,
+  mediaIdToDeleteAfterSave,
   parsePortionFields,
   parsePriceInput,
   parseVariantDeltaInput,
   parseVariantRows,
+  pendingMediaIdToDelete,
   resolveDishBuilderRole,
   type DishVariantFormRow,
 } from "../components/menu/dish-builder-form.ts";
@@ -32,6 +34,7 @@ import {
   createMenuItemSubmissionDraft,
   createOrderFromCart,
   approveMenuItemSubmission,
+  MENU_MEDIA_ID_ERROR,
   setCartFulfillmentChoice,
   submitMenuItemSubmission,
   updateMenuItemSubmissionDraft,
@@ -41,6 +44,7 @@ import {
   getRestaurantMenu,
   getRestaurantMenuCategories,
   getRestaurantMenuSubmissions,
+  isMenuMediaIdInUse,
   menuSubmissionStatusLabels,
 } from "./selectors.ts";
 import type { PrototypeState } from "./models.ts";
@@ -561,4 +565,222 @@ test("порция из снимка заказа печатается в про
   const line = ticket.items.find((item) => item.name === "Пицца Кватро Тест")!;
   assert.equal(line.portionText, "30 см");
   assert.equal(line.variantName, "30 см");
+});
+
+// --- Защита фотографий черновика ------------------------------------------------
+
+/** Черновик restaurant-2 с уже сохранённым фото media-saved-1. */
+function draftWithSavedPhoto(): { state: PrototypeState; submissionId: string } {
+  let s = createDefaultState();
+  const created = createMenuItemSubmissionDraft(
+    s,
+    "restaurant-2",
+    "RESTAURANT",
+    "COMBINED",
+  );
+  assert.equal(created.result.ok, true);
+  const submissionId = created.result.submissionId as string;
+  const updated = updateMenuItemSubmissionDraft(
+    created.state,
+    submissionId,
+    { name: "Блюдо с фото", priceCents: 500, imageMediaId: "media-saved-1" },
+    "RESTAURANT",
+    "COMBINED",
+  );
+  assert.equal(updated.result.ok, true, updated.result.error ?? "");
+  s = updated.state;
+  return { state: s, submissionId };
+}
+
+/** Хирургическая порча imageMediaId в обход update (для submit/approve). */
+function corruptMediaId(
+  state: PrototypeState,
+  submissionId: string,
+  value: string,
+): PrototypeState {
+  return {
+    ...state,
+    menuItemSubmissions: state.menuItemSubmissions.map((submission) =>
+      submission.id === submissionId
+        ? { ...submission, imageMediaId: value }
+        : submission,
+    ),
+  };
+}
+
+const BAD_MEDIA_IDS = [
+  "data:image/png;base64,AAAA",
+  "blob:http://localhost/6a1b",
+  "C:\\photos\\dish.png",
+  "https://example.com/dish.png",
+  "просто строка",
+];
+
+// 8–11 — доменная валидация media id ---------------------------------------------
+
+test("update draft: data URI, blob, http и пути отклоняются доменом", () => {
+  const { state, submissionId } = draftWithSavedPhoto();
+  for (const bad of BAD_MEDIA_IDS) {
+    const res = updateMenuItemSubmissionDraft(
+      state,
+      submissionId,
+      { imageMediaId: bad },
+      "RESTAURANT",
+      "COMBINED",
+    );
+    assert.equal(res.result.ok, false, bad);
+    assert.equal(res.result.error, MENU_MEDIA_ID_ERROR);
+    // Исходный state тем же объектом, заявка не изменилась.
+    assert.equal(res.state, state);
+    assert.equal(
+      res.state.menuItemSubmissions.find((s) => s.id === submissionId)
+        ?.imageMediaId,
+      "media-saved-1",
+    );
+  }
+  // Корректный media-* принимается; null — тоже.
+  const good = updateMenuItemSubmissionDraft(
+    state,
+    submissionId,
+    { imageMediaId: "media-next-2" },
+    "RESTAURANT",
+    "COMBINED",
+  );
+  assert.equal(good.result.ok, true, good.result.error ?? "");
+  const cleared = updateMenuItemSubmissionDraft(
+    good.state,
+    submissionId,
+    { imageMediaId: null },
+    "RESTAURANT",
+    "COMBINED",
+  );
+  assert.equal(cleared.result.ok, true);
+});
+
+test("submit повторно проверяет media id (legacy-значение в обход update)", () => {
+  const { state, submissionId } = draftWithSavedPhoto();
+  const corrupted = corruptMediaId(state, submissionId, "data:image/png;base64,A");
+  const res = submitMenuItemSubmission(
+    corrupted,
+    submissionId,
+    "RESTAURANT",
+    "COMBINED",
+  );
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, MENU_MEDIA_ID_ERROR);
+  assert.equal(res.state, corrupted);
+});
+
+// 12 — approve повторно проверяет media id ---------------------------------------
+
+test("approve повторно проверяет media id и не создаёт MenuItem", () => {
+  const { state, submissionId } = draftWithSavedPhoto();
+  const submitted = submitMenuItemSubmission(
+    state,
+    submissionId,
+    "RESTAURANT",
+    "COMBINED",
+  );
+  assert.equal(submitted.result.ok, true);
+  const corrupted = corruptMediaId(
+    submitted.state,
+    submissionId,
+    "blob:http://localhost/broken",
+  );
+  const menuBefore = corrupted.menuItems.length;
+  const res = approveMenuItemSubmission(corrupted, submissionId, "ADMIN");
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, MENU_MEDIA_ID_ERROR);
+  assert.equal(res.state, corrupted); // тем же объектом
+  assert.equal(res.state.menuItems.length, menuBefore);
+  assert.equal(
+    res.state.menuItemSubmissions.find((s) => s.id === submissionId)?.status,
+    "PENDING_REVIEW",
+  );
+});
+
+// 7 — helper проверки ссылок ------------------------------------------------------
+
+test("Blob не удаляется, пока id использует другая заявка или MenuItem", () => {
+  const { state, submissionId } = draftWithSavedPhoto();
+  // Текущая заявка ссылается — занято; с исключением текущей — свободно.
+  assert.equal(isMenuMediaIdInUse(state, "media-saved-1"), true);
+  assert.equal(isMenuMediaIdInUse(state, "media-saved-1", submissionId), false);
+  assert.equal(isMenuMediaIdInUse(state, null), false);
+  assert.equal(isMenuMediaIdInUse(state, "media-unknown"), false);
+
+  // Вторая заявка с тем же фото: даже с исключением первой — занято.
+  const second = createMenuItemSubmissionDraft(
+    state,
+    "restaurant-2",
+    "RESTAURANT",
+    "COMBINED",
+  );
+  const secondId = second.result.submissionId as string;
+  const secondWithPhoto = updateMenuItemSubmissionDraft(
+    second.state,
+    secondId,
+    { name: "Копия", priceCents: 400, imageMediaId: "media-saved-1" },
+    "RESTAURANT",
+    "COMBINED",
+  ).state;
+  assert.equal(
+    isMenuMediaIdInUse(secondWithPhoto, "media-saved-1", submissionId),
+    true,
+  );
+
+  // Опубликованный MenuItem с этим фото тоже удерживает Blob.
+  const withMenuItem: PrototypeState = {
+    ...state,
+    menuItems: [
+      ...state.menuItems,
+      { ...state.menuItems[0], id: "menu-item-x", imageMediaId: "media-saved-1" },
+    ],
+  };
+  assert.equal(
+    isMenuMediaIdInUse(withMenuItem, "media-saved-1", submissionId),
+    true,
+  );
+});
+
+// 1–6 — жизненный цикл Blob в форме ----------------------------------------------
+
+test("замена и удаление фото без сохранения не трогают сохранённый Blob", () => {
+  // «Удалить»: в форме null, сохранённый id остаётся — удалять нечего.
+  assert.equal(pendingMediaIdToDelete(null, "media-saved-1"), null);
+  // В форме сохранённый id — он не временный, не удаляется.
+  assert.equal(pendingMediaIdToDelete("media-saved-1", "media-saved-1"), null);
+  // Заменённый ВРЕМЕННЫЙ Blob (не сохранённый) можно удалить.
+  assert.equal(
+    pendingMediaIdToDelete("media-temp-2", "media-saved-1"),
+    "media-temp-2",
+  );
+  assert.equal(pendingMediaIdToDelete("media-temp-2", null), "media-temp-2");
+});
+
+test("старый Blob удаляется только после успешного сохранения замены", () => {
+  assert.equal(mediaIdToDeleteAfterSave("media-old", "media-new"), "media-old");
+  assert.equal(mediaIdToDeleteAfterSave("media-old", null), "media-old");
+  // Значение не менялось либо фото не было — удалять нечего.
+  assert.equal(mediaIdToDeleteAfterSave("media-old", "media-old"), null);
+  assert.equal(mediaIdToDeleteAfterSave(null, "media-new"), null);
+  assert.equal(mediaIdToDeleteAfterSave(null, null), null);
+});
+
+test("конструктор: каждое удаление Blob защищено проверкой ссылок", () => {
+  // Все вызовы deleteMenuMediaBlob в билдере: замена временного, уход со
+  // страницы, устаревшее фото после успешного сохранения — и каждый под
+  // guard'ом isMenuMediaIdInUse.
+  assert.equal(BUILDER_SOURCE.split("deleteMenuMediaBlob(").length - 1, 3);
+  assert.equal(BUILDER_SOURCE.split("isMenuMediaIdInUse(").length - 1, 3);
+  assert.ok(BUILDER_SOURCE.includes("persistedMediaIdRef"));
+  // Ошибка update возвращает управление ДО обновления persistedMediaIdRef и
+  // до какого-либо удаления: старое фото остаётся рабочим.
+  const updateIndex = BUILDER_SOURCE.indexOf("if (!updated.ok)");
+  const persistIndex = BUILDER_SOURCE.indexOf(
+    "persistedMediaIdRef.current = nextPersisted",
+  );
+  const staleIndex = BUILDER_SOURCE.indexOf("mediaIdToDeleteAfterSave(");
+  assert.ok(updateIndex !== -1 && persistIndex !== -1 && staleIndex !== -1);
+  assert.ok(updateIndex < persistIndex && persistIndex < staleIndex);
 });

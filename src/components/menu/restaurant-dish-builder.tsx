@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import kds from "@/components/kitchen/kitchen.module.css";
@@ -16,6 +16,8 @@ import {
   dishSubmissionHref,
   dishSubmissionsHref,
   emptyDishBuilderFormState,
+  mediaIdToDeleteAfterSave,
+  pendingMediaIdToDelete,
   submissionToFormState,
   type DishBuilderFieldErrors,
   type DishBuilderFormState,
@@ -34,6 +36,7 @@ import type {
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   getRestaurantMenuCategories,
+  isMenuMediaIdInUse,
   menuSubmissionStatusLabels,
 } from "@/prototype/selectors";
 
@@ -95,6 +98,41 @@ export function RestaurantDishBuilder({
   const busyRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const formHeadingId = useId();
+  // Фото, на которое СЕЙЧАС ссылается сохранённая заявка. Его Blob нельзя
+  // удалять, пока успешный update не записал в заявку другое значение — иначе
+  // ошибка сохранения или уход со страницы оставят заявку со сломанным фото.
+  const persistedMediaIdRef = useRef<string | null>(
+    submission?.imageMediaId ?? null,
+  );
+  const stateRef = useRef(state);
+  const formMediaIdRef = useRef<string | null>(form.imageMediaId);
+
+  // Актуальные state и media id формы для cleanup при размонтировании:
+  // обновляются в эффектах, не в render.
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  useEffect(() => {
+    formMediaIdRef.current = form.imageMediaId;
+  }, [form.imageMediaId]);
+
+  // Уход со страницы без сохранения: удаляем ТОЛЬКО новый неподтверждённый
+  // Blob (и только если на него никто не ссылается). Сохранённое фото заявки
+  // не трогаем.
+  useEffect(() => {
+    return () => {
+      const pending = pendingMediaIdToDelete(
+        formMediaIdRef.current,
+        persistedMediaIdRef.current,
+      );
+      if (
+        pending &&
+        !isMenuMediaIdInUse(stateRef.current, pending, draftIdRef.current)
+      ) {
+        void deleteMenuMediaBlob(pending);
+      }
+    };
+  }, []);
 
   if (submissionId && !submission) {
     return (
@@ -171,17 +209,35 @@ export function RestaurantDishBuilder({
     });
   };
 
+  /**
+   * Удаляет НЕсохранённый временный Blob, который форма больше не показывает.
+   * Сохранённое фото заявки (persistedMediaIdRef) отсюда не удаляется никогда;
+   * дополнительно проверяются ссылки других заявок и опубликованных блюд.
+   */
+  const discardPendingPhoto = (candidate: string | null) => {
+    const pending = pendingMediaIdToDelete(
+      candidate,
+      persistedMediaIdRef.current,
+    );
+    if (
+      pending &&
+      !isMenuMediaIdInUse(stateRef.current, pending, draftIdRef.current)
+    ) {
+      void deleteMenuMediaBlob(pending);
+    }
+  };
+
   const handlePhotoFile = async (file: File | null) => {
     if (!file || photoBusy) return;
     setPhotoBusy(true);
     setPhotoError(null);
-    const previousId = form.imageMediaId;
+    const previousFormId = form.imageMediaId;
     try {
       const mediaId = await processAndSaveMenuImage(file);
       updateForm({ imageMediaId: mediaId });
-      if (previousId) {
-        void deleteMenuMediaBlob(previousId);
-      }
+      // Прежний СОХРАНЁННЫЙ Blob не удаляется: заявка ссылается на него до
+      // успешного сохранения. Чистится только заменённый временный Blob.
+      discardPendingPhoto(previousFormId);
     } catch (error) {
       setPhotoError(
         error instanceof Error
@@ -195,12 +251,12 @@ export function RestaurantDishBuilder({
   };
 
   const removePhoto = () => {
-    const previousId = form.imageMediaId;
+    const previousFormId = form.imageMediaId;
+    // Только локальная форма: imageMediaId = null попадёт в заявку при
+    // «Сохранить»/отправке, и лишь после успеха прежний Blob будет удалён.
     updateForm({ imageMediaId: null });
     setPhotoError(null);
-    if (previousId) {
-      void deleteMenuMediaBlob(previousId);
-    }
+    discardPendingPhoto(previousFormId);
   };
 
   /**
@@ -230,8 +286,20 @@ export function RestaurantDishBuilder({
 
     const updated = await updateMenuItemDraft(id, built.patch, workspaceRole);
     if (!updated.ok) {
+      // Заявка и её прежнее фото остаются рабочими; новое подготовленное фото
+      // остаётся в форме для повторной попытки.
       setFormError(updated.error ?? "Не удалось сохранить черновик.");
       return null;
+    }
+    // Update прошёл: заявка ссылается на новое значение. Только теперь прежний
+    // Blob можно удалить — и только если им не пользуется другая заявка или
+    // опубликованное блюдо.
+    const previousPersisted = persistedMediaIdRef.current;
+    const nextPersisted = built.patch.imageMediaId ?? null;
+    persistedMediaIdRef.current = nextPersisted;
+    const stale = mediaIdToDeleteAfterSave(previousPersisted, nextPersisted);
+    if (stale && !isMenuMediaIdInUse(stateRef.current, stale, id)) {
+      void deleteMenuMediaBlob(stale);
     }
     return id;
   };

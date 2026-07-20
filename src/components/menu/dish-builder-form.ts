@@ -380,6 +380,39 @@ export function emptyDishBuilderFormState(): DishBuilderFormState {
   };
 }
 
+// --- Жизненный цикл Blob фотографии --------------------------------------------
+
+/**
+ * Какой Blob можно удалить ПОСЛЕ успешного сохранения заявки: прежний
+ * сохранённый media id, если сохранение заменило его другим значением (новым id
+ * или null). До успеха update ничего не удаляется — заявка продолжает
+ * ссылаться на прежнее фото, и при ошибке или уходе со страницы оно обязано
+ * остаться рабочим. Вызывающий дополнительно проверяет ссылки через
+ * isMenuMediaIdInUse.
+ */
+export function mediaIdToDeleteAfterSave(
+  previousPersistedId: string | null,
+  nextPersistedId: string | null,
+): string | null {
+  return previousPersistedId !== null && previousPersistedId !== nextPersistedId
+    ? previousPersistedId
+    : null;
+}
+
+/**
+ * Какой Blob можно удалить при уходе со страницы или замене НЕсохранённого
+ * фото: только временный id из формы, который ещё не записан в заявку.
+ * Сохранённый media id (на него ссылается заявка) не возвращается никогда.
+ */
+export function pendingMediaIdToDelete(
+  formMediaId: string | null,
+  persistedMediaId: string | null,
+): string | null {
+  return formMediaId !== null && formMediaId !== persistedMediaId
+    ? formMediaId
+    : null;
+}
+
 let variantCounter = 0;
 
 /** Новый вариант формы: первый добавленный становится основным. */

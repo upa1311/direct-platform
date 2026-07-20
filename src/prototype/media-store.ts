@@ -80,8 +80,12 @@ export function computeScaledSize(
   };
 }
 
-/** Формат стабильного media id. Только ссылка — никаких данных внутри. */
-const MEDIA_ID_PATTERN = /^media-[a-z0-9-]{8,}$/;
+/**
+ * Формат стабильного media id: только ссылка — никаких данных внутри.
+ * Отвергает data URI, base64, blob:, http(s)-URL и файловые пути (двоеточия,
+ * слэши, точки и пробелы в формат не входят).
+ */
+const MEDIA_ID_PATTERN = /^media-[a-z0-9][a-z0-9-]*$/;
 
 /** Проверка, что строка — корректный media id (а не data URI/base64/путь). */
 export function isValidMenuMediaId(value: unknown): value is string {
