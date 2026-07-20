@@ -112,6 +112,82 @@ const KNOWN_STATUSES: readonly RestaurantAccountingEntry["status"][] = [
   "SETTLED",
   "WAIVED",
 ];
+const KNOWN_TYPES: readonly RestaurantAccountingEntry["type"][] = [
+  "PLATFORM_COMMISSION",
+  "RESTAURANT_PAYOUT",
+];
+const KNOWN_SOURCES: readonly RestaurantAccountingEntry["source"][] = [
+  "ORDER_FINANCIAL_SNAPSHOT",
+  "LEGACY_COMMISSION_SETTLEMENT",
+];
+
+/**
+ * Структурная валидация записи выбранного ресторана (применяется и к
+ * открытым, и к закрытым — повреждённые данные не должны «не ломать модель»
+ * лишь потому, что запись закрыта). Возвращает русскую ошибку либо null.
+ *
+ * Контракт settledAt: OPEN — строго null; SETTLED — валидный ISO; WAIVED —
+ * существующий контракт проекта допускает ОБА варианта (admin-решение ставит
+ * ISO, мигрированный WAIVED legacy-settlement — null), поэтому null или
+ * валидный ISO.
+ */
+function validateEntryStructure(
+  entry: RestaurantAccountingEntry,
+): string | null {
+  if (!KNOWN_STATUSES.includes(entry.status)) {
+    return "Неизвестный статус бухгалтерского обязательства.";
+  }
+  if (!KNOWN_DIRECTIONS.includes(entry.direction)) {
+    return "Неизвестное направление бухгалтерского обязательства.";
+  }
+  if (!KNOWN_TYPES.includes(entry.type)) {
+    return "Неизвестный тип бухгалтерского обязательства.";
+  }
+  if (!KNOWN_SOURCES.includes(entry.source)) {
+    // Неизвестный источник НЕ считается legacy автоматически.
+    return "Неизвестный источник бухгалтерского обязательства.";
+  }
+  if (!isCents(entry.amountCents)) {
+    return "Некорректная сумма бухгалтерского обязательства.";
+  }
+  if (entry.currencyCode !== "USD") {
+    return "Некорректная валюта бухгалтерского обязательства.";
+  }
+  if (entry.status === "OPEN" && entry.settledAt !== null) {
+    return "Открытое обязательство не может иметь дату закрытия.";
+  }
+  if (entry.status === "SETTLED" && !isValidIso(entry.settledAt)) {
+    return "Закрытое обязательство без корректной даты закрытия.";
+  }
+  if (
+    entry.status === "WAIVED" &&
+    entry.settledAt !== null &&
+    !isValidIso(entry.settledAt)
+  ) {
+    return "Списанное обязательство с некорректной датой закрытия.";
+  }
+  if (entry.source === "ORDER_FINANCIAL_SNAPSHOT") {
+    if (entry.legacySettlementId !== null) {
+      return "Снимок-обязательство не может ссылаться на старое начисление.";
+    }
+  } else {
+    // LEGACY_COMMISSION_SETTLEMENT: старый ledger фиксировал ТОЛЬКО комиссию
+    // ресторана перед Direct — выплата в legacy невозможна.
+    if (
+      entry.direction !== "RESTAURANT_OWES_DIRECT" ||
+      entry.type !== "PLATFORM_COMMISSION"
+    ) {
+      return "Историческое обязательство может быть только комиссией Direct.";
+    }
+    if (
+      typeof entry.legacySettlementId !== "string" ||
+      entry.legacySettlementId.trim() === ""
+    ) {
+      return "Историческое обязательство без ссылки на старое начисление.";
+    }
+  }
+  return null;
+}
 
 /**
  * Соответствие OPEN-записи каноническому движению денег заказа:
@@ -216,9 +292,26 @@ export function buildRestaurantFinanceReadModel(
     ordersById.set(order.id, order);
   }
 
-  const entries = state.restaurantAccountingEntries.filter(
-    (entry) => entry.restaurantId === restaurantId,
-  );
+  // Ownership-фаза: запись связана с запрошенным рестораном, если несёт его
+  // restaurantId ЛИБО ссылается на его заказ. Повреждённая запись с чужим
+  // restaurantId, но заказом ресторана A (и наоборот) не имеет права молча
+  // исчезнуть из баланса A или «переехать» другому ресторану — только
+  // fail-closed. Корректные записи других ресторанов (их restaurantId и их
+  // заказы) на модель не влияют.
+  const entries: RestaurantAccountingEntry[] = [];
+  for (const entry of state.restaurantAccountingEntries) {
+    const order = ordersById.get(entry.orderId);
+    const relatedByOwner = entry.restaurantId === restaurantId;
+    const relatedByOrder =
+      order !== undefined && order.restaurant.id === restaurantId;
+    if (!relatedByOwner && !relatedByOrder) continue;
+    // Оба требования сразу: entry.restaurantId === order.restaurant.id и
+    // === запрошенному restaurantId (для связанных записей это одно условие).
+    if (order !== undefined && entry.restaurantId !== order.restaurant.id) {
+      return fail("Бухгалтерское обязательство содержит неверный ресторан.");
+    }
+    entries.push(entry);
+  }
 
   // Дубли обязательств одного заказа: read-model не имеет права молча удвоить
   // сумму — только обнаружение и явная ошибка (без удаления/объединения).
@@ -230,21 +323,20 @@ export function buildRestaurantFinanceReadModel(
     seenOrderIds.add(entry.orderId);
   }
 
+  // Структурная фаза — ДО подсчёта суммы, для всех записей ресторана.
+  for (const entry of entries) {
+    const structureError = validateEntryStructure(entry);
+    if (structureError !== null) {
+      return fail(structureError);
+    }
+  }
+
   let restaurantOwesDirectCents = 0;
   let directOwesRestaurantCents = 0;
   const openRows: RestaurantFinanceOrderRow[] = [];
   let oldestOpenRecognizedAt: string | null = null;
 
   for (const entry of entries) {
-    if (!KNOWN_STATUSES.includes(entry.status)) {
-      return fail("Неизвестный статус бухгалтерского обязательства.");
-    }
-    if (!KNOWN_DIRECTIONS.includes(entry.direction)) {
-      return fail("Неизвестное направление бухгалтерского обязательства.");
-    }
-    if (!isCents(entry.amountCents)) {
-      return fail("Некорректная сумма бухгалтерского обязательства.");
-    }
     // Закрытые обязательства открытый баланс не формируют.
     if (entry.status !== "OPEN") continue;
 
@@ -255,9 +347,6 @@ export function buildRestaurantFinanceReadModel(
     if (!order) {
       return fail("Открытое обязательство ссылается на несуществующий заказ.");
     }
-    if (order.restaurant.id !== restaurantId) {
-      return fail("Обязательство ссылается на заказ другого ресторана.");
-    }
     if (entry.source === "ORDER_FINANCIAL_SNAPSHOT") {
       if (!snapshotEntryMatchesMovement(entry, order)) {
         return fail(
@@ -266,7 +355,7 @@ export function buildRestaurantFinanceReadModel(
       }
     }
     // LEGACY_COMMISSION_SETTLEMENT: сумма историческая, по movement не
-    // пересчитывается; структура и отсутствие дубля уже проверены выше.
+    // пересчитывается; структура, ownership и отсутствие дубля уже проверены.
 
     if (entry.direction === "RESTAURANT_OWES_DIRECT") {
       restaurantOwesDirectCents += entry.amountCents;

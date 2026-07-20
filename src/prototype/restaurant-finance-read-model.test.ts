@@ -315,6 +315,226 @@ test("повреждённые записи отклоняются fail-closed",
   );
 });
 
+// Ownership: неверный ресторан в записи --------------------------------------------
+
+/** Заказ, принадлежащий произвольному ресторану. */
+function makeOrderFor(rid: string, id: string, movement: OrderMoneyMovement): Order {
+  return {
+    ...makeOrder(id, movement),
+    restaurant: { ...TEMPLATE_ORDER.restaurant, id: rid },
+  };
+}
+
+test("entry с чужим restaurantId при заказе ресторана A — ошибка, не тихий недосчёт", () => {
+  const orderA = makeOrderFor(RID, "a", moveOwesDirect(800));
+  // Повреждённая запись: заказ ресторана A, restaurantId ресторана B.
+  const corrupted = entryFor(orderA, "RESTAURANT_OWES_DIRECT", 800, {
+    restaurantId: "restaurant-2",
+  });
+  const result = buildRestaurantFinanceReadModel(
+    stateWith([orderA], [corrupted]),
+    RID,
+  );
+  // Запись НЕ исчезает молча из баланса A — модель A отказывает явно.
+  assert.equal(result.ok, false);
+  assert.ok(!result.ok && /содержит неверный ресторан/.test(result.error));
+});
+
+test("entry ресторана A с заказом ресторана B — ошибка", () => {
+  const orderB = makeOrderFor("restaurant-2", "b", moveOwesDirect(500));
+  const corrupted = entryFor(orderB, "RESTAURANT_OWES_DIRECT", 500, {
+    restaurantId: RID,
+  });
+  const result = buildRestaurantFinanceReadModel(
+    stateWith([orderB], [corrupted]),
+    RID,
+  );
+  assert.equal(result.ok, false);
+  assert.ok(!result.ok && /содержит неверный ресторан/.test(result.error));
+});
+
+test("корректная запись другого ресторана не влияет на модель A", () => {
+  const orderA = makeOrderFor(RID, "a", moveOwesDirect(800));
+  const orderB = makeOrderFor("restaurant-2", "b", moveOwesDirect(500));
+  const model = okModel(
+    stateWith(
+      [orderA, orderB],
+      [
+        entryFor(orderA, "RESTAURANT_OWES_DIRECT", 800),
+        entryFor(orderB, "RESTAURANT_OWES_DIRECT", 500, {
+          restaurantId: "restaurant-2",
+        }),
+      ],
+    ),
+  );
+  assert.equal(model.restaurantOwesDirectCents, 800);
+  assert.equal(model.openOrders.length, 1);
+  assert.equal(model.openOrders[0].orderId, "a");
+  // И модель B видит только свою запись.
+  const modelB = okModel(
+    stateWith(
+      [orderA, orderB],
+      [
+        entryFor(orderA, "RESTAURANT_OWES_DIRECT", 800),
+        entryFor(orderB, "RESTAURANT_OWES_DIRECT", 500, {
+          restaurantId: "restaurant-2",
+        }),
+      ],
+    ),
+    "restaurant-2",
+  );
+  assert.equal(modelB.restaurantOwesDirectCents, 500);
+});
+
+// Source: только известные источники ----------------------------------------------
+
+test("неизвестный source не считается legacy — ошибка", () => {
+  const a = makeOrder("a", moveOwesDirect(800));
+  const result = buildRestaurantFinanceReadModel(
+    stateWith([a], [
+      entryFor(a, "RESTAURANT_OWES_DIRECT", 800, {
+        source: "MANUAL_IMPORT" as RestaurantAccountingEntry["source"],
+      }),
+    ]),
+    RID,
+  );
+  assert.equal(result.ok, false);
+  assert.ok(!result.ok && /Неизвестный источник/.test(result.error));
+});
+
+test("snapshot entry с ненулевым legacySettlementId — ошибка", () => {
+  const a = makeOrder("a", moveOwesDirect(800));
+  const result = buildRestaurantFinanceReadModel(
+    stateWith([a], [
+      entryFor(a, "RESTAURANT_OWES_DIRECT", 800, {
+        legacySettlementId: "settlement-a",
+      }),
+    ]),
+    RID,
+  );
+  assert.equal(result.ok, false);
+  assert.ok(!result.ok && /не может ссылаться на старое начисление/.test(result.error));
+});
+
+test("legacy entry: только комиссия ресторана перед Direct", () => {
+  const a = makeOrder("a", moveOwesRestaurant(500), "COMPLETE");
+  // Выплата с legacy-источником невозможна: старый ledger фиксировал только
+  // комиссию (direction и type проверяются по отдельности).
+  const wrongDirection = buildRestaurantFinanceReadModel(
+    stateWith([a], [
+      entryFor(a, "DIRECT_OWES_RESTAURANT", 500, {
+        source: "LEGACY_COMMISSION_SETTLEMENT",
+        legacySettlementId: "settlement-a",
+      }),
+    ]),
+    RID,
+  );
+  assert.equal(wrongDirection.ok, false);
+  assert.ok(
+    !wrongDirection.ok && /только комиссией Direct/.test(wrongDirection.error),
+  );
+
+  const b = makeOrder("b", moveOwesDirect(700));
+  const wrongType = buildRestaurantFinanceReadModel(
+    stateWith([b], [
+      entryFor(b, "RESTAURANT_OWES_DIRECT", 700, {
+        type: "RESTAURANT_PAYOUT",
+        source: "LEGACY_COMMISSION_SETTLEMENT",
+        legacySettlementId: "settlement-b",
+      }),
+    ]),
+    RID,
+  );
+  assert.equal(wrongType.ok, false);
+
+  // Без ссылки на старое начисление и с пустой ссылкой — ошибка.
+  for (const legacySettlementId of [null, "   "]) {
+    const result = buildRestaurantFinanceReadModel(
+      stateWith([b], [
+        entryFor(b, "RESTAURANT_OWES_DIRECT", 700, {
+          source: "LEGACY_COMMISSION_SETTLEMENT",
+          legacySettlementId,
+        }),
+      ]),
+      RID,
+    );
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok && /без ссылки на старое начисление/.test(result.error));
+  }
+});
+
+test("валюта не USD отклоняется для legacy и snapshot записей", () => {
+  const a = makeOrder("a", moveOwesDirect(800));
+  for (const source of [
+    "ORDER_FINANCIAL_SNAPSHOT",
+    "LEGACY_COMMISSION_SETTLEMENT",
+  ] as const) {
+    const result = buildRestaurantFinanceReadModel(
+      stateWith([a], [
+        entryFor(a, "RESTAURANT_OWES_DIRECT", 800, {
+          source,
+          legacySettlementId:
+            source === "LEGACY_COMMISSION_SETTLEMENT" ? "settlement-a" : null,
+          currencyCode: "EUR" as RestaurantAccountingEntry["currencyCode"],
+        }),
+      ]),
+      RID,
+    );
+    assert.equal(result.ok, false, source);
+    assert.ok(!result.ok && /валюта/.test(result.error), source);
+  }
+});
+
+test("контракт settledAt: OPEN — null; SETTLED — ISO; WAIVED — null или ISO", () => {
+  const a = makeOrder("a", moveOwesDirect(800));
+  // OPEN с датой закрытия — повреждение.
+  assert.equal(
+    buildRestaurantFinanceReadModel(
+      stateWith([a], [entryFor(a, "RESTAURANT_OWES_DIRECT", 800, { settledAt: T2 })]),
+      RID,
+    ).ok,
+    false,
+  );
+  // SETTLED без даты — повреждение.
+  assert.equal(
+    buildRestaurantFinanceReadModel(
+      stateWith([a], [
+        entryFor(a, "RESTAURANT_OWES_DIRECT", 800, { status: "SETTLED", settledAt: null }),
+      ]),
+      RID,
+    ).ok,
+    false,
+  );
+  // WAIVED: существующий контракт проекта допускает оба варианта — ISO
+  // (админ-решение) и null (мигрированный WAIVED legacy-settlement).
+  for (const settledAt of [T2, null]) {
+    const model = okModel(
+      stateWith([a], [
+        entryFor(a, "RESTAURANT_OWES_DIRECT", 800, { status: "WAIVED", settledAt }),
+      ]),
+    );
+    assert.equal(model.restaurantOwesDirectCents, 0);
+  }
+});
+
+test("корректная legacy-комиссия входит в баланс без пересчёта", () => {
+  const order = makeOrder("lg2", null, "REVIEW_REQUIRED");
+  const model = okModel(
+    stateWith(
+      [order],
+      [
+        entryFor(order, "RESTAURANT_OWES_DIRECT", 555, {
+          source: "LEGACY_COMMISSION_SETTLEMENT",
+          legacySettlementId: "settlement-lg2",
+        }),
+      ],
+    ),
+  );
+  assert.equal(model.restaurantOwesDirectCents, 555);
+  assert.equal(model.openOrders[0].totalBankFeeCents, null);
+  assert.equal(model.openOrders[0].paymentChannel, "LEGACY_UNKNOWN");
+});
+
 // 11/12 — современный самовывоз (реальный поток) ---------------------------------
 
 function readyPickup(): { state: PrototypeState; orderId: string } {
