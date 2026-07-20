@@ -361,6 +361,120 @@ test("нулевое движение не создаёт запись; конф
   assert.equal(sameRes.entries.length, 0);
 });
 
+// 6.2 — уже существующие дубли записей одного заказа ----------------------------
+
+test("дубли существующих записей одного заказа — всегда fail-closed", () => {
+  const order = completed("dup2", "PICKUP", RESTAURANT_COLLECTED, "PICKED_UP");
+  const canonical = computeCompletedOrderAccounting(order, []);
+  assert.equal(canonical.ok, true);
+  const canonicalEntry = canonical.entries[0];
+
+  // Две полностью одинаковые записи (включая id) — НЕ успешная идемпотентность.
+  const identical = computeCompletedOrderAccounting(order, [
+    canonicalEntry,
+    { ...canonicalEntry },
+  ]);
+  assert.equal(identical.ok, false);
+  assert.ok(/несколько бухгалтерских обязательств/.test(identical.error ?? ""));
+  assert.equal(identical.entries.length, 0);
+
+  // Та же сумма, разные id.
+  const differentIds = computeCompletedOrderAccounting(order, [
+    canonicalEntry,
+    { ...canonicalEntry, id: "accounting-dup2-copy" },
+  ]);
+  assert.equal(differentIds.ok, false);
+
+  // Разные источники: snapshot + мигрированный legacy того же заказа.
+  const mixedSources = computeCompletedOrderAccounting(order, [
+    canonicalEntry,
+    {
+      ...canonicalEntry,
+      id: "accounting-legacy-settlement-dup2",
+      source: "LEGACY_COMMISSION_SETTLEMENT",
+      legacySettlementId: "settlement-dup2",
+    },
+  ]);
+  assert.equal(mixedSources.ok, false);
+
+  // Две противоречащие записи.
+  const contradicting = computeCompletedOrderAccounting(order, [
+    canonicalEntry,
+    {
+      ...canonicalEntry,
+      id: "accounting-dup2-other",
+      direction: "DIRECT_OWES_RESTAURANT",
+      type: "RESTAURANT_PAYOUT",
+      amountCents: 4200,
+    },
+  ]);
+  assert.equal(contradicting.ok, false);
+});
+
+test("recognition при дублях: исходный state тем же объектом, баланс не растёт", () => {
+  const order = completed("dup3", "PICKUP", RESTAURANT_COLLECTED, "PICKED_UP");
+  const canonical = computeCompletedOrderAccounting(order, []);
+  assert.equal(canonical.ok, true);
+  const duplicated = [
+    canonical.entries[0],
+    { ...canonical.entries[0], id: "accounting-dup3-copy" },
+  ];
+  const st = stateWith([order], [], duplicated);
+  const receivableBefore = getRestaurantOpenReceivableCents(st, RESTAURANT_ID);
+
+  const res = recognizeCompletedOrderAccounting(st, "dup3", "2026-07-17T12:00:00.000Z");
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.recognizedCount, 0);
+  assert.ok(/несколько бухгалтерских обязательств/.test(res.result.error ?? ""));
+  // Исходный state тем же объектом: revision, orders, settlements и записи
+  // не изменены — open balance helpers не получают новые дубли.
+  assert.equal(res.state, st);
+  assert.equal(res.state.revision, st.revision);
+  assert.equal(res.state.orders, st.orders);
+  assert.equal(res.state.settlements, st.settlements);
+  assert.equal(res.state.restaurantAccountingEntries, st.restaurantAccountingEntries);
+  assert.equal(res.state.restaurantAccountingEntries.length, 2);
+  assert.equal(
+    getRestaurantOpenReceivableCents(res.state, RESTAURANT_ID),
+    receivableBefore,
+  );
+});
+
+test("ровно одна запись: legacy-source с совпадающей суммой — no-op, расхождения — ошибка", () => {
+  const order = completed("dup4", "PICKUP", RESTAURANT_COLLECTED, "PICKED_UP");
+  const canonical = computeCompletedOrderAccounting(order, []);
+  assert.equal(canonical.ok, true);
+  const canonicalEntry = canonical.entries[0];
+
+  // Мигрированный legacy с теми же идентифицирующими полями и суммой —
+  // идемпотентный no-op (source не входит в identity обязательства).
+  const legacyMatch = computeCompletedOrderAccounting(order, [
+    {
+      ...canonicalEntry,
+      id: "accounting-legacy-settlement-dup4",
+      source: "LEGACY_COMMISSION_SETTLEMENT",
+      legacySettlementId: "settlement-dup4",
+    },
+  ]);
+  assert.equal(legacyMatch.ok, true);
+  assert.equal(legacyMatch.entries.length, 0);
+
+  // Другое направление/тип — fail-closed.
+  const wrongKind = computeCompletedOrderAccounting(order, [
+    {
+      ...canonicalEntry,
+      direction: "DIRECT_OWES_RESTAURANT",
+      type: "RESTAURANT_PAYOUT",
+    },
+  ]);
+  assert.equal(wrongKind.ok, false);
+  assert.ok(/противоречит/.test(wrongKind.error ?? ""));
+
+  // Ноль существующих записей → создаётся ровно одна каноническая.
+  assert.equal(canonical.entries.length, 1);
+  assert.equal(canonicalEntry.amountCents, 800);
+});
+
 // 7 --------------------------------------------------------------------------
 
 test("PREPARING/READY/CANCELED не создают записей", () => {

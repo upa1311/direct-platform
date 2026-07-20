@@ -127,18 +127,28 @@ export function computeCompletedOrderAccounting(
   }
 
   // Один обычный заказ — максимум одна accounting entry. Существующие записи
-  // заказа: полное совпадение с каноном — идемпотентный no-op; любое
-  // противоречие — fail-closed без «тихого ремонта».
+  // заказа: РОВНО одна, полностью совпадающая с каноном, — идемпотентный
+  // no-op; любое противоречие — fail-closed без «тихого ремонта». Две и более
+  // записей — всегда fail-closed, даже полностью одинаковые: дубли уже дважды
+  // вошли бы в баланс, и «успешная идемпотентность» их бы узаконила. Дубли не
+  // удаляются, не объединяются и не закрываются автоматически — только
+  // обнаружение.
   const existingForOrder = existingEntries.filter(
     (entry) => entry.orderId === order.id,
   );
-  if (existingForOrder.length > 0) {
-    const matches = existingForOrder.every(
-      (entry) =>
-        entry.type === type &&
-        entry.direction === direction &&
-        entry.amountCents === amountCents,
-    );
+  if (existingForOrder.length > 1) {
+    return fail("У заказа обнаружено несколько бухгалтерских обязательств.");
+  }
+  if (existingForOrder.length === 1) {
+    const existing = existingForOrder[0];
+    // source может быть и snapshot, и мигрированным legacy — идентифицирующие
+    // поля и сумма обязаны совпасть с каноническим обязательством.
+    const matches =
+      existing.type === type &&
+      existing.direction === direction &&
+      existing.amountCents === amountCents &&
+      existing.restaurantId === order.restaurant.id &&
+      existing.currencyCode === fin.currencyCode;
     return matches
       ? ok([])
       : fail(
