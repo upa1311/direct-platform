@@ -109,7 +109,12 @@ function RepeatOrderButton({ order }: { order: Order }) {
   );
 }
 
-/** Компактная бесплатная отмена (RESTAURANT_REVIEW / AWAITING_PAYMENT), §6–7. */
+/**
+ * Компактная бесплатная отмена (§6–7): до принятия/оплаты, а также принятый в
+ * SPLIT, но не начатый кухней НЕоплаченный заказ. Право решает домен по
+ * актуальному Order (getClientCancellationMode): если кухня успела начать до
+ * отправки формы, action вернёт ошибку — кнопка не авторитетна.
+ */
 function DirectCancel({ order }: { order: Order }) {
   const { cancelClientOrder } = usePrototype();
   const [open, setOpen] = useState(false);
@@ -209,7 +214,10 @@ function DirectCancel({ order }: { order: Order }) {
   );
 }
 
-/** Запрос на отмену после начала приготовления (§8, §10, §13). */
+/**
+ * Запрос на отмену (§8, §10, §13): после фактического старта кухни, а до него —
+ * для оплаченного ONLINE (нужен контур возврата, решение за Direct).
+ */
 function RequestCancellation({ order }: { order: Order }) {
   const { state, requestCancellation } = usePrototype();
   const request = getCancellationRequestForOrder(state, order.id);

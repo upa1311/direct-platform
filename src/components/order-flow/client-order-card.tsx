@@ -10,8 +10,8 @@ import {
   formatMoney,
   formatOrderEtaClock,
   getClientAutoCancelMessage,
+  getClientOrderStatusLabel,
   hasActiveEtaUpdate,
-  orderStatusLabels,
 } from "@/prototype/selectors";
 import { ClientOrderActions } from "./client-order-actions";
 import { getBriefOrderComposition } from "./order-composition";
@@ -46,7 +46,7 @@ export function ClientOrderCard({
           <p>{order.restaurant.name}</p>
         </div>
         <span className={styles.statusBadge}>
-          {orderStatusLabels[order.status]}
+          {getClientOrderStatusLabel(order)}
         </span>
       </div>
       <dl className={styles.summaryList}>

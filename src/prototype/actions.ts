@@ -54,8 +54,10 @@ import {
   canPlacePrototypeOrder,
   computeNextOpeningIso,
   detectZoneId,
+  CLIENT_PAID_AWAITING_KITCHEN_CANCEL_TEXT,
   getCartDeliveryMode,
   getCartItemViews,
+  getClientCancellationMode,
   getOpenPreparationProblem,
   getRestaurant,
   isActiveOrderStatus,
@@ -705,6 +707,14 @@ function isValidPreparationMinutes(value: number | null): value is number {
 }
 
 /**
+ * Текст STATUS-события перехода в PREPARING, когда кухня ещё НЕ начала готовить
+ * (SPLIT: kitchenStartedAt null). Не «в приготовление» — приготовление ещё не
+ * идёт, начало зафиксирует отдельное событие KITCHEN_START.
+ */
+export const PRE_KITCHEN_PREPARING_HISTORY_MESSAGE =
+  "Заказ принят рестораном и передан кухне. Ожидается начало приготовления.";
+
+/**
  * Значение kitchenStartedAt в момент перехода заказа в PREPARING. В COMBINED
  * подтверждения кухни нет — начало ставится автоматически (now). В SPLIT
  * начало ставит только кухня действием «Начать готовить», поэтому здесь null.
@@ -889,6 +899,15 @@ export function acceptRestaurantOrderWithResult(
     const expectedReadyAt = kitchenStartedAt
       ? expectedReadyAtFrom(now, preparationMinutes)
       : null;
+    // SPLIT: кухня ещё не начала (kitchenStartedAt null), поэтому история не
+    // утверждает, что приготовление идёт — только передачу кухне. Фактическое
+    // начало фиксирует отдельное событие KITCHEN_START после клика кухни.
+    const message =
+      kitchenStartedAt === null
+        ? PRE_KITCHEN_PREPARING_HISTORY_MESSAGE
+        : isCourierCash
+          ? `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Оплата наличными курьеру ресторана при получении.`
+          : `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Оплата в ресторане при получении.`;
     const nextState = replaceOrder(
       state,
       orderId,
@@ -908,9 +927,7 @@ export function acceptRestaurantOrderWithResult(
             type: "STATUS",
             fromStatus: "RESTAURANT_REVIEW",
             toStatus: "PREPARING",
-            message: isCourierCash
-              ? `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Оплата наличными курьеру ресторана при получении.`
-              : `${acceptedBy}. Время приготовления — ${preparationMinutes} минут. Оплата в ресторане при получении.`,
+            message,
             restaurantWorkspaceRole: workspace,
           },
         ],
@@ -1084,12 +1101,16 @@ export interface ClientCancelResult {
 }
 
 /**
- * Клиентская отмена заказа (§10–14). Разрешена ТОЛЬКО пока ресторан ещё не
- * принял заказ (status === RESTAURANT_REVIEW). Проверка статуса выполняется в
- * самом action — защита от гонки, даже если UI успел показать кнопку. Причина
- * обязательна, actor = CLIENT. Не меняет financial snapshot, цены, корзину,
- * settlements; settlement НЕ создаётся. Повторный вызов после отмены вернёт
- * ошибку (статус уже CANCELED) — второе событие не добавляется.
+ * Клиентская отмена заказа (§10–14). Разрешена, пока отмена не требует возврата
+ * денег и кухня фактически не начала готовить: RESTAURANT_REVIEW,
+ * AWAITING_PAYMENT, а также принятый в SPLIT, но не начатый кухней НЕоплаченный
+ * заказ (PREPARING + kitchenStartedAt null + оплата на месте). Семантика — общая
+ * с UI (getClientCancellationMode), но проверяется здесь по АКТУАЛЬНОМУ Order —
+ * защита от гонки, даже если UI успел показать кнопку (кухня могла нажать
+ * «Начать готовить» после отрисовки формы). Причина обязательна, actor = CLIENT.
+ * Не меняет financial snapshot, цены, корзину, settlements, accounting;
+ * settlement НЕ создаётся. Повторный вызов после отмены вернёт ошибку (статус
+ * уже CANCELED) — второе событие не добавляется.
  */
 export function cancelOrderByClient(
   state: PrototypeState,
@@ -1104,12 +1125,16 @@ export function cancelOrderByClient(
   if (!order) {
     return fail("Заказ не найден.");
   }
-  // §6: бесплатная самостоятельная отмена — до начала приготовления, т.е.
-  // RESTAURANT_REVIEW или AWAITING_PAYMENT (онлайн-заказ ещё не оплачен).
-  if (
-    order.status !== "RESTAURANT_REVIEW" &&
-    order.status !== "AWAITING_PAYMENT"
-  ) {
+  const cancellationMode = getClientCancellationMode(order);
+  if (cancellationMode !== "DIRECT_CANCEL") {
+    // Оплаченный ONLINE до старта кухни: приготовление ещё НЕ началось, поэтому
+    // текст не утверждает обратного — нужен контур возврата через Direct.
+    if (order.status === "PREPARING" && order.kitchenStartedAt === null) {
+      return fail(CLIENT_PAID_AWAITING_KITCHEN_CANCEL_TEXT);
+    }
+    if (cancellationMode === "UNAVAILABLE") {
+      return fail("Заказ уже завершён. Отмена недоступна.");
+    }
     return fail(
       "Ресторан уже начал готовить заказ. Самостоятельная отмена недоступна. Отправьте запрос на отмену.",
     );
@@ -1786,7 +1811,12 @@ export function simulateSuccessfulOnlinePaymentWithResult(
           type: "STATUS",
           fromStatus: "AWAITING_PAYMENT",
           toStatus: "PREPARING",
-          message: "Заказ передан ресторану в приготовление.",
+          // SPLIT (kitchenStartedAt null): кухня ещё не начала — история не
+          // утверждает, что приготовление идёт. COMBINED сохраняет прежний текст.
+          message:
+            kitchenStartedAt === null
+              ? PRE_KITCHEN_PREPARING_HISTORY_MESSAGE
+              : "Заказ передан ресторану в приготовление.",
         },
       ],
     }),
@@ -1904,10 +1934,12 @@ export function markOrderReady(
 
 /**
  * Кухня подтверждает фактическое начало приготовления (только SPLIT). Ставит
- * kitchenStartedAt = now и добавляет отдельное событие истории KITCHEN_START —
- * НЕ same-status STATUS-событие (его можно спутать с запросом на отмену). Меняет
- * ТОЛЬКО kitchenStartedAt/updatedAt/history: статус остаётся PREPARING,
- * preparationMinutes, expectedReadyAt, оплата, financial snapshot, водитель и
+ * kitchenStartedAt = now, пересчитывает expectedReadyAt = now +
+ * preparationMinutes (отсчёт идёт от клика кухни, а не от принятия оператором)
+ * и добавляет отдельное событие истории KITCHEN_START — НЕ same-status
+ * STATUS-событие (его можно спутать с запросом на отмену). Меняет ТОЛЬКО
+ * kitchenStartedAt/expectedReadyAt/updatedAt/history: статус остаётся
+ * PREPARING, preparationMinutes, оплата, financial snapshot, водитель и
  * settlements не трогаются. Все проверки — до мутации; при ошибке возвращает
  * исходный state тем же объектом. Повторный вызов (kitchenStartedAt уже задан)
  * возвращает понятную ошибку без второй мутации и второго события.

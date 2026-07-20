@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
   getActiveCustomerOrder,
-  orderStatusLabels,
+  getClientOrderStatusLabel,
 } from "@/prototype/selectors";
 import styles from "@/components/workspaces/workspace-shell.module.css";
 
@@ -24,7 +24,7 @@ export function ActiveOrderStrip() {
       <div className={styles.activeOrderStripInner}>
         <div>
           <strong>Активный заказ {order.publicNumber}</strong>
-          <span>{orderStatusLabels[order.status]}</span>
+          <span>{getClientOrderStatusLabel(order)}</span>
         </div>
         {pathname === `/client/orders/${order.id}` ? (
           <span className={styles.activeOrderCurrent}>Заказ открыт</span>

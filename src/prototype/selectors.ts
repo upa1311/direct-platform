@@ -1374,6 +1374,19 @@ export const CLIENT_AWAITING_KITCHEN_START_TEXT =
   "Ресторан принял заказ. Ожидаем начала приготовления.";
 
 /**
+ * Клиентская подпись текущего статуса заказа. Пока кухня не подтвердила начало
+ * (PREPARING + kitchenStartedAt === null, встречается только в SPLIT), клиенту
+ * показывается «Принят рестораном», а не «Готовится»: приготовление ещё не идёт.
+ * Все остальные статусы используют общий orderStatusLabels. Подписи кухни,
+ * оператора и админки этот helper не меняет.
+ */
+export function getClientOrderStatusLabel(order: Order): string {
+  return isAwaitingKitchenStart(order)
+    ? "Принят рестораном"
+    : orderStatusLabels[order.status];
+}
+
+/**
  * Показывать ли клиенту нейтральное уведомление об обновлённом времени
  * готовности (§10). Только для активного PREPARING с хотя бы одной
  * корректировкой; для READY/завершённых — не показываем как активное. Пока
@@ -1422,22 +1435,68 @@ export function formatOrderEtaInRestaurantZone(
   }).format(new Date(iso));
 }
 
-/** Может ли клиент бесплатно и сразу отменить заказ (§6): до приготовления. */
-export function canClientCancelDirectly(order: Order): boolean {
-  return (
-    order.status === "RESTAURANT_REVIEW" || order.status === "AWAITING_PAYMENT"
-  );
+/** Режим клиентской отмены: прямая, через запрос в Direct либо недоступна. */
+export type ClientCancellationMode =
+  | "DIRECT_CANCEL"
+  | "REQUEST_CANCEL"
+  | "UNAVAILABLE";
+
+/**
+ * Заказ фактически НЕ оплачен, возврат денег при отмене не потребуется. Только
+ * для способов оплаты на месте: соответствие paymentMethod и paymentStatus
+ * проверяется явно, любое несовпадение (в т.ч. повреждённое состояние или уже
+ * полученная оплата) трактуется как «оплачен» — fail-closed.
+ */
+function isUnpaidOnSitePayment(order: Order): boolean {
+  if (order.paidAt !== null) return false;
+  if (order.paymentMethod === "PAY_AT_RESTAURANT") {
+    return order.paymentStatus === "DUE_AT_PICKUP";
+  }
+  if (order.paymentMethod === "CASH_TO_RESTAURANT_COURIER") {
+    return order.paymentStatus === "DUE_TO_RESTAURANT_COURIER";
+  }
+  return false;
 }
 
-/** Может ли клиент отправить ЗАПРОС на отмену (§10): активное приготовление/доставка. */
-export function canClientRequestCancellation(order: Order): boolean {
-  return (
-    order.status === "PREPARING" ||
+/**
+ * Единая семантика клиентской отмены для UI и домена (домен авторитетен —
+ * action перечитывает актуальный Order). DIRECT_CANCEL — до принятия/оплаты,
+ * а также принятый, но не начатый кухней НЕоплаченный заказ (PREPARING +
+ * kitchenStartedAt null, только SPLIT): возврат денег не нужен. Оплаченный
+ * ONLINE до старта кухни и всё после фактического старта — REQUEST_CANCEL
+ * (решение и возврат за Direct). Терминальные статусы — UNAVAILABLE.
+ */
+export function getClientCancellationMode(order: Order): ClientCancellationMode {
+  if (
+    order.status === "RESTAURANT_REVIEW" ||
+    order.status === "AWAITING_PAYMENT"
+  ) {
+    return "DIRECT_CANCEL";
+  }
+  if (order.status === "PREPARING") {
+    return isAwaitingKitchenStart(order) && isUnpaidOnSitePayment(order)
+      ? "DIRECT_CANCEL"
+      : "REQUEST_CANCEL";
+  }
+  if (
     order.status === "READY" ||
     order.status === "READY_FOR_PICKUP" ||
     order.status === "OUT_FOR_DELIVERY" ||
     order.status === "ARRIVING"
-  );
+  ) {
+    return "REQUEST_CANCEL";
+  }
+  return "UNAVAILABLE";
+}
+
+/** Может ли клиент бесплатно и сразу отменить заказ (§6). */
+export function canClientCancelDirectly(order: Order): boolean {
+  return getClientCancellationMode(order) === "DIRECT_CANCEL";
+}
+
+/** Может ли клиент отправить ЗАПРОС на отмену (§10): активное приготовление/доставка. */
+export function canClientRequestCancellation(order: Order): boolean {
+  return getClientCancellationMode(order) === "REQUEST_CANCEL";
 }
 
 /** Запрос на отмену для заказа, либо null. */
@@ -1467,8 +1526,17 @@ export function getPendingCancellationRequestsForRestaurant(
   );
 }
 
-/** Крупное предупреждение после начала приготовления (§8), по способу оплаты. */
+/** Текст для оплаченного ONLINE заказа, который кухня ещё не начала готовить. */
+export const CLIENT_PAID_AWAITING_KITCHEN_CANCEL_TEXT =
+  "Ресторан принял заказ, но кухня ещё не начала приготовление. Отправьте запрос на отмену — решение и возврат оплаты обработает Direct.";
+
+/** Крупное предупреждение перед запросом на отмену (§8), по состоянию заказа. */
 export function getPostPreparationWarning(order: Order): string {
+  // До фактического старта кухни нельзя утверждать, что ресторан «уже готовит»:
+  // сюда доходит только оплаченный ONLINE (неоплаченные отменяются напрямую).
+  if (isAwaitingKitchenStart(order)) {
+    return CLIENT_PAID_AWAITING_KITCHEN_CANCEL_TEXT;
+  }
   if (order.paymentMethod === "CASH_TO_RESTAURANT_COURIER") {
     return "Ресторан уже начал готовить заказ. Для отмены отправьте запрос администратору Direct. Если приготовленный заказ не будет получен, это сохранится в истории и может ограничить будущие заказы без предоплаты.";
   }

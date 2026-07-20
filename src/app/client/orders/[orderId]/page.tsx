@@ -16,11 +16,11 @@ import {
   formatMoney,
   formatOrderEtaClock,
   getClientAutoCancelMessage,
+  getClientOrderStatusLabel,
   getDeliveryModeProviderLabel,
   getOrder,
   hasActiveEtaUpdate,
   isAwaitingKitchenStart,
-  orderStatusLabels,
   paymentMethodLabels,
   paymentStatusLabels,
   pickupPaymentMethodLabels,
@@ -124,7 +124,7 @@ export default function ClientOrderPage() {
       <PageHeading
         eyebrow="Клиент"
         title={`Заказ ${order.publicNumber}`}
-        description={`${order.restaurant.name} · ${orderStatusLabels[order.status]}`}
+        description={`${order.restaurant.name} · ${getClientOrderStatusLabel(order)}`}
       />
       <div
         className={`${flowStyles.panelStack} ${flowStyles.orderDetailStack}`}
