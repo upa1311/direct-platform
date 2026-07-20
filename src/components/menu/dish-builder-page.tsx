@@ -1,6 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
+import { useEffect } from "react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import {
@@ -9,6 +10,7 @@ import {
 } from "@/components/menu/restaurant-dish-builder";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { resolveDishBuilderRole } from "@/components/menu/dish-builder-form";
+import { rememberMenuWorkspaceRole } from "@/components/menu/menu-workspace-context";
 import type { Restaurant, RestaurantWorkspaceRole } from "@/prototype/models";
 import { usePrototype } from "@/prototype/prototype-provider";
 import { getRestaurant } from "@/prototype/selectors";
@@ -41,6 +43,15 @@ export function DishBuilderPageShell({
         searchParams.get("role"),
       )
     : null;
+
+  // Контекст сохраняется и со страниц конструктора: последующий переход в
+  // «Меню и доступность» остаётся в том же рабочем экране. Только после
+  // hydration — до неё режим ресторана ещё дефолтный и роль недостоверна.
+  useEffect(() => {
+    if (isHydrated && workspaceRole) {
+      rememberMenuWorkspaceRole(workspaceRole);
+    }
+  }, [isHydrated, workspaceRole]);
 
   return (
     <DishBuilderScreen>

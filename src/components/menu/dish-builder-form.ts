@@ -37,6 +37,28 @@ export function resolveDishBuilderRole(
 }
 
 /**
+ * Роль полноэкранной страницы «Меню и доступность». В COMBINED — всегда
+ * COMBINED. В SPLIT страницу открывают И оператор, И кухня, поэтому роль
+ * берётся из навигационного контекста: сперва валидируемый query-параметр,
+ * затем session-подсказка рабочего экрана, с которого пришёл пользователь.
+ * Оператор НЕ превращается молча в KITCHEN: без валидного контекста — null,
+ * страница fail-closed с понятным сообщением. Домен всё равно повторно
+ * проверяет MANAGE_MENU_CATALOG на каждом действии.
+ */
+export function resolveMenuPageRole(
+  mode: RestaurantOrderWorkflowMode,
+  queryRole: unknown,
+  sessionHint: unknown,
+): RestaurantWorkspaceRole | null {
+  if (mode === "COMBINED") return "COMBINED";
+  if (queryRole === "OPERATOR" || queryRole === "KITCHEN") return queryRole;
+  if (sessionHint === "OPERATOR" || sessionHint === "KITCHEN") {
+    return sessionHint;
+  }
+  return null;
+}
+
+/**
  * Возврат «← Назад к меню»: каждый попадает в СВОЙ рабочий кабинет (оператор —
  * к оператору, кухня — на кухню, COMBINED — на общий экран заказов). Хеш #menu
  * автоматически раскрывает панель «Меню и доступность».

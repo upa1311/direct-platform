@@ -30,6 +30,7 @@ import {
   RestaurantPauseControl,
 } from "@/components/kitchen/kitchen-operations";
 import { RestaurantMenuAvailabilityPanel } from "@/components/kitchen/restaurant-menu-availability-panel";
+import { rememberMenuWorkspaceRole } from "@/components/menu/menu-workspace-context";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { usePrototype } from "@/prototype/prototype-provider";
@@ -1163,6 +1164,14 @@ export default function RestaurantKitchenPage() {
   const restaurant = getRestaurant(state, selectedRestaurantId);
   // Этап 8: в SPLIT кухня не видит приватные данные и не выполняет выдачу.
   const isSplit = restaurant?.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN";
+
+  // Навигационный контекст раздела меню: с этого экрана роль KITCHEN
+  // (в SPLIT) либо COMBINED — реальный рабочий экран сохраняется при переходе.
+  useEffect(() => {
+    if (isHydrated && restaurant) {
+      rememberMenuWorkspaceRole(isSplit ? "KITCHEN" : "COMBINED");
+    }
+  }, [isHydrated, restaurant, isSplit]);
   // В SPLIT селектор возвращает пусто: решение по новому заказу — у оператора,
   // непринятый заказ до кухни не доходит ни карточкой, ни звуком, ни таймером.
   const newOrders = getKitchenNewOrders(state, selectedRestaurantId);

@@ -24,6 +24,7 @@ import { useOperatorOrderReadySound } from "@/components/operator/use-operator-o
 import { canPrintOperatorProductionTicket } from "@/components/operator/operator-production-print";
 import { SOUND_ACTIVATION_MESSAGE } from "@/components/kitchen/sound-preference";
 import { RestaurantMenuAvailabilityPanel } from "@/components/kitchen/restaurant-menu-availability-panel";
+import { rememberMenuWorkspaceRole } from "@/components/menu/menu-workspace-context";
 import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
@@ -853,6 +854,14 @@ export default function RestaurantOperatorPage() {
   // прямой URL оператора переводится на него. В SPLIT экран остаётся доступен.
   const isCombined =
     isHydrated && restaurant?.orderWorkflowMode !== "SPLIT_OPERATOR_KITCHEN";
+
+  // Навигационный контекст раздела меню: переход с этого экрана сохраняет
+  // роль OPERATOR (оператор не превращается молча в KITCHEN).
+  useEffect(() => {
+    if (isHydrated && !isCombined) {
+      rememberMenuWorkspaceRole("OPERATOR");
+    }
+  }, [isHydrated, isCombined]);
   useEffect(() => {
     if (isCombined) {
       router.replace("/restaurant/kitchen");

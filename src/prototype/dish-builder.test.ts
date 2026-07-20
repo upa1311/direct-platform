@@ -16,6 +16,7 @@ import {
   parseVariantRows,
   pendingMediaIdToDelete,
   resolveDishBuilderRole,
+  resolveMenuPageRole,
   type DishVariantFormRow,
 } from "../components/menu/dish-builder-form.ts";
 import {
@@ -71,6 +72,10 @@ const MEDIA_IMAGE_SOURCE = readSource(
 );
 const KITCHEN_PAGE_SOURCE = readSource("../app/restaurant/kitchen/page.tsx");
 const OPERATOR_PAGE_SOURCE = readSource("../app/restaurant/operator/page.tsx");
+const MENU_PAGE_SOURCE = readSource("../app/restaurant/menu/page.tsx");
+const ACTIONS_SOURCE = readSource(
+  "../components/menu/restaurant-menu-catalog-actions.tsx",
+);
 
 // 1–5 — точка входа в панели «Меню и доступность» -------------------------------
 
@@ -91,11 +96,89 @@ test("Plus не переключает <details>: preventDefault + stopPropagati
   assert.ok(PANEL_SOURCE.includes("dishBuilderNewHref(workspaceRole)"));
 });
 
-test("раскрытая панель содержит «Добавить новое блюдо» и «Мои заявки»", () => {
-  assert.ok(PANEL_SOURCE.includes(">Добавить новое блюдо<") ||
-    PANEL_SOURCE.includes("Добавить новое блюдо\n"));
-  assert.ok(PANEL_SOURCE.includes("Мои заявки"));
-  assert.ok(PANEL_SOURCE.includes("dishSubmissionsHref(workspaceRole)"));
+test("раскрытая панель содержит общие действия каталога", () => {
+  // Разметка действий не дублируется: единственный источник — общий компонент
+  // RestaurantMenuCatalogActions с обеими ссылками и реальной ролью.
+  assert.ok(PANEL_SOURCE.includes("<RestaurantMenuCatalogActions"));
+  assert.ok(PANEL_SOURCE.includes('variant="COMPACT"'));
+  assert.ok(ACTIONS_SOURCE.includes("Добавить новое блюдо"));
+  assert.ok(ACTIONS_SOURCE.includes("Мои заявки"));
+  assert.ok(ACTIONS_SOURCE.includes("dishBuilderNewHref(workspaceRole)"));
+  assert.ok(ACTIONS_SOURCE.includes("dishSubmissionsHref(workspaceRole)"));
+});
+
+// --- Полноэкранная страница «Меню и доступность» --------------------------------
+
+test("страница меню: «Добавить новое блюдо» и «Мои заявки» видны сразу", () => {
+  assert.ok(MENU_PAGE_SOURCE.includes("<RestaurantMenuCatalogActions"));
+  assert.ok(MENU_PAGE_SOURCE.includes('variant="PAGE"'));
+  // Действия размещены ДО MenuAvailabilitySection — видны без прокрутки и
+  // раскрытия панелей.
+  const actionsIndex = MENU_PAGE_SOURCE.indexOf(
+    "<RestaurantMenuCatalogActions",
+  );
+  const sectionIndex = MENU_PAGE_SOURCE.indexOf("<MenuAvailabilitySection");
+  assert.ok(actionsIndex !== -1 && sectionIndex !== -1);
+  assert.ok(actionsIndex < sectionIndex);
+  // Второй формы конструктора нет, href не дублируются вручную.
+  assert.ok(!MENU_PAGE_SOURCE.includes("RestaurantDishBuilder"));
+  assert.ok(!MENU_PAGE_SOURCE.includes("Сохранить черновик"));
+  assert.ok(!MENU_PAGE_SOURCE.includes("dishBuilderNewHref("));
+  assert.ok(!MENU_PAGE_SOURCE.includes("dishSubmissionsHref("));
+});
+
+test("роль страницы меню: OPERATOR/KITCHEN/COMBINED сохраняются, мусор — fail-closed", () => {
+  // Переход от оператора сохраняет OPERATOR (query или session-подсказка).
+  assert.equal(
+    resolveMenuPageRole("SPLIT_OPERATOR_KITCHEN", "OPERATOR", null),
+    "OPERATOR",
+  );
+  assert.equal(
+    resolveMenuPageRole("SPLIT_OPERATOR_KITCHEN", null, "OPERATOR"),
+    "OPERATOR",
+  );
+  // Query важнее подсказки; кухня остаётся кухней.
+  assert.equal(
+    resolveMenuPageRole("SPLIT_OPERATOR_KITCHEN", "KITCHEN", "OPERATOR"),
+    "KITCHEN",
+  );
+  assert.equal(
+    resolveMenuPageRole("SPLIT_OPERATOR_KITCHEN", null, "KITCHEN"),
+    "KITCHEN",
+  );
+  // COMBINED всегда COMBINED, что бы ни лежало в контексте.
+  assert.equal(resolveMenuPageRole("COMBINED", "KITCHEN", "OPERATOR"), "COMBINED");
+  assert.equal(resolveMenuPageRole("COMBINED", null, null), "COMBINED");
+  // Повреждённый или отсутствующий контекст в SPLIT — fail-closed.
+  assert.equal(resolveMenuPageRole("SPLIT_OPERATOR_KITCHEN", null, null), null);
+  assert.equal(
+    resolveMenuPageRole("SPLIT_OPERATOR_KITCHEN", "ADMIN", "мусор"),
+    null,
+  );
+  assert.equal(
+    resolveMenuPageRole("SPLIT_OPERATOR_KITCHEN", "COMBINED", null),
+    null,
+  );
+  // Кабинеты записывают контекст, страница показывает fail-closed заглушку.
+  assert.ok(
+    OPERATOR_PAGE_SOURCE.includes('rememberMenuWorkspaceRole("OPERATOR")'),
+  );
+  assert.ok(
+    KITCHEN_PAGE_SOURCE.includes(
+      'rememberMenuWorkspaceRole(isSplit ? "KITCHEN" : "COMBINED")',
+    ),
+  );
+  assert.ok(MENU_PAGE_SOURCE.includes("DishBuilderRoleError"));
+});
+
+test("мобильная страница меню: действия переносятся без горизонтальной прокрутки", () => {
+  const css = readSource("../components/kitchen/kitchen.module.css");
+  const block = css.slice(
+    css.indexOf(".menuPageActions {"),
+    css.indexOf(".menuPanelAddLink {"),
+  );
+  assert.ok(block.includes("flex-wrap: wrap"));
+  assert.ok(block.includes("min-width: 0"));
 });
 
 test("вне панели точка входа не дублируется: страницы только передают пропсы", () => {

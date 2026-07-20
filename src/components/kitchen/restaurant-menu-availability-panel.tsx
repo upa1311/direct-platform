@@ -1,17 +1,14 @@
 "use client";
 
 import { ChevronDown, Plus } from "lucide-react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
 
 import type { Restaurant, RestaurantWorkspaceRole } from "@/prototype/models";
 import { usePrototype } from "@/prototype/prototype-provider";
 import { getRestaurantMenu } from "@/prototype/selectors";
-import {
-  dishBuilderNewHref,
-  dishSubmissionsHref,
-} from "@/components/menu/dish-builder-form";
+import { dishBuilderNewHref } from "@/components/menu/dish-builder-form";
+import { RestaurantMenuCatalogActions } from "@/components/menu/restaurant-menu-catalog-actions";
 import { MenuAvailabilitySection } from "./kitchen-operations";
 import {
   getMenuAvailabilitySummary,
@@ -95,20 +92,10 @@ export function RestaurantMenuAvailabilityPanel({
         </button>
         <ChevronDown className={styles.menuChevron} size={18} aria-hidden="true" />
       </summary>
-      <div className={styles.menuPanelActions}>
-        <Link
-          className={styles.menuPanelAddLink}
-          href={dishBuilderNewHref(workspaceRole)}
-        >
-          Добавить новое блюдо
-        </Link>
-        <Link
-          className={styles.menuPanelSubmissionsLink}
-          href={dishSubmissionsHref(workspaceRole)}
-        >
-          Мои заявки
-        </Link>
-      </div>
+      <RestaurantMenuCatalogActions
+        workspaceRole={workspaceRole}
+        variant="COMPACT"
+      />
       <MenuAvailabilitySection
         restaurant={restaurant}
         nowMs={nowMs}

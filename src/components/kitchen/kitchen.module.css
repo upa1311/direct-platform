@@ -938,6 +938,18 @@
   border-top: 1px solid var(--kds-border);
 }
 
+/* Те же действия на полноэкранной странице «Меню и доступность»: видны сразу
+   под шапкой, на мобильном переносятся на следующую строку без
+   горизонтальной прокрутки. */
+.menuPageActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 4px;
+  min-width: 0;
+}
+
 .menuPanelAddLink {
   display: inline-flex;
   align-items: center;
