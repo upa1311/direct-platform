@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { BellOff, BellRing } from "lucide-react";
 
 import {
   disableKitchenSound,
   enableKitchenSound,
+  isKitchenSoundReady,
   KITCHEN_SOUND_KEY,
   playKitchenBeep,
 } from "@/components/workspaces/kitchen-sound";
@@ -14,7 +15,59 @@ import {
   getAudibleKitchenReviewOrders,
   isKitchenBeepDue,
 } from "@/prototype/selectors";
+import { isSoundPreferred, resolveSoundState } from "./sound-preference";
 import kds from "./kitchen.module.css";
+
+/**
+ * Состояние звука — внешнее по отношению к React: оно живёт в localStorage
+ * (предпочтение) и в модульном AudioContext (фактическая готовность). Поэтому
+ * читаем его через useSyncExternalStore: это переживает SPA-переходы без
+ * setState в эффекте и корректно отдаёт «выключено» при серверном рендере,
+ * то есть без расхождения гидратации.
+ */
+type SoundStatus = "OFF" | "ON" | "ACTIVATION_REQUIRED";
+
+/** Подписчики этой вкладки: storage-событие в своей вкладке не срабатывает. */
+const soundStatusListeners = new Set<() => void>();
+
+/** Сообщить своей вкладке, что предпочтение изменилось. */
+function emitSoundStatusChange(): void {
+  for (const listener of soundStatusListeners) listener();
+}
+
+function subscribeToSoundStatus(onChange: () => void): () => void {
+  soundStatusListeners.add(onChange);
+  // Чужие вкладки приходят через storage; свои — через локальный emitter.
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === KITCHEN_SOUND_KEY) onChange();
+  };
+  window.addEventListener("storage", handleStorage);
+  return () => {
+    soundStatusListeners.delete(onChange);
+    window.removeEventListener("storage", handleStorage);
+  };
+}
+
+/**
+ * Текущее состояние: предпочтение из localStorage + фактическая готовность
+ * контекста. Возвращается примитив, поэтому снимок стабилен по значению.
+ */
+function getSoundStatus(): SoundStatus {
+  const preferred = isSoundPreferred(
+    window.localStorage.getItem(KITCHEN_SOUND_KEY),
+  );
+  const { soundEnabled, activationRequired } = resolveSoundState(
+    preferred,
+    isKitchenSoundReady(),
+  );
+  if (soundEnabled) return "ON";
+  return activationRequired ? "ACTIVATION_REQUIRED" : "OFF";
+}
+
+/** На сервере звука нет: гидратация начинается с выключенного состояния. */
+function getServerSoundStatus(): SoundStatus {
+  return "OFF";
+}
 
 /**
  * Сигнал о новом заказе. Звучит там, где принимается решение: в COMBINED — на
@@ -23,7 +76,13 @@ import kds from "./kitchen.module.css";
  *
  * Реализация звука не своя: используется существующий Web Audio контроллер
  * (mp3 + fallback-осциллятор, повтор, browser guards). Здесь — только
- * расписание и включение после реального жеста пользователя.
+ * расписание, восстановление сохранённого предпочтения и включение после
+ * реального жеста пользователя.
+ *
+ * Предпочтение звука принадлежит браузеру, а не экрану и не ресторану: переход
+ * кухня ↔ оператор ↔ меню ↔ расчёты его не сбрасывает. Выключением считается
+ * только явное нажатие колокольчика, поэтому в cleanup звук не выключается и
+ * «0» при размонтировании не записывается.
  */
 export function useNewOrderSound({
   restaurantId,
@@ -38,11 +97,23 @@ export function useNewOrderSound({
 }): {
   soundEnabled: boolean;
   soundBlocked: boolean;
+  /** Предпочтение сохранено, но этой вкладке нужен один жест пользователя. */
+  activationRequired: boolean;
   enableSound: () => Promise<void>;
   disableSound: () => void;
 } {
   const { state } = usePrototype();
-  const [soundEnabled, setSoundEnabled] = useState(false);
+  // Восстановление после SPA-навигации: снимок считается из сохранённого
+  // предпочтения и реальной готовности контекста. Если контекст всё ещё запущен
+  // (обычный переход между разделами), звук возвращается сам — без повторного
+  // клика, нового AudioContext и тестового сигнала.
+  const soundStatus = useSyncExternalStore(
+    subscribeToSoundStatus,
+    getSoundStatus,
+    getServerSoundStatus,
+  );
+  const soundEnabled = soundStatus === "ON";
+  const activationRequired = soundStatus === "ACTIVATION_REQUIRED";
   const [soundBlocked, setSoundBlocked] = useState(false);
 
   const stateRef = useRef(state);
@@ -58,6 +129,14 @@ export function useNewOrderSound({
     soundEnabledRef.current = soundEnabled;
     routedRef.current = enabled;
   }, [state, restaurantId, soundEnabled, enabled]);
+
+  // Если звук выключили в ДРУГОЙ вкладке, здесь освобождаем AudioContext.
+  // Обработчик ничего не записывает в localStorage, поэтому storage-петли нет.
+  useEffect(() => {
+    if (soundStatus === "OFF" && isKitchenSoundReady()) {
+      disableKitchenSound();
+    }
+  }, [soundStatus]);
 
   // Централизованное расписание сигнала: без setInterval на карточку.
   useEffect(() => {
@@ -96,12 +175,15 @@ export function useNewOrderSound({
   const enableSound = async () => {
     const ok = await enableKitchenSound();
     if (!ok) {
+      // Браузер не дал запустить контекст — ложного включения не показываем.
       setSoundBlocked(true);
       return;
     }
     setSoundBlocked(false);
-    setSoundEnabled(true);
+    // Предпочтение переживает переходы; снимок пересчитается из него и из уже
+    // запущенного контекста.
     window.localStorage.setItem(KITCHEN_SOUND_KEY, "1");
+    emitSoundStatusChange();
     // Если уже есть звучащие новые заказы — один рабочий сигнал сразу.
     const audibleIds = getAudibleKitchenReviewOrders(
       state,
@@ -115,11 +197,18 @@ export function useNewOrderSound({
 
   const disableSound = () => {
     disableKitchenSound();
-    setSoundEnabled(false);
+    setSoundBlocked(false);
     window.localStorage.setItem(KITCHEN_SOUND_KEY, "0");
+    emitSoundStatusChange();
   };
 
-  return { soundEnabled, soundBlocked, enableSound, disableSound };
+  return {
+    soundEnabled,
+    soundBlocked,
+    activationRequired,
+    enableSound,
+    disableSound,
+  };
 }
 
 /** Компактная нейтральная кнопка-колокольчик — та же, что была на кухне. */

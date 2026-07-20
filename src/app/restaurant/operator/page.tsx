@@ -20,6 +20,7 @@ import {
   useNewOrderSound,
 } from "@/components/kitchen/new-order-sound";
 import { useOperatorOrderReadySound } from "@/components/operator/use-operator-order-ready-sound";
+import { SOUND_ACTIVATION_MESSAGE } from "@/components/kitchen/sound-preference";
 import { RestaurantMenuAvailabilityPanel } from "@/components/kitchen/restaurant-menu-availability-panel";
 import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
@@ -853,6 +854,7 @@ export default function RestaurantOperatorPage() {
   const {
     soundEnabled,
     soundBlocked,
+    activationRequired,
     enableSound,
     disableSound,
   } = useNewOrderSound({
@@ -947,6 +949,12 @@ export default function RestaurantOperatorPage() {
       {soundBlocked ? (
         <p className={kds.soundError} role="alert">
           Браузер заблокировал звук. Нажмите значок звука ещё раз.
+        </p>
+      ) : null}
+      {/* Предпочтение сохранено, но новой вкладке нужен один жест пользователя. */}
+      {activationRequired && !soundBlocked ? (
+        <p className={kds.soundError} role="status">
+          {SOUND_ACTIVATION_MESSAGE}
         </p>
       ) : null}
 
