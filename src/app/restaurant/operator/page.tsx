@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { TriangleAlert } from "lucide-react";
+import { Printer, TriangleAlert } from "lucide-react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { getVisibleCookingComment } from "@/components/kitchen/cooking-comment";
@@ -20,6 +20,7 @@ import {
   useNewOrderSound,
 } from "@/components/kitchen/new-order-sound";
 import { useOperatorOrderReadySound } from "@/components/operator/use-operator-order-ready-sound";
+import { canPrintOperatorProductionTicket } from "@/components/operator/operator-production-print";
 import { SOUND_ACTIVATION_MESSAGE } from "@/components/kitchen/sound-preference";
 import { RestaurantMenuAvailabilityPanel } from "@/components/kitchen/restaurant-menu-availability-panel";
 import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
@@ -184,11 +185,9 @@ function OperatorOrderItems({ order }: { order: Order }) {
 function OperatorAcceptPanel({
   order,
   nowMs,
-  onRequestPrint,
 }: {
   order: Order;
   nowMs: number;
-  onRequestPrint: (orderId: string) => void;
 }) {
   const { state, acceptOrder } = usePrototype();
   const { error, pending, run, clearError } = useMutationGuard();
@@ -205,17 +204,9 @@ function OperatorAcceptPanel({
     });
   };
 
-  // «Принять и распечатать»: тот же приём/guard/actor; печать только после
-  // подтверждённого успеха и по каноническим данным принятого заказа.
-  const doAcceptAndPrint = async () => {
-    const result = await run(async () => {
-      const response = await acceptOrder(order.id, prep, "RESTAURANT", "OPERATOR");
-      return { ok: response.ok, error: response.error, changed: response.ok };
-    });
-    if (result.ok) {
-      onRequestPrint(order.id);
-    }
-  };
+  // Печати здесь нет: принятие и производственный лист — два последовательных
+  // действия. Кнопка печати появляется в карточке уже принятого заказа, когда он
+  // реально готовится (см. canPrintOperatorProductionTicket).
 
   return (
     <>
@@ -256,14 +247,6 @@ function OperatorAcceptPanel({
             onClick={doAccept}
           >
             {pending ? "Принимаем…" : "Принять"}
-          </button>
-          <button
-            className={`${kds.btn} ${kds.btnOutline}`}
-            type="button"
-            disabled={pending}
-            onClick={doAcceptAndPrint}
-          >
-            Принять и распечатать
           </button>
           <OperatorRejectPanel order={order} />
         </div>
@@ -801,12 +784,24 @@ function OperatorOrderCard({
       {order.status === "PREPARING" ? (
         <OperatorPreparingTiming order={order} nowMs={nowMs} overdue={overdue} />
       ) : null}
+      {/* Производственный лист — отдельным действием ПОСЛЕ принятия, когда заказ
+          реально готовится: для онлайн-заказа только после подтверждённой оплаты,
+          для оплаты в ресторане и курьеру ресторана — сразу. Это не пакетная
+          наклейка: она печатается только для готового заказа. */}
+      {canPrintOperatorProductionTicket(order) ? (
+        <div className={kds.btnRow}>
+          <button
+            className={`${kds.btn} ${kds.btnOutline}`}
+            type="button"
+            onClick={() => onRequestPrint(order.id)}
+          >
+            <Printer size={16} aria-hidden="true" />
+            Распечатать заказ
+          </button>
+        </div>
+      ) : null}
       {order.status === "RESTAURANT_REVIEW" ? (
-        <OperatorAcceptPanel
-          order={order}
-          nowMs={nowMs}
-          onRequestPrint={onRequestPrint}
-        />
+        <OperatorAcceptPanel order={order} nowMs={nowMs} />
       ) : null}
       {order.status === "READY_FOR_PICKUP" ? (
         <OperatorPickupHandoff order={order} nowMs={nowMs} />
