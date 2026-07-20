@@ -190,28 +190,49 @@ function validateEntryStructure(
 }
 
 /**
- * Соответствие OPEN-записи каноническому движению денег заказа:
+ * Полная семантическая сверка snapshot-записи с каноническим движением денег
+ * заказа. Применяется к ЛЮБОМУ статусу (OPEN/SETTLED/WAIVED): закрытая запись
+ * не входит в открытый баланс, но повреждённая закрытая запись обязана ломать
+ * весь read-model fail-closed, а не проходить незамеченной. Movement не
+ * пересчитывается — только сверка сохранённых данных:
  * RESTAURANT_OWES_DIRECT/PLATFORM_COMMISSION ↔ movement.restaurantOwesDirectCents,
- * DIRECT_OWES_RESTAURANT/RESTAURANT_PAYOUT ↔ movement.directOwesRestaurantCents.
+ * DIRECT_OWES_RESTAURANT/RESTAURANT_PAYOUT ↔ movement.directOwesRestaurantCents,
+ * противоположная сторона движения равна нулю; обе положительные стороны и
+ * обе нулевые (запись существовать не должна) — повреждение.
  */
-function snapshotEntryMatchesMovement(
+function validateSnapshotEntryAgainstOrder(
   entry: RestaurantAccountingEntry,
   order: Order,
-): boolean {
-  const movement = order.financials.moneyMovement;
-  if (order.financials.moneyMovementStatus !== "COMPLETE" || !movement) {
-    return false;
+): string | null {
+  const fin = order.financials;
+  const movement = fin.moneyMovement;
+  if (fin.moneyMovementStatus !== "COMPLETE" || !movement) {
+    return "Обязательство заказа противоречит каноническому движению денег.";
   }
-  if (entry.direction === "RESTAURANT_OWES_DIRECT") {
-    return (
-      entry.type === "PLATFORM_COMMISSION" &&
-      entry.amountCents === movement.restaurantOwesDirectCents
-    );
+  if (entry.currencyCode !== fin.currencyCode) {
+    return "Валюта обязательства не совпадает со снимком заказа.";
   }
-  return (
-    entry.type === "RESTAURANT_PAYOUT" &&
-    entry.amountCents === movement.directOwesRestaurantCents
-  );
+  if (
+    movement.restaurantOwesDirectCents > 0 &&
+    movement.directOwesRestaurantCents > 0
+  ) {
+    return "Встречные обязательства по одному заказу невозможны.";
+  }
+  if (
+    movement.restaurantOwesDirectCents === 0 &&
+    movement.directOwesRestaurantCents === 0
+  ) {
+    return "Обязательство существует при нулевом движении денег заказа.";
+  }
+  const matches =
+    entry.direction === "RESTAURANT_OWES_DIRECT"
+      ? entry.type === "PLATFORM_COMMISSION" &&
+        entry.amountCents === movement.restaurantOwesDirectCents
+      : entry.type === "RESTAURANT_PAYOUT" &&
+        entry.amountCents === movement.directOwesRestaurantCents;
+  return matches
+    ? null
+    : "Обязательство заказа противоречит каноническому движению денег.";
 }
 
 /** Строка открытого заказа: детали ТОЛЬКО из канонического движения. */
@@ -337,25 +358,40 @@ export function buildRestaurantFinanceReadModel(
   let oldestOpenRecognizedAt: string | null = null;
 
   for (const entry of entries) {
+    const order = ordersById.get(entry.orderId);
+
+    // Семантика источника проверяется ДО пропуска закрытых записей: SETTLED и
+    // WAIVED не входят в открытый баланс, но повреждённая закрытая запись не
+    // имеет права пройти незамеченной.
+    if (entry.source === "ORDER_FINANCIAL_SNAPSHOT") {
+      // Snapshot-запись любого статуса обязана ссылаться на существующий заказ
+      // (принадлежность ресторану уже проверена ownership-фазой).
+      if (!order) {
+        return fail("Обязательство ссылается на несуществующий заказ.");
+      }
+      const semanticError = validateSnapshotEntryAgainstOrder(entry, order);
+      if (semanticError !== null) {
+        return fail(semanticError);
+      }
+    } else if (entry.status === "OPEN" && !order) {
+      // LEGACY_COMMISSION_SETTLEMENT: сумма историческая, по movement не
+      // пересчитывается; структура, ownership и отсутствие дубля уже
+      // проверены. Для ОТКРЫТОЙ legacy-записи заказ нужен строке read-model;
+      // закрытая историческая запись без заказа допустима — реальная миграция
+      // старых settlements поддерживает записи, чей заказ уже удалён (см.
+      // buildRestaurantAccountingJournal с publicNumber = null).
+      return fail("Открытое обязательство ссылается на несуществующий заказ.");
+    }
+
     // Закрытые обязательства открытый баланс не формируют.
     if (entry.status !== "OPEN") continue;
 
     if (!isValidIso(entry.recognizedAt)) {
       return fail("Некорректная дата признания обязательства.");
     }
-    const order = ordersById.get(entry.orderId);
     if (!order) {
       return fail("Открытое обязательство ссылается на несуществующий заказ.");
     }
-    if (entry.source === "ORDER_FINANCIAL_SNAPSHOT") {
-      if (!snapshotEntryMatchesMovement(entry, order)) {
-        return fail(
-          "Обязательство заказа противоречит каноническому движению денег.",
-        );
-      }
-    }
-    // LEGACY_COMMISSION_SETTLEMENT: сумма историческая, по movement не
-    // пересчитывается; структура, ownership и отсутствие дубля уже проверены.
 
     if (entry.direction === "RESTAURANT_OWES_DIRECT") {
       restaurantOwesDirectCents += entry.amountCents;

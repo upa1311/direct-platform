@@ -535,6 +535,167 @@ test("корректная legacy-комиссия входит в баланс 
   assert.equal(model.openOrders[0].paymentChannel, "LEGACY_UNKNOWN");
 });
 
+// Закрытые snapshot-записи: семантика проверяется, баланс не трогается ------------
+
+test("корректные SETTLED/WAIVED snapshot-записи проходят, но не входят в баланс", () => {
+  const open = makeOrder("op", moveOwesDirect(800));
+  const settled = makeOrder("st", moveOwesDirect(300));
+  const waived = makeOrder("wv", moveOwesRestaurant(900));
+  const model = okModel(
+    stateWith(
+      [open, settled, waived],
+      [
+        entryFor(open, "RESTAURANT_OWES_DIRECT", 800),
+        entryFor(settled, "RESTAURANT_OWES_DIRECT", 300, {
+          status: "SETTLED",
+          settledAt: T2,
+        }),
+        entryFor(waived, "DIRECT_OWES_RESTAURANT", 900, {
+          status: "WAIVED",
+          settledAt: T2,
+        }),
+      ],
+    ),
+  );
+  // Закрытые записи не меняют net и не попадают в openOrders.
+  assert.equal(model.restaurantOwesDirectCents, 800);
+  assert.equal(model.directOwesRestaurantCents, 0);
+  assert.equal(model.netDirection, "RESTAURANT_OWES_DIRECT");
+  assert.equal(model.netAmountCents, 800);
+  assert.equal(model.openAccountingEntryCount, 1);
+  assert.deepEqual(model.openOrders.map((r) => r.orderId), ["op"]);
+});
+
+test("повреждённые закрытые snapshot-записи ломают read-model fail-closed", () => {
+  const closed = (
+    status: "SETTLED" | "WAIVED",
+    order: Order,
+    overrides: Partial<RestaurantAccountingEntry> = {},
+  ) =>
+    entryFor(order, "RESTAURANT_OWES_DIRECT", 800, {
+      status,
+      settledAt: T2,
+      ...overrides,
+    });
+
+  const a = makeOrder("a", moveOwesDirect(800));
+  // SETTLED/WAIVED без заказа.
+  for (const status of ["SETTLED", "WAIVED"] as const) {
+    const result = buildRestaurantFinanceReadModel(
+      stateWith([], [closed(status, a)]),
+      RID,
+    );
+    assert.equal(result.ok, false, status);
+    assert.ok(!result.ok && /несуществующий заказ/.test(result.error), status);
+  }
+  // SETTLED при REVIEW_REQUIRED заказа.
+  const review = makeOrder("rv", null, "REVIEW_REQUIRED");
+  const reviewResult = buildRestaurantFinanceReadModel(
+    stateWith([review], [closed("SETTLED", review)]),
+    RID,
+  );
+  assert.equal(reviewResult.ok, false);
+  assert.ok(
+    !reviewResult.ok && /противоречит каноническому движению/.test(reviewResult.error),
+  );
+  // SETTLED без movement при статусе COMPLETE.
+  const broken = makeOrder("bk", null, "COMPLETE");
+  assert.equal(
+    buildRestaurantFinanceReadModel(
+      stateWith([broken], [closed("SETTLED", broken)]),
+      RID,
+    ).ok,
+    false,
+  );
+  // SETTLED с другой суммой.
+  assert.equal(
+    buildRestaurantFinanceReadModel(
+      stateWith([a], [closed("SETTLED", a, { amountCents: 801 })]),
+      RID,
+    ).ok,
+    false,
+  );
+  // WAIVED с другим направлением (движение — «ресторан должен Direct»).
+  assert.equal(
+    buildRestaurantFinanceReadModel(
+      stateWith([a], [
+        closed("WAIVED", a, {
+          direction: "DIRECT_OWES_RESTAURANT",
+          type: "RESTAURANT_PAYOUT",
+        }),
+      ]),
+      RID,
+    ).ok,
+    false,
+  );
+  // Закрытая запись с неправильным типом.
+  assert.equal(
+    buildRestaurantFinanceReadModel(
+      stateWith([a], [closed("SETTLED", a, { type: "RESTAURANT_PAYOUT" })]),
+      RID,
+    ).ok,
+    false,
+  );
+});
+
+test("движение с двумя положительными или двумя нулевыми сторонами — ошибка", () => {
+  const mixed = makeOrder("mx", {
+    ...moveOwesDirect(800),
+    directOwesRestaurantCents: 100,
+  });
+  const mixedResult = buildRestaurantFinanceReadModel(
+    stateWith([mixed], [
+      entryFor(mixed, "RESTAURANT_OWES_DIRECT", 800, {
+        status: "SETTLED",
+        settledAt: T2,
+      }),
+    ]),
+    RID,
+  );
+  assert.equal(mixedResult.ok, false);
+  assert.ok(!mixedResult.ok && /Встречные обязательства/.test(mixedResult.error));
+
+  // Обе стороны нулевые: snapshot-записи существовать не должно.
+  const zero = makeOrder("zr", {
+    ...moveOwesDirect(0),
+    directNetRevenueCents: 0,
+  });
+  const zeroResult = buildRestaurantFinanceReadModel(
+    stateWith([zero], [entryFor(zero, "RESTAURANT_OWES_DIRECT", 800)]),
+    RID,
+  );
+  assert.equal(zeroResult.ok, false);
+  assert.ok(!zeroResult.ok && /нулевом движении/.test(zeroResult.error));
+});
+
+test("закрытая legacy-запись без заказа допустима (историческая миграция)", () => {
+  // Реальная миграция старых settlements поддерживает записи, чей заказ уже
+  // удалён из состояния — закрытая историческая комиссия модель не ломает.
+  const model = okModel(
+    stateWith(
+      [],
+      [
+        {
+          id: "accounting-legacy-old",
+          orderId: "давно-удалён",
+          restaurantId: RID,
+          direction: "RESTAURANT_OWES_DIRECT",
+          type: "PLATFORM_COMMISSION",
+          amountCents: 250,
+          currencyCode: "USD",
+          status: "SETTLED",
+          settledAt: T2,
+          recognizedAt: T1,
+          source: "LEGACY_COMMISSION_SETTLEMENT",
+          legacySettlementId: "settlement-old",
+        },
+      ],
+    ),
+  );
+  assert.equal(model.restaurantOwesDirectCents, 0);
+  assert.equal(model.openOrders.length, 0);
+});
+
 // 11/12 — современный самовывоз (реальный поток) ---------------------------------
 
 function readyPickup(): { state: PrototypeState; orderId: string } {
