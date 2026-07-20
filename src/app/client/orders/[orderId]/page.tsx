@@ -17,13 +17,12 @@ import {
   formatOrderEtaClock,
   getClientAutoCancelMessage,
   getClientOrderStatusLabel,
+  getClientPickupPaymentLabel,
   getDeliveryModeProviderLabel,
   getOrder,
   hasActiveEtaUpdate,
   isAwaitingKitchenStart,
   paymentMethodLabels,
-  paymentStatusLabels,
-  pickupPaymentMethodLabels,
 } from "@/prototype/selectors";
 
 /**
@@ -36,11 +35,13 @@ function isPickupNoShow(order: Order): boolean {
 }
 
 /**
- * §13: клиентский блок самовывоза. До готовности — подсказка; в READY_FOR_PICKUP
- * — карточка «Заказ готов к выдаче» с рестораном, адресом, суммой, способами
- * оплаты, крупным четырёхзначным кодом и инструкцией. После выдачи код скрыт и
- * показано «Заказ получен.»; при невыкупе — нейтральное сообщение без внутренних
- * причин/счётчиков/начислений.
+ * §13: клиентский блок самовывоза. Кода получения нет: заказ не оплачен
+ * заранее, клиент просто оплачивает его в ресторане и забирает, поэтому до
+ * готовности блок ничего не показывает. В READY_FOR_PICKUP — карточка «Заказ
+ * готов к выдаче» с рестораном, адресом, суммой и короткой подсказкой об оплате
+ * (способы оплаты уже показаны единой строкой в сводке — здесь не дублируются).
+ * После выдачи показано «Заказ получен.»; при невыкупе — нейтральное сообщение
+ * без внутренних причин/счётчиков/начислений.
  */
 function ClientPickupBlock({ order }: { order: Order }) {
   if (order.status === "PICKED_UP" || order.pickupCodeUsed) {
@@ -59,37 +60,17 @@ function ClientPickupBlock({ order }: { order: Order }) {
     );
   }
   if (order.status === "READY_FOR_PICKUP") {
-    const methods =
-      order.pickupPaymentMethodsSnapshot.length > 0
-        ? order.pickupPaymentMethodsSnapshot
-            .map((m) => pickupPaymentMethodLabels[m])
-            .join(" или ")
-        : "уточните в ресторане";
-    // Четырёхзначный код больше не выдаётся: заказ не оплачен заранее, клиент
-    // просто оплачивает его в ресторане и забирает.
     return (
       <div className={`${flowStyles.zoneNotice} ${flowStyles.pickupReadyCard}`}>
         <strong>Заказ готов к выдаче</strong>
         <div>
           {order.restaurant.name} · {order.restaurant.address}
         </div>
-        <div>К оплате в ресторане: {formatMoney(order.financials.customerTotalCents)}</div>
-        <div>Способы оплаты на точке: {methods}</div>
+        <div>К оплате: {formatMoney(order.financials.customerTotalCents)}</div>
         <p className={flowStyles.pickupInstruction}>
-          Оплатите заказ в ресторане при получении.
+          Оплатите заказ при получении в ресторане.
         </p>
       </div>
-    );
-  }
-  if (
-    order.status === "RESTAURANT_REVIEW" ||
-    order.status === "AWAITING_PAYMENT" ||
-    order.status === "PREPARING"
-  ) {
-    return (
-      <p className={flowStyles.summaryHint}>
-        Код получения появится, когда заказ будет готов.
-      </p>
     );
   }
   return null;
@@ -167,16 +148,19 @@ export default function ClientOrderPage() {
                 </div>
               </>
             )}
-            <div className={flowStyles.summaryRow}>
-              <dt>Оплата</dt>
-              <dd>{paymentMethodLabels[order.paymentMethod]}</dd>
-            </div>
+            {/* Самовывоз: единственная строка об оплате без дублей — до оплаты
+                доступные способы из снимка, после выдачи — фактический способ. */}
             {order.deliveryMode === "PICKUP" ? (
               <div className={flowStyles.summaryRow}>
-                <dt>Статус оплаты</dt>
-                <dd>{paymentStatusLabels[order.paymentStatus]}</dd>
+                <dt>Оплата при получении</dt>
+                <dd>{getClientPickupPaymentLabel(order)}</dd>
               </div>
-            ) : null}
+            ) : (
+              <div className={flowStyles.summaryRow}>
+                <dt>Оплата</dt>
+                <dd>{paymentMethodLabels[order.paymentMethod]}</dd>
+              </div>
+            )}
           </dl>
           {/* Кухня ещё не начала: ложный отсчёт и «готов к HH:MM» не показываем. */}
           {isAwaitingKitchenStart(order) ? (

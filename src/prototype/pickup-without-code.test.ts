@@ -4,11 +4,17 @@ import { test } from "node:test";
 
 import { createDefaultState } from "./default-state.ts";
 import {
+  acceptRestaurantOrder,
   addCartItem,
+  completePickupAtRestaurant,
   createOrderFromCart,
+  markOrderReady,
   setCartFulfillmentChoice,
 } from "./actions.ts";
-import { getPickupPaymentChoices } from "./selectors.ts";
+import {
+  getClientPickupPaymentLabel,
+  getPickupPaymentChoices,
+} from "./selectors.ts";
 import type { Order, PrototypeState } from "./models.ts";
 
 /**
@@ -129,6 +135,117 @@ test("кнопка выдачи: точный текст и зависимост
   // Кухня и оператор блокируют кнопку только на время операции.
   assert.ok(KITCHEN_PAGE.includes("disabled={!canConfirm || pickupActionPending}"));
   assert.ok(OPERATOR_PAGE.includes("disabled={!canConfirm || handoffPending}"));
+});
+
+// 7 — единая клиентская строка «Оплата при получении» --------------------------
+
+test("подпись оплаты до оплаты: снимок способов с безопасным fallback", () => {
+  const { order } = pickupOrder();
+  assert.equal(order.pickupPaidWith, null);
+  // Оба способа доступны.
+  assert.equal(
+    getClientPickupPaymentLabel({
+      ...order,
+      pickupPaymentMethodsSnapshot: ["CASH", "CARD"],
+    }),
+    "Картой или наличными",
+  );
+  // Только карта.
+  assert.equal(
+    getClientPickupPaymentLabel({
+      ...order,
+      pickupPaymentMethodsSnapshot: ["CARD"],
+    }),
+    "Картой",
+  );
+  // Только наличные.
+  assert.equal(
+    getClientPickupPaymentLabel({
+      ...order,
+      pickupPaymentMethodsSnapshot: ["CASH"],
+    }),
+    "Наличными",
+  );
+  // Пустой снимок — безопасный fallback, как при выдаче.
+  assert.equal(
+    getClientPickupPaymentLabel({ ...order, pickupPaymentMethodsSnapshot: [] }),
+    "Картой или наличными",
+  );
+  // Повреждённый снимок — тот же fallback.
+  assert.equal(
+    getClientPickupPaymentLabel({
+      ...order,
+      pickupPaymentMethodsSnapshot: [
+        "BONUS",
+      ] as unknown as Order["pickupPaymentMethodsSnapshot"],
+    }),
+    "Картой или наличными",
+  );
+});
+
+test("подпись оплаты после выдачи: зафиксированный способ важнее снимка", () => {
+  const { order } = pickupOrder();
+  assert.equal(
+    getClientPickupPaymentLabel({ ...order, pickupPaidWith: "CARD" }),
+    "Картой",
+  );
+  assert.equal(
+    getClientPickupPaymentLabel({ ...order, pickupPaidWith: "CASH" }),
+    "Наличными",
+  );
+});
+
+test("домен выдачи не изменён: handoff фиксирует способ, label его отражает", () => {
+  const { state, order } = pickupOrder();
+  let s = acceptRestaurantOrder(state, order.id, 20); // PREPARING (COMBINED)
+  s = markOrderReady(s, order.id); // READY_FOR_PICKUP
+  const done = completePickupAtRestaurant(s, order.id, "CASH");
+  assert.equal(done.result.ok, true, done.result.error ?? "");
+  const picked = done.state.orders.find((o) => o.id === order.id);
+  assert.ok(picked);
+  assert.equal(picked.status, "PICKED_UP");
+  assert.equal(picked.paymentStatus, "PAID_AT_RESTAURANT");
+  assert.equal(picked.pickupPaidWith, "CASH");
+  assert.equal(getClientPickupPaymentLabel(picked), "Наличными");
+});
+
+// 8/9 — клиентская страница без кода, статуса оплаты и дублей ------------------
+
+test("клиентская страница: нет кода получения, статуса оплаты и дублей способов", () => {
+  assert.ok(!CLIENT_ORDER_PAGE.includes("Код получения появится"));
+  assert.ok(!CLIENT_ORDER_PAGE.includes("Код получения"));
+  assert.ok(!CLIENT_ORDER_PAGE.includes("Статус оплаты"));
+  assert.ok(!CLIENT_ORDER_PAGE.includes("Способы оплаты на точке"));
+  assert.ok(!CLIENT_ORDER_PAGE.includes("четырёхзначн"));
+  assert.ok(!CLIENT_ORDER_PAGE.includes("paymentStatusLabels"));
+  assert.ok(!CLIENT_ORDER_PAGE.includes("pickupPaymentMethodLabels"));
+  // Единая строка самовывоза ровно одна: dt + helper значения.
+  assert.equal(
+    CLIENT_ORDER_PAGE.split("Оплата при получении").length - 1,
+    1,
+    "одна строка «Оплата при получении»",
+  );
+  assert.ok(CLIENT_ORDER_PAGE.includes("getClientPickupPaymentLabel(order)"));
+});
+
+test("карточка READY_FOR_PICKUP: сумма и подсказка без кода и перечня способов", () => {
+  assert.ok(CLIENT_ORDER_PAGE.includes("Заказ готов к выдаче"));
+  assert.ok(
+    CLIENT_ORDER_PAGE.includes(
+      "К оплате: {formatMoney(order.financials.customerTotalCents)}",
+    ),
+  );
+  assert.ok(
+    CLIENT_ORDER_PAGE.includes("Оплатите заказ при получении в ресторане."),
+  );
+});
+
+test("после выдачи остаётся «Заказ получен.», не-PICKUP сохраняет строку «Оплата»", () => {
+  assert.ok(CLIENT_ORDER_PAGE.includes("Заказ получен."));
+  assert.ok(CLIENT_ORDER_PAGE.includes("<dt>Оплата</dt>"));
+  assert.ok(
+    CLIENT_ORDER_PAGE.includes("paymentMethodLabels[order.paymentMethod]"),
+  );
 });
 
 // 12 — логотип наклейки --------------------------------------------------------

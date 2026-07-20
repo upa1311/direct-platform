@@ -1598,6 +1598,25 @@ export function getPickupPaymentChoices(order: Order): PickupPaymentMethod[] {
 }
 
 /**
+ * Клиентское значение единой строки «Оплата при получении» самовывоза. После
+ * фактической оплаты — зафиксированный сотрудником способ (pickupPaidWith).
+ * До оплаты — доступные способы из исторического снимка заказа с тем же
+ * безопасным fallback CASH+CARD, что и при выдаче (getPickupPaymentChoices):
+ * пустой или повреждённый снимок даёт «Картой или наличными». Отдельного
+ * «Статуса оплаты» и технических значений enum клиенту не показывается.
+ */
+export function getClientPickupPaymentLabel(order: Order): string {
+  if (order.pickupPaidWith === "CARD") return "Картой";
+  if (order.pickupPaidWith === "CASH") return "Наличными";
+  const choices = getPickupPaymentChoices(order);
+  const cash = choices.includes("CASH");
+  const card = choices.includes("CARD");
+  if (card && cash) return "Картой или наличными";
+  if (card) return "Картой";
+  return "Наличными";
+}
+
+/**
  * Порог информационного предупреждения о крупном заказе с оплатой при получении:
  * $50.00. Сравнение нестрогое — ровно $50.00 уже попадает под предупреждение.
  */
