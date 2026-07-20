@@ -94,6 +94,41 @@ test("раскрытая панель содержит «Добавить нов
   assert.ok(PANEL_SOURCE.includes("dishSubmissionsHref(workspaceRole)"));
 });
 
+test("вне панели точка входа не дублируется: страницы только передают пропсы", () => {
+  // Единственная точка входа — внутри RestaurantMenuAvailabilityPanel.
+  // Отдельных кнопок/ссылок конструктора внизу operator/kitchen нет.
+  for (const page of [OPERATOR_PAGE_SOURCE, KITCHEN_PAGE_SOURCE]) {
+    assert.ok(!page.includes("Добавить новое блюдо"));
+    assert.ok(!page.includes("Мои заявки"));
+    assert.ok(!page.includes("dishBuilderNewHref"));
+    assert.ok(!page.includes("dishSubmissionsHref"));
+    assert.ok(!page.includes("/restaurant/menu/new"));
+    assert.ok(!page.includes("/restaurant/menu/submissions"));
+    // Страница передаёт общему компоненту restaurant, nowMs и workspaceRole.
+    assert.ok(page.includes("restaurant={restaurant}"));
+    assert.ok(page.includes("nowMs={nowMs}"));
+    assert.ok(/workspaceRole=/.test(page));
+  }
+});
+
+test("мобильная строка меню: одна строка без горизонтальной прокрутки", () => {
+  const css = readSource("../components/kitchen/kitchen.module.css");
+  const summaryBlock = css.slice(
+    css.indexOf(".menuSummary {"),
+    css.indexOf(".menuSummary:"),
+  );
+  // Plus и chevron не переносятся отдельной строкой под статусом…
+  assert.ok(summaryBlock.includes("flex-wrap: nowrap"));
+  // …а длинный статус переносится внутри себя, не растягивая строку вширь.
+  const statusBlock = css.slice(
+    css.indexOf(".menuStatus {", css.indexOf("Компактный статус")),
+    css.indexOf(".menuStatusDot {"),
+  );
+  assert.ok(statusBlock.includes("flex: 1"));
+  assert.ok(statusBlock.includes("min-width: 0"));
+  assert.ok(statusBlock.includes("overflow-wrap: anywhere"));
+});
+
 // 6 — один конструктор, без копий по ролям --------------------------------------
 
 test("все маршруты используют один RestaurantDishBuilder, копий нет", () => {

@@ -825,11 +825,15 @@
   background: var(--kds-surface);
 }
 
+/* Одна строка всегда: Plus и chevron визуально остаются частью строки
+   «Меню · статус» на любой ширине — без переноса управляющих элементов на
+   отдельную строку и без горизонтальной прокрутки (статус переносится
+   внутри себя за счёт min-width: 0 и overflow-wrap). */
 .menuSummary {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   padding: 10px 12px;
   cursor: pointer;
   list-style: none;
@@ -851,11 +855,13 @@
   color: var(--kds-text);
 }
 
-/* Компактный статус: маленькая точка + текст, без заливки на всю ширину. */
+/* Компактный статус: маленькая точка + текст, без заливки на всю ширину.
+   Занимает свободное место строки, чтобы Plus и chevron были прижаты вправо. */
 .menuStatus {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex: 1;
   min-width: 0;
   font-size: 13px;
   font-weight: 650;
