@@ -1,0 +1,293 @@
+import { allocateBankFee } from "./bank-fee";
+import type {
+  BankFeeMoneyCollector,
+  BankFeePaymentInstrument,
+} from "./bank-fee";
+import type { DeliveryMode } from "./pricing-engine";
+
+// Канонический чистый расчёт движения денег по ОДНОМУ заказу.
+//
+// Модуль не зависит от React, состояния прототипа и localStorage; значения
+// импортируются только из таких же чистых модулей, поэтому он запускается
+// напрямую через `node --test` без сборки.
+//
+// Зона ответственности — СВЕДЕНИЕ уже рассчитанных сумм заказа в единый
+// результат: кто получил деньги клиента, банковские части (ТОЛЬКО через
+// существующий allocateBankFee — формула 1% здесь не дублируется), взаимные
+// обязательства ресторана и Direct и чистые итоги сторон. Комиссия Direct,
+// small-order fee, стоимость доставки и суммы заказа рассчитываются
+// существующим pricing-engine и приходят готовыми; функция ничего в них не
+// меняет — клиентская сумма из-за этого расчёта не изменяется.
+
+/** Кто фактически получил деньги клиента. */
+export type CustomerMoneyRecipient = "DIRECT" | "RESTAURANT";
+
+/**
+ * Фактический канал оплаты заказа. Отдельное понятие: канал не выводится ни из
+ * способа получения, ни из получателя денег.
+ */
+export type OrderPaymentChannel =
+  | "ONLINE_CARD"
+  | "CARD_AT_RESTAURANT"
+  | "CASH_AT_RESTAURANT"
+  | "CASH_TO_RESTAURANT_COURIER";
+
+/** Уже рассчитанные суммы одного заказа (pricing-engine) и канал оплаты. */
+export interface OrderMoneyMovementInput {
+  deliveryMode: DeliveryMode;
+  paymentChannel: OrderPaymentChannel;
+  /** Стоимость еды после скидок, целые центы. */
+  foodSubtotalCents: number;
+  /** Стоимость доставки, целые центы (0 для самовывоза). */
+  deliveryFeeCents: number;
+  /** Доплата за небольшой заказ (существует только у доставки Direct). */
+  smallOrderFeeCents: number;
+  /** Полная сумма клиента, целые центы. */
+  customerTotalCents: number;
+  /** Уже рассчитанная комиссия Direct (15%/7% от еды), целые центы. */
+  restaurantCommissionCents: number;
+  /**
+   * Выплата водителю Direct, если она уже рассчитана. Информационная: в
+   * формулы чистых итогов не входит (доставка предназначена водителю и не
+   * является доходом Direct).
+   */
+  driverPayoutCents?: number;
+}
+
+/** Единый канонический результат движения денег по заказу. */
+export interface OrderMoneyMovement {
+  customerMoneyRecipient: CustomerMoneyRecipient;
+  paymentChannel: OrderPaymentChannel;
+  totalBankFeeCents: number;
+  restaurantBankFeeCents: number;
+  directBankFeeCents: number;
+  restaurantOwesDirectCents: number;
+  directOwesRestaurantCents: number;
+  restaurantNetCents: number;
+  directNetRevenueCents: number;
+}
+
+/** Fail-closed результат: повреждённые данные не маскируются нулями. */
+export type OrderMoneyMovementResult =
+  | { ok: true; movement: OrderMoneyMovement }
+  | { ok: false; error: string };
+
+function fail(error: string): OrderMoneyMovementResult {
+  return { ok: false, error };
+}
+
+/** Целые неотрицательные конечные центы. */
+function isValidCents(value: number): boolean {
+  return (
+    typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0
+  );
+}
+
+const KNOWN_DELIVERY_MODES: readonly DeliveryMode[] = [
+  "PLATFORM_DRIVER",
+  "RESTAURANT_DELIVERY",
+  "PICKUP",
+];
+
+const KNOWN_PAYMENT_CHANNELS: readonly OrderPaymentChannel[] = [
+  "ONLINE_CARD",
+  "CARD_AT_RESTAURANT",
+  "CASH_AT_RESTAURANT",
+  "CASH_TO_RESTAURANT_COURIER",
+];
+
+/**
+ * Совместимость режима получения и канала оплаты текущей модели:
+ * - PLATFORM_DRIVER — только ONLINE_CARD (деньги получает Direct);
+ * - PICKUP — карта или наличные на точке (деньги получает ресторан);
+ * - RESTAURANT_DELIVERY — только наличные собственному курьеру; карта/онлайн
+ *   для этого канала не существуют и отклоняются fail-closed.
+ */
+function resolveChannelContext(
+  deliveryMode: DeliveryMode,
+  paymentChannel: OrderPaymentChannel,
+):
+  | {
+      recipient: CustomerMoneyRecipient;
+      collector: BankFeeMoneyCollector;
+      instrument: BankFeePaymentInstrument;
+    }
+  | string {
+  if (deliveryMode === "PLATFORM_DRIVER") {
+    return paymentChannel === "ONLINE_CARD"
+      ? { recipient: "DIRECT", collector: "DIRECT", instrument: "CARD" }
+      : "Для доставки водителем Direct поддерживается только онлайн-оплата картой.";
+  }
+  if (deliveryMode === "PICKUP") {
+    if (paymentChannel === "CARD_AT_RESTAURANT") {
+      return { recipient: "RESTAURANT", collector: "RESTAURANT", instrument: "CARD" };
+    }
+    if (paymentChannel === "CASH_AT_RESTAURANT") {
+      return { recipient: "RESTAURANT", collector: "RESTAURANT", instrument: "CASH" };
+    }
+    return "Для самовывоза оплата принимается только на точке ресторана.";
+  }
+  // RESTAURANT_DELIVERY.
+  return paymentChannel === "CASH_TO_RESTAURANT_COURIER"
+    ? { recipient: "RESTAURANT", collector: "RESTAURANT", instrument: "CASH" }
+    : "Для собственного курьера ресторана поддерживаются только наличные при получении.";
+}
+
+/**
+ * Канонический расчёт движения денег по заказу.
+ *
+ * Правила текущей модели:
+ * - самовывоз (карта/наличные): деньги получает ресторан; он должен Direct
+ *   уже рассчитанную комиссию; банковский 1% карты целиком его и НЕ
+ *   увеличивает долг перед Direct;
+ * - доставка собственным курьером ресторана (только наличные): деньги и
+ *   стоимость доставки остаются ресторану; ресторан должен Direct комиссию;
+ * - доставка водителем Direct (только онлайн-карта): деньги получает Direct;
+ *   Direct должен ресторану еду за вычетом комиссии и банковской части
+ *   ресторана; стоимость доставки предназначена водителю и НЕ является
+ *   доходом Direct; чистый доход Direct — комиссия + small-order fee минус
+ *   банковская часть Direct.
+ *
+ * Инварианты: банковские части сходятся с общей комиссией (гарантирует
+ * allocateBankFee); у одного обычного заказа не бывают одновременно
+ * положительными restaurantOwesDirectCents и directOwesRestaurantCents;
+ * все результаты — целые неотрицательные центы. Повреждённые данные
+ * (неизвестные enum, дробные/отрицательные суммы, расходящиеся суммы,
+ * small-order fee вне доставки Direct, комиссия больше еды, отрицательный
+ * чистый результат) отклоняются с доменной ошибкой, а не нулями.
+ */
+export function computeOrderMoneyMovement(
+  input: OrderMoneyMovementInput,
+): OrderMoneyMovementResult {
+  if (!KNOWN_DELIVERY_MODES.includes(input.deliveryMode)) {
+    return fail("Неизвестный режим получения заказа.");
+  }
+  if (!KNOWN_PAYMENT_CHANNELS.includes(input.paymentChannel)) {
+    return fail("Неизвестный канал оплаты заказа.");
+  }
+
+  const sums: readonly [string, number][] = [
+    ["стоимость еды", input.foodSubtotalCents],
+    ["стоимость доставки", input.deliveryFeeCents],
+    ["доплата за небольшой заказ", input.smallOrderFeeCents],
+    ["сумма клиента", input.customerTotalCents],
+    ["комиссия Direct", input.restaurantCommissionCents],
+  ];
+  for (const [label, value] of sums) {
+    if (!isValidCents(value)) {
+      return fail(`Некорректная сумма (${label}): нужны целые неотрицательные центы.`);
+    }
+  }
+  if (input.driverPayoutCents !== undefined && !isValidCents(input.driverPayoutCents)) {
+    return fail("Некорректная сумма (выплата водителю): нужны целые неотрицательные центы.");
+  }
+
+  if (input.foodSubtotalCents > input.customerTotalCents) {
+    return fail("Стоимость еды не может превышать сумму клиента.");
+  }
+  if (input.restaurantCommissionCents > input.foodSubtotalCents) {
+    return fail("Комиссия Direct не может превышать стоимость еды.");
+  }
+  if (input.deliveryMode !== "PLATFORM_DRIVER" && input.smallOrderFeeCents !== 0) {
+    return fail(
+      "Доплата за небольшой заказ существует только у доставки водителем Direct.",
+    );
+  }
+
+  const context = resolveChannelContext(input.deliveryMode, input.paymentChannel);
+  if (typeof context === "string") {
+    return fail(context);
+  }
+
+  // Согласованность уже рассчитанных сумм текущей модели: расхождение — это
+  // повреждённые данные, а не повод молча выдать правдоподобный результат.
+  const expectedTotal =
+    input.deliveryMode === "PICKUP"
+      ? input.foodSubtotalCents
+      : input.deliveryMode === "RESTAURANT_DELIVERY"
+        ? input.foodSubtotalCents + input.deliveryFeeCents
+        : input.foodSubtotalCents + input.deliveryFeeCents + input.smallOrderFeeCents;
+  if (input.deliveryMode === "PICKUP" && input.deliveryFeeCents !== 0) {
+    return fail("У самовывоза не бывает стоимости доставки.");
+  }
+  if (expectedTotal !== input.customerTotalCents) {
+    return fail("Суммы заказа не сходятся с суммой клиента.");
+  }
+
+  // Банковская математика — ТОЛЬКО существующий канонический расчёт.
+  const bank = allocateBankFee({
+    deliveryMode: input.deliveryMode,
+    moneyCollector: context.collector,
+    paymentInstrument: context.instrument,
+    foodSubtotalCents: input.foodSubtotalCents,
+    customerTotalCents: input.customerTotalCents,
+  });
+  if (!bank.ok) {
+    return fail(bank.error);
+  }
+  const { totalBankFeeCents, restaurantBankFeeCents, directBankFeeCents } =
+    bank.fee;
+
+  let restaurantOwesDirectCents: number;
+  let directOwesRestaurantCents: number;
+  let restaurantNetCents: number;
+  let directNetRevenueCents: number;
+
+  if (input.deliveryMode === "PLATFORM_DRIVER") {
+    // Деньги у Direct: он должен ресторану еду за вычетом комиссии и
+    // банковской части ресторана; доставка предназначена водителю.
+    restaurantOwesDirectCents = 0;
+    directOwesRestaurantCents =
+      input.foodSubtotalCents -
+      input.restaurantCommissionCents -
+      restaurantBankFeeCents;
+    restaurantNetCents = directOwesRestaurantCents;
+    directNetRevenueCents =
+      input.restaurantCommissionCents +
+      input.smallOrderFeeCents -
+      directBankFeeCents;
+  } else {
+    // Деньги у ресторана (самовывоз или собственный курьер): он должен Direct
+    // комиссию; банковская комиссия карты уменьшает ЕГО чистый доход и долг
+    // перед Direct не увеличивает; стоимость собственной доставки остаётся
+    // ресторану (оплата его курьера — вне Direct).
+    restaurantOwesDirectCents = input.restaurantCommissionCents;
+    directOwesRestaurantCents = 0;
+    restaurantNetCents =
+      input.customerTotalCents -
+      input.restaurantCommissionCents -
+      restaurantBankFeeCents;
+    directNetRevenueCents = input.restaurantCommissionCents;
+  }
+
+  const results: readonly [string, number][] = [
+    ["restaurantOwesDirectCents", restaurantOwesDirectCents],
+    ["directOwesRestaurantCents", directOwesRestaurantCents],
+    ["restaurantNetCents", restaurantNetCents],
+    ["directNetRevenueCents", directNetRevenueCents],
+  ];
+  for (const [label, value] of results) {
+    if (!isValidCents(value)) {
+      return fail(`Невозможный отрицательный или нецелый результат (${label}).`);
+    }
+  }
+  // Взаимные обязательства одного обычного заказа не бывают встречными.
+  if (restaurantOwesDirectCents > 0 && directOwesRestaurantCents > 0) {
+    return fail("Встречные обязательства по одному заказу невозможны.");
+  }
+
+  return {
+    ok: true,
+    movement: {
+      customerMoneyRecipient: context.recipient,
+      paymentChannel: input.paymentChannel,
+      totalBankFeeCents,
+      restaurantBankFeeCents,
+      directBankFeeCents,
+      restaurantOwesDirectCents,
+      directOwesRestaurantCents,
+      restaurantNetCents,
+      directNetRevenueCents,
+    },
+  };
+}
