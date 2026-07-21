@@ -11,6 +11,11 @@ import {
   ACCOUNTING_RESOLUTION_NOTE_MAX,
   ACCOUNTING_RESOLUTION_REFERENCE_MAX,
 } from "./restaurant-accounting";
+import {
+  isAllowedDirectionTypePair,
+  SETTLEMENT_DIRECTION_TYPE_ERROR,
+  validateRestaurantSettlementRecord,
+} from "./restaurant-settlement-integrity";
 
 /**
  * Групповой закрытый расчёт между Direct и рестораном.
@@ -161,6 +166,12 @@ export function buildRestaurantSettlementPreview(
     ) {
       return previewFail("Неизвестный тип обязательства.");
     }
+    // Направление и основание проверяются ПАРОЙ: комиссия всегда от ресторана
+    // к Direct, выплата — от Direct ресторану. Смешанная пара — повреждённые
+    // данные: до суммирования, поэтому в gross/net она не попадает.
+    if (!isAllowedDirectionTypePair(entry.direction, entry.type)) {
+      return previewFail(SETTLEMENT_DIRECTION_TYPE_ERROR);
+    }
     if (!isPositiveCents(entry.amountCents)) {
       return previewFail("Некорректная сумма обязательства.");
     }
@@ -295,7 +306,7 @@ export function confirmRestaurantSettlement(
   }
 
   const selectedIds = new Set(preview.accountingEntryIds);
-  const record: RestaurantSettlementRecord = {
+  const draftRecord: RestaurantSettlementRecord = {
     id: recordId,
     restaurantId,
     currencyCode: preview.currencyCode,
@@ -309,6 +320,14 @@ export function confirmRestaurantSettlement(
     note: normalizedNote,
     externalReference: normalizedReference,
   };
+  // Defensive invariant: создаваемая запись проходит тот же канонический
+  // validator, что и сохранённые. Неожиданно невалидная запись не должна
+  // ничего закрывать — fail-closed без частичных изменений.
+  const validated = validateRestaurantSettlementRecord(draftRecord);
+  if (!validated.ok) {
+    return fail(validated.error);
+  }
+  const record = validated.record;
 
   // Все выбранные обязательства закрываются одним и тем же моментом.
   const nextEntries = state.restaurantAccountingEntries.map((entry) =>

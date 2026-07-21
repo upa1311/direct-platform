@@ -31,6 +31,7 @@ import {
   normalizeStoredMoneyMovement,
   type MoneyMovementRecoveryContext,
 } from "./money-movement-snapshot";
+import { validateRestaurantSettlementRecord } from "./restaurant-settlement-integrity";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
@@ -848,8 +849,19 @@ function normalizeRestaurantAccountingResolutionEvents(
 /**
  * Записи закрытых расчётов (v11): у состояний до v11 поля нет — пустой массив.
  * Исторические групповые расчёты НЕ реконструируются из resolution events:
- * запись создаётся только явным административным подтверждением. Сохраняются
- * лишь валидные по форме записи; повторная нормализация идемпотентна.
+ * запись создаётся только явным административным подтверждением.
+ *
+ * Каждая запись проходит канонический intrinsic-validator (структура, валюта,
+ * состав обязательств, соответствие сохранённых net-значений gross-суммам).
+ * Значения НЕ пересчитываются и не «дочиниваются»: запись либо сохраняется как
+ * есть, либо исключается целиком.
+ *
+ * Дополнительно проверяется целостность КОЛЛЕКЦИИ: повторный id записи и одно
+ * обязательство, попавшее в две записи, — защита от двойного исторического
+ * расчёта (одна и та же сумма иначе закрылась бы дважды), а НЕ дедупликация
+ * бизнес-операций. Детерминированное поведение: первая полностью валидная
+ * запись сохраняется, последующая конфликтующая отбрасывается; порядок
+ * исходного массива сохраняется, записи не объединяются.
  */
 function normalizeRestaurantSettlementRecords(
   value: unknown,
@@ -857,20 +869,24 @@ function normalizeRestaurantSettlementRecords(
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.flatMap((record) => {
-    if (
-      !isRecord(record) ||
-      typeof record.id !== "string" ||
-      typeof record.restaurantId !== "string" ||
-      !Array.isArray(record.accountingEntryIds) ||
-      !record.accountingEntryIds.every((id) => typeof id === "string")
-    ) {
-      return [];
+  const kept: PrototypeState["restaurantSettlementRecords"] = [];
+  const seenRecordIds = new Set<string>();
+  const claimedEntryIds = new Set<string>();
+  for (const candidate of value) {
+    const validated = validateRestaurantSettlementRecord(candidate);
+    if (!validated.ok) continue;
+    const record = validated.record;
+    if (seenRecordIds.has(record.id)) continue;
+    if (record.accountingEntryIds.some((id) => claimedEntryIds.has(id))) {
+      continue;
     }
-    return [
-      record as unknown as PrototypeState["restaurantSettlementRecords"][number],
-    ];
-  });
+    seenRecordIds.add(record.id);
+    for (const entryId of record.accountingEntryIds) {
+      claimedEntryIds.add(entryId);
+    }
+    kept.push(record);
+  }
+  return kept;
 }
 
 /**
