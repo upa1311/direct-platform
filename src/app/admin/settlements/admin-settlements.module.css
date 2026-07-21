@@ -81,6 +81,157 @@
 }
 
 /* Спокойное подтверждение результата — без тревожного цвета/редизайна. */
+/* --- Групповой расчёт: выбор, preview, форма, история ----------------------- */
+
+.settlementPanel {
+  border: 1px solid var(--kds-border, #d0d5dd);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.settlementSelectionRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settlementSelected {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settlementSelectionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settlementHint {
+  margin: 0;
+  font-size: 13px;
+  opacity: 0.72;
+  line-height: 1.45;
+}
+
+/* Preview: на узком экране одна колонка, без горизонтального overflow. */
+.settlementPreview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.settlementNet {
+  border: 1px solid var(--kds-border, #d0d5dd);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  min-width: 0;
+}
+
+.settlementNetLabel {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settlementNetValue {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.settlementForm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+/* История групповых расчётов: карточки, адаптивные по ширине. */
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.historyCard {
+  border: 1px solid var(--kds-border, #d0d5dd);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.historyHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.historyDate {
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.historyDirection {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.historyAmount {
+  font-size: 18px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.historyGross {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  font-size: 13px;
+}
+
+.historyGrossRow {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.historyGrossRow dt {
+  opacity: 0.72;
+}
+
+.historyGrossRow dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.historyNote {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.historyDetails {
+  font-size: 12px;
+}
+
 .confirmBanner {
   display: flex;
   flex-wrap: wrap;

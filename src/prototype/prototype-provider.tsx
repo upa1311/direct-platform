@@ -98,6 +98,10 @@ import {
   type RestaurantAccountingOutcome,
   type RestaurantAccountingResolutionResult,
 } from "./restaurant-accounting";
+import {
+  confirmRestaurantSettlement,
+  type RestaurantSettlementConfirmResult,
+} from "./restaurant-settlement-records";
 import type { EtaAdjustmentIntent } from "./order-eta";
 import {
   closePrototypeChannel,
@@ -310,6 +314,17 @@ export interface PrototypeContextValue {
     note: string,
     externalReference: string | null,
   ) => Promise<RestaurantAccountingResolutionResult>;
+  /**
+   * Групповой закрытый расчёт: одна запись RestaurantSettlementRecord на набор
+   * выбранных открытых обязательств. Доменное действие внутри lock заново
+   * строит канонический preview — UI-preview авторитетным не считается.
+   */
+  confirmSettlement: (
+    restaurantId: string,
+    accountingEntryIds: readonly string[],
+    note: string,
+    externalReference: string | null,
+  ) => Promise<RestaurantSettlementConfirmResult>;
   /** Выдача самовывоза после фактической оплаты на точке; код не требуется. */
   completePickup: (
     orderId: string,
@@ -1297,6 +1312,36 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  const confirmSettlement = useCallback(
+    (
+      restaurantId: string,
+      accountingEntryIds: readonly string[],
+      note: string,
+      externalReference: string | null,
+    ) => {
+      // Один канонический момент операции на всю транзакцию: он попадёт в
+      // запись расчёта, закрытые обязательства, audit-события и её id.
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          confirmRestaurantSettlement(
+            baseState,
+            restaurantId,
+            accountingEntryIds,
+            note,
+            externalReference,
+            nowIso,
+          ),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          settlementRecordId: null,
+        }),
+      });
+    },
+    [runSerializedActionMutation],
+  );
+
   const requestRestaurantCancellation = useCallback(
     (
       orderId: string,
@@ -1636,6 +1681,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resolvePreparationProblem,
       requestRestaurantCancellation,
       resolveAccountingEntry,
+      confirmSettlement,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
@@ -1697,6 +1743,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resolvePreparationProblem,
       requestRestaurantCancellation,
       resolveAccountingEntry,
+      confirmSettlement,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
