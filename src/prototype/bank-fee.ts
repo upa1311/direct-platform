@@ -12,7 +12,12 @@ import type { DeliveryMode } from "./pricing-engine";
 // суммы заказа и фактический канал оплаты, ничего в них не меняя: клиентская
 // сумма из-за банка не увеличивается.
 
-/** Ставка банковской комиссии карточной транзакции: 1% (в базисных пунктах). */
+/**
+ * Историческая константа ставки. Оставлена ТОЛЬКО как часть публикации правила
+ * V1 (см. financial-rule) и для совместимости существующих ссылок: неявным
+ * источником ставки для исторического расчёта она больше не является —
+ * allocateBankFee получает ставку явно из снимка правила заказа.
+ */
 export const BANK_CARD_FEE_RATE_BPS = 100;
 
 /**
@@ -39,6 +44,12 @@ export interface BankFeeInput {
    * целые центы. Включает еду, доставку Direct и small-order fee, если есть.
    */
   customerTotalCents: number;
+  /**
+   * Ставка банковской комиссии из снимка финансового правила ЗАКАЗА.
+   * Передаётся явно: глобальная константа неявным источником не является,
+   * иначе смена ставки переписала бы исторические расчёты.
+   */
+  bankCardFeeRateBps: number;
 }
 
 /** Распределение банковской комиссии между рестораном и Direct. */
@@ -53,9 +64,20 @@ export type BankFeeResult =
   | { ok: true; fee: BankFeeAllocation }
   | { ok: false; error: string };
 
-/** 1% суммы в центах с округлением до цента. */
-function bankFeeOfCents(amountCents: number): number {
-  return Math.round((amountCents * BANK_CARD_FEE_RATE_BPS) / 10_000);
+/** Комиссия по ПЕРЕДАННОЙ ставке (базисные пункты), с округлением до цента. */
+function bankFeeOfCents(amountCents: number, rateBps: number): number {
+  return Math.round((amountCents * rateBps) / 10_000);
+}
+
+/** Ставка правила: целые положительные базисные пункты. */
+function isValidRateBps(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    Number.isSafeInteger(value) &&
+    value > 0
+  );
 }
 
 /** Целые неотрицательные конечные центы. */
@@ -102,7 +124,8 @@ function validateCombination(input: BankFeeInput): string | null {
 }
 
 /**
- * Распределение банковского 1% карточной транзакции.
+ * Распределение банковской комиссии карточной транзакции по ставке ЗАКАЗА
+ * (bankCardFeeRateBps из снимка его финансового правила).
  *
  * Правила:
  * - наличные (любой допустимый канал): банковской комиссии нет — все суммы 0;
@@ -126,6 +149,9 @@ export function allocateBankFee(input: BankFeeInput): BankFeeResult {
     input.paymentInstrument !== "CASH"
   ) {
     return fail("Неизвестный канал оплаты.");
+  }
+  if (!isValidRateBps(input.bankCardFeeRateBps)) {
+    return fail("Некорректная ставка банковской комиссии.");
   }
   if (!isValidCents(input.foodSubtotalCents)) {
     return fail("Стоимость еды должна быть целым неотрицательным числом центов.");
@@ -153,7 +179,10 @@ export function allocateBankFee(input: BankFeeInput): BankFeeResult {
     };
   }
 
-  const totalBankFeeCents = bankFeeOfCents(input.customerTotalCents);
+  const totalBankFeeCents = bankFeeOfCents(
+    input.customerTotalCents,
+    input.bankCardFeeRateBps,
+  );
 
   // Самовывоз картой на точке: платёж принимает ресторан — весь 1% его.
   if (input.deliveryMode === "PICKUP") {
@@ -170,7 +199,10 @@ export function allocateBankFee(input: BankFeeInput): BankFeeResult {
   // Доставка водителем Direct + онлайн-карта: ресторан несёт банковскую часть
   // от еды, Direct — остаток. Разность (а не второй round) гарантирует
   // инвариант суммы частей.
-  const restaurantBankFeeCents = bankFeeOfCents(input.foodSubtotalCents);
+  const restaurantBankFeeCents = bankFeeOfCents(
+    input.foodSubtotalCents,
+    input.bankCardFeeRateBps,
+  );
   const directBankFeeCents = totalBankFeeCents - restaurantBankFeeCents;
   if (directBankFeeCents < 0) {
     // Возможно только при вырожденном округлении; fail-closed вместо

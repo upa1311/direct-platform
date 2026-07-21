@@ -4,8 +4,9 @@ import type {
   RestaurantDeliverySettings,
 } from "./pricing-engine";
 import type { OrderMoneyMovement } from "./order-money-movement";
+import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 11 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 12 as const;
 
 export type { OrderMoneyMovement } from "./order-money-movement";
 
@@ -588,6 +589,13 @@ export interface FinancialSnapshot {
   moneyMovement?: OrderMoneyMovement;
   /** Статус движения денег; см. MoneyMovementStatus. */
   moneyMovementStatus: MoneyMovementStatus;
+  /**
+   * Снимок финансового правила (v12), по которому посчитаны банковские суммы
+   * заказа. Provenance: старый заказ объясняется и проверяется по СВОЕМУ
+   * правилу, а не по текущим константам кода. Optional только для чтения
+   * legacy-состояний — новый заказ без него не создаётся.
+   */
+  financialRule?: FinancialRuleSnapshot;
 }
 
 export interface OrderHistoryEvent {

@@ -83,6 +83,7 @@ import {
   buildCreationMoneyMovement,
   finalizePickupMoneyMovement,
 } from "./money-movement-snapshot";
+import { getActiveFinancialRule } from "./financial-rule";
 import {
   computeEtaFromIntent,
   ETA_REASON_MAX_LENGTH,
@@ -547,6 +548,11 @@ export function createOrderFromCart(
     lineTotalCents: view.lineTotalCents - view.promotionDiscountCents,
   }));
 
+  // Снимок финансового правила (v12): фиксируется в заказе НАВСЕГДА и служит
+  // единственным основанием его банковских сумм — в том числе для самовывоза,
+  // канал которого станет известен только при выдаче.
+  const financialRule = getActiveFinancialRule();
+
   // Каноническое движение денег (v10). Канал заранее известен для доставки
   // Direct (онлайн-карта) и собственного курьера (наличные) — фиксируется
   // сразу; для самовывоза канал не угадывается (клиент заплатит на точке).
@@ -559,6 +565,7 @@ export function createOrderFromCart(
     smallOrderFeeCents: pricing.smallOrderFeeCents,
     customerTotalCents,
     restaurantCommissionCents,
+    financialRule,
   });
   if (!creationMovement.ok) {
     return fail(creationMovement.error);
@@ -640,6 +647,7 @@ export function createOrderFromCart(
       ...(creationMovement.moneyMovementStatus === "COMPLETE"
         ? { moneyMovement: creationMovement.moneyMovement }
         : {}),
+      financialRule,
     },
     history: [
       {

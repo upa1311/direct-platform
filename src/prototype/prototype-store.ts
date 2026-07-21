@@ -32,6 +32,7 @@ import {
   type MoneyMovementRecoveryContext,
 } from "./money-movement-snapshot";
 import { validateRestaurantSettlementRecord } from "./restaurant-settlement-integrity";
+import { validateFinancialRuleSnapshot } from "./financial-rule";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
@@ -93,12 +94,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * Схемы, принимаемые из текущего ключа хранилища v7. Каждая следующая версия —
  * надмножество предыдущей (v8 добавил restaurantAccountingEntries, v9 —
  * restaurantAccountingResolutionEvents, v10 — каноническое движение денег в
- * FinancialSnapshot, v11 — restaurantSettlementRecords), поэтому состояние
- * прежней версии безопасно принимается и доводится нормализацией до текущей
- * без потери данных. Ключ хранилища не меняется.
+ * FinancialSnapshot, v11 — restaurantSettlementRecords, v12 — снимок
+ * финансового правила заказа), поэтому состояние прежней версии безопасно
+ * принимается и доводится нормализацией до текущей без потери данных. Ключ
+ * хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11,
+  7, 8, 9, 10, 11, 12,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -264,12 +266,17 @@ function normalizeFinancials(
     deliveryMode,
     movementContext,
   );
+  // v12: снимок правила сохраняется как есть, если он валиден. Повреждённый
+  // или отсутствующий НЕ подменяется активным правилом — иначе исторический
+  // заказ молча получил бы сегодняшнюю ставку.
+  const ruleResult = validateFinancialRuleSnapshot(raw.financialRule);
   return {
     ...base,
     moneyMovementStatus: recovered.moneyMovementStatus,
     ...(recovered.moneyMovement
       ? { moneyMovement: recovered.moneyMovement }
       : {}),
+    ...(ruleResult.ok ? { financialRule: ruleResult.rule } : {}),
   };
 }
 

@@ -4,6 +4,10 @@ import type {
   BankFeePaymentInstrument,
 } from "./bank-fee";
 import type { DeliveryMode } from "./pricing-engine";
+import {
+  validateFinancialRuleSnapshot,
+  type FinancialRuleSnapshot,
+} from "./financial-rule";
 
 // Канонический чистый расчёт движения денег по ОДНОМУ заказу.
 //
@@ -55,6 +59,12 @@ export interface OrderMoneyMovementInput {
    * в формулы чистых итогов не входит и в канонический результат не попадает.
    */
   driverPayoutCents?: number;
+  /**
+   * Снимок финансового правила ЗАКАЗА: банковские суммы считаются по его
+   * ставке. Активное правило внутри чистой функции не подставляется — иначе
+   * исторический заказ пересчитался бы по сегодняшним константам.
+   */
+  financialRule: FinancialRuleSnapshot;
 }
 
 /** Единый канонический результат движения денег по заказу. */
@@ -168,6 +178,12 @@ export function computeOrderMoneyMovement(
   if (!KNOWN_PAYMENT_CHANNELS.includes(input.paymentChannel)) {
     return fail("Неизвестный канал оплаты заказа.");
   }
+  // Правило заказа обязано быть валидным снимком известной версии: без него
+  // банковские суммы считать нечем, подстановка активного правила запрещена.
+  const ruleResult = validateFinancialRuleSnapshot(input.financialRule);
+  if (!ruleResult.ok) {
+    return fail(ruleResult.error);
+  }
 
   const sums: readonly [string, number][] = [
     ["стоимость еды", input.foodSubtotalCents],
@@ -243,6 +259,8 @@ export function computeOrderMoneyMovement(
     paymentInstrument: context.instrument,
     foodSubtotalCents: input.foodSubtotalCents,
     customerTotalCents: input.customerTotalCents,
+    // Ставка — из снимка правила заказа, не из глобальной константы.
+    bankCardFeeRateBps: ruleResult.rule.bankCardFeeRateBps,
   });
   if (!bank.ok) {
     return fail(bank.error);

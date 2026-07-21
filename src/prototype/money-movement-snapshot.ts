@@ -4,6 +4,10 @@ import {
   type OrderPaymentChannel,
 } from "./order-money-movement";
 import type { DeliveryMode } from "./pricing-engine";
+import {
+  validateFinancialRuleSnapshot,
+  type FinancialRuleSnapshot,
+} from "./financial-rule";
 
 // Прослойка между каноническим расчётом движения денег и финансовым снимком
 // заказа. Чистая: без React, состояния прототипа и localStorage. Формулы НЕ
@@ -30,6 +34,11 @@ export interface MoneyMovementSnapshotSums {
   restaurantCommissionCents: number;
 }
 
+/** Суммы заказа вместе со снимком его финансового правила. */
+export interface MoneyMovementSnapshotInput extends MoneyMovementSnapshotSums {
+  financialRule: FinancialRuleSnapshot;
+}
+
 /** Результат построения движения при СОЗДАНИИ заказа. */
 export type CreationMoneyMovementResult =
   | {
@@ -54,25 +63,26 @@ function knownChannelForMode(mode: DeliveryMode): OrderPaymentChannel | null {
   return null;
 }
 
-/** Вызов канонической функции для известного канала. */
+/** Вызов канонической функции для известного канала по правилу ЗАКАЗА. */
 function computeForChannel(
-  sums: MoneyMovementSnapshotSums,
+  input: MoneyMovementSnapshotInput,
   paymentChannel: OrderPaymentChannel,
 ):
   | { ok: true; movement: OrderMoneyMovement }
   | { ok: false; error: string } {
   const result = computeOrderMoneyMovement({
-    deliveryMode: sums.deliveryMode,
+    deliveryMode: input.deliveryMode,
     paymentChannel,
-    foodSubtotalCents: sums.foodSubtotalCents,
-    deliveryFeeCents: sums.deliveryFeeCents,
-    smallOrderFeeCents: sums.smallOrderFeeCents,
-    customerTotalCents: sums.customerTotalCents,
-    restaurantCommissionCents: sums.restaurantCommissionCents,
+    foodSubtotalCents: input.foodSubtotalCents,
+    deliveryFeeCents: input.deliveryFeeCents,
+    smallOrderFeeCents: input.smallOrderFeeCents,
+    customerTotalCents: input.customerTotalCents,
+    restaurantCommissionCents: input.restaurantCommissionCents,
     // Стоимость доставки водителем Direct полностью получает водитель; в
     // остальных режимах водителя Direct нет.
     driverPayoutCents:
-      sums.deliveryMode === "PLATFORM_DRIVER" ? sums.deliveryFeeCents : 0,
+      input.deliveryMode === "PLATFORM_DRIVER" ? input.deliveryFeeCents : 0,
+    financialRule: input.financialRule,
   });
   return result.ok
     ? { ok: true, movement: result.movement }
@@ -88,13 +98,19 @@ function computeForChannel(
  * точке): PENDING_PAYMENT_CHANNEL без движения.
  */
 export function buildCreationMoneyMovement(
-  sums: MoneyMovementSnapshotSums,
+  input: MoneyMovementSnapshotInput,
 ): CreationMoneyMovementResult {
-  const channel = knownChannelForMode(sums.deliveryMode);
+  // Новый заказ обязан иметь валидное правило — даже самовывоз, у которого
+  // канал ещё неизвестен: правило фиксируется в момент создания заказа.
+  const ruleResult = validateFinancialRuleSnapshot(input.financialRule);
+  if (!ruleResult.ok) {
+    return { ok: false, error: ruleResult.error };
+  }
+  const channel = knownChannelForMode(input.deliveryMode);
   if (channel === null) {
     return { ok: true, moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" };
   }
-  const computed = computeForChannel(sums, channel);
+  const computed = computeForChannel(input, channel);
   if (!computed.ok) {
     return { ok: false, error: computed.error };
   }
@@ -109,6 +125,8 @@ export function buildCreationMoneyMovement(
 export interface PickupFinalizeSnapshot extends MoneyMovementSnapshotSums {
   moneyMovementStatus: SnapshotMoneyMovementStatus;
   moneyMovement?: OrderMoneyMovement;
+  /** Правило, сохранённое при СОЗДАНИИ заказа (не активное на момент выдачи). */
+  financialRule?: FinancialRuleSnapshot;
 }
 
 export type PickupFinalizeResult =
@@ -125,7 +143,10 @@ export type PickupFinalizeResult =
  * Идемпотентность и неизменяемость истории: если движение уже COMPLETE с тем
  * же каналом — возвращается СОХРАНЁННОЕ движение без пересчёта; попытка
  * зафиксировать другой канал (CASH → CARD) отклоняется fail-closed, историю
- * не перезаписывает. Расчёт — только computeOrderMoneyMovement.
+ * не перезаписывает. Расчёт — только computeOrderMoneyMovement и ТОЛЬКО по
+ * правилу, сохранённому в самом заказе: активное правило на момент выдачи не
+ * используется, поэтому его смена не меняет комиссию уже созданного заказа.
+ * Заказ без валидного правила финализировать нельзя — fail-closed.
  */
 export function finalizePickupMoneyMovement(
   snapshot: PickupFinalizeSnapshot,
@@ -159,7 +180,15 @@ export function finalizePickupMoneyMovement(
       moneyMovement: snapshot.moneyMovement,
     };
   }
-  const computed = computeForChannel(snapshot, channel);
+  // Правило берётся из заказа; legacy-заказ без него финализировать нельзя.
+  const ruleResult = validateFinancialRuleSnapshot(snapshot.financialRule);
+  if (!ruleResult.ok) {
+    return { ok: false, error: ruleResult.error };
+  }
+  const computed = computeForChannel(
+    { ...snapshot, financialRule: ruleResult.rule },
+    channel,
+  );
   if (!computed.ok) {
     return { ok: false, error: computed.error };
   }
@@ -289,20 +318,22 @@ function expectedChannel(
  * Семантическая проверка сохранённого COMPLETE-движения: структура и простые
  * инварианты недостаточны — канал, получатель и КАЖДАЯ сумма обязаны совпасть
  * с результатом канонической функции от подтверждённых снимок-сумм
- * (формулы не копируются — только computeOrderMoneyMovement). При полном
- * совпадении возвращается ИСХОДНЫЙ объект движения (без замены и пересчёта);
- * любое расхождение или неизвестный канал завершённого самовывоза — null,
- * повреждённое движение молча не исправляется.
+ * (формулы не копируются — только computeOrderMoneyMovement). Пересчёт идёт по
+ * правилу ЗАКАЗА: активная версия для исторического заказа не используется,
+ * поэтому будущая смена ставки не «ломает» валидный старый COMPLETE. При
+ * полном совпадении возвращается ИСХОДНЫЙ объект движения (без замены и
+ * пересчёта); любое расхождение или неизвестный канал завершённого самовывоза
+ * — null, повреждённое движение молча не исправляется.
  */
 export function verifyStoredCompleteMovement(
   stored: unknown,
-  sums: MoneyMovementSnapshotSums,
+  input: MoneyMovementSnapshotInput,
   context: MoneyMovementRecoveryContext,
 ): OrderMoneyMovement | null {
   if (!isValidStoredMoneyMovement(stored)) return null;
-  const channel = expectedChannel(sums.deliveryMode, context);
+  const channel = expectedChannel(input.deliveryMode, context);
   if (channel === null) return null;
-  const canonical = computeForChannel(sums, channel);
+  const canonical = computeForChannel(input, channel);
   if (!canonical.ok) return null;
   const expected = canonical.movement;
   const matches =
@@ -320,14 +351,20 @@ export function verifyStoredCompleteMovement(
 
 /**
  * Полная fail-closed нормализация движения денег legacy-снимка. Порядок:
- * 1) подтверждение исходных сумм (fallback-нули существуют только для
- *    совместимости прочих UI-полей и финансовыми данными НЕ являются);
- * 2) сохранённый COMPLETE проверяется структурно И семантически — валидный
- *    принимается исходным объектом, повреждённый уходит в REVIEW_REQUIRED;
+ * 1) подтверждение правила заказа (provenance) и исходных сумм (fallback-нули
+ *    существуют только для совместимости прочих UI-полей и финансовыми данными
+ *    НЕ являются);
+ * 2) сохранённый COMPLETE проверяется структурно И семантически ПО ПРАВИЛУ
+ *    ЗАКАЗА — валидный принимается исходным объектом, повреждённый уходит в
+ *    REVIEW_REQUIRED;
  * 3) сохранённый REVIEW_REQUIRED сохраняется (идемпотентность);
  * 4) законный PENDING_PAYMENT_CHANNEL незавершённого самовывоза сохраняется;
- * 5) recovery разрешён ТОЛЬКО при подтверждённых суммах; иначе —
- *    REVIEW_REQUIRED либо законный PENDING незавершённого самовывоза.
+ * 5) recovery разрешён ТОЛЬКО при подтверждённых суммах И валидном правиле;
+ *    иначе — REVIEW_REQUIRED либо законный PENDING незавершённого самовывоза.
+ *
+ * Ключевая политика v12: заказ БЕЗ валидного снимка правила не восстанавливается
+ * и не подтверждается — текущая ставка задним числом не подставляется, даже
+ * если все прежние суммы на месте и структурно выглядят корректно.
  */
 export function normalizeStoredMoneyMovement(
   rawFinancials: unknown,
@@ -338,7 +375,11 @@ export function normalizeStoredMoneyMovement(
     rawFinancials && typeof rawFinancials === "object"
       ? (rawFinancials as Record<string, unknown>)
       : {};
-  const confirmed = readConfirmedSnapshotSums(rawFinancials, deliveryMode);
+  const sums = readConfirmedSnapshotSums(rawFinancials, deliveryMode);
+  const ruleResult = validateFinancialRuleSnapshot(raw.financialRule);
+  // Правило и суммы вместе — единственное основание что-либо считать.
+  const confirmed: MoneyMovementSnapshotInput | null =
+    sums && ruleResult.ok ? { ...sums, financialRule: ruleResult.rule } : null;
   const pendingAllowed =
     deliveryMode === "PICKUP" &&
     context.pickupPaidWith === null &&
@@ -359,7 +400,7 @@ export function normalizeStoredMoneyMovement(
     return { moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" };
   }
   if (confirmed === null) {
-    // Исходные суммы отсутствуют или повреждены: нулевой «успех» запрещён.
+    // Нет подтверждённого правила или сумм: нулевой «успех» запрещён.
     return pendingAllowed
       ? { moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" }
       : { moneyMovementStatus: "REVIEW_REQUIRED" };
@@ -383,9 +424,12 @@ export interface RecoveredMoneyMovement {
  * REVIEW_REQUIRED: завершённый самовывоз без способа оплаты, несходящиеся или
  * повреждённые суммы, любая ошибка канонической функции. Отсутствующие
  * банковские суммы НЕ превращаются в нули без доказательств.
+ *
+ * v12: расчёт возможен только при подтверждённом снимке правила заказа —
+ * вызывающий обязан передать его вместе с суммами.
  */
 export function recoverMoneyMovement(
-  sums: MoneyMovementSnapshotSums,
+  sums: MoneyMovementSnapshotInput,
   context: MoneyMovementRecoveryContext,
 ): RecoveredMoneyMovement {
   let channel: OrderPaymentChannel | null;

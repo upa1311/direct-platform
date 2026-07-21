@@ -524,6 +524,8 @@ test("старые Direct/restaurant-delivery восстанавливаются
         original.deliveryMode === "PLATFORM_DRIVER"
           ? original.financials.deliveryFeeCents
           : 0,
+      // Правило берётся из самого заказа, а не из активной версии.
+      financialRule: original.financials.financialRule!,
     });
     assert.equal(canonical.ok, true);
     assert.ok(canonical.ok);
