@@ -92,11 +92,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * Схемы, принимаемые из текущего ключа хранилища v7. Каждая следующая версия —
  * надмножество предыдущей (v8 добавил restaurantAccountingEntries, v9 —
  * restaurantAccountingResolutionEvents, v10 — каноническое движение денег в
- * FinancialSnapshot), поэтому состояние прежней версии безопасно принимается и
- * доводится нормализацией до текущей без потери данных. Ключ хранилища не
- * меняется.
+ * FinancialSnapshot, v11 — restaurantSettlementRecords), поэтому состояние
+ * прежней версии безопасно принимается и доводится нормализацией до текущей
+ * без потери данных. Ключ хранилища не меняется.
  */
-const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([7, 8, 9, 10]);
+const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
+  7, 8, 9, 10, 11,
+]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
   const schemaVersion = (value as { schemaVersion?: unknown }).schemaVersion;
@@ -844,6 +846,34 @@ function normalizeRestaurantAccountingResolutionEvents(
 }
 
 /**
+ * Записи закрытых расчётов (v11): у состояний до v11 поля нет — пустой массив.
+ * Исторические групповые расчёты НЕ реконструируются из resolution events:
+ * запись создаётся только явным административным подтверждением. Сохраняются
+ * лишь валидные по форме записи; повторная нормализация идемпотентна.
+ */
+function normalizeRestaurantSettlementRecords(
+  value: unknown,
+): PrototypeState["restaurantSettlementRecords"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((record) => {
+    if (
+      !isRecord(record) ||
+      typeof record.id !== "string" ||
+      typeof record.restaurantId !== "string" ||
+      !Array.isArray(record.accountingEntryIds) ||
+      !record.accountingEntryIds.every((id) => typeof id === "string")
+    ) {
+      return [];
+    }
+    return [
+      record as unknown as PrototypeState["restaurantSettlementRecords"][number],
+    ];
+  });
+}
+
+/**
  * Запросы на отмену: у старых состояний поля нет — используем пустой массив
  * (§9). Не ломает старые snapshots и не входит в финансовые данные.
  */
@@ -955,6 +985,9 @@ export function normalizePrototypeState(
       normalizeRestaurantAccountingResolutionEvents(
         state.restaurantAccountingResolutionEvents,
       ),
+    restaurantSettlementRecords: normalizeRestaurantSettlementRecords(
+      state.restaurantSettlementRecords,
+    ),
     cancellationRequests: normalizeCancellationRequests(
       state.cancellationRequests,
     ),

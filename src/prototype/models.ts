@@ -5,7 +5,7 @@ import type {
 } from "./pricing-engine";
 import type { OrderMoneyMovement } from "./order-money-movement";
 
-export const PROTOTYPE_SCHEMA_VERSION = 10 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 11 as const;
 
 export type { OrderMoneyMovement } from "./order-money-movement";
 
@@ -144,6 +144,39 @@ export interface RestaurantAccountingResolutionEvent {
   actor: "ADMIN";
   note: string;
   /** Внешняя ссылка (банковская операция/кассовый документ/сверка) либо null. */
+  externalReference: string | null;
+}
+
+/** Направление итога закрытого расчёта после взаимозачёта выбранных обязательств. */
+export type RestaurantSettlementNetDirection =
+  | "DIRECT_OWES_RESTAURANT"
+  | "RESTAURANT_OWES_DIRECT"
+  | "BALANCED";
+
+/**
+ * Append-only запись одного ЗАКРЫТОГО расчёта между Direct и рестораном (v11):
+ * администратор подтверждает, что группа выбранных открытых обязательств
+ * закрыта. Запись не редактируется и не пересчитывается позднее — хранит
+ * точные gross-суммы обеих сторон и готовый net на момент подтверждения.
+ *
+ * Запись НЕ означает, что система выполнила банковский перевод: фактический
+ * платёж происходит вне Direct, здесь фиксируется только административное
+ * решение. Списание требований (WAIVED) в групповой расчёт не входит и
+ * остаётся отдельным workflow resolveRestaurantAccountingEntry.
+ */
+export interface RestaurantSettlementRecord {
+  id: string;
+  restaurantId: string;
+  currencyCode: CurrencyCode;
+  /** Обязательства, закрытые именно этим расчётом. */
+  accountingEntryIds: string[];
+  restaurantOwesDirectCents: number;
+  directOwesRestaurantCents: number;
+  netDirection: RestaurantSettlementNetDirection;
+  netAmountCents: number;
+  settledAt: string;
+  actor: "ADMIN";
+  note: string;
   externalReference: string | null;
 }
 
@@ -764,6 +797,8 @@ export interface PrototypeState {
   restaurantAccountingEntries: RestaurantAccountingEntry[];
   /** Append-only аудит административного закрытия обязательств. */
   restaurantAccountingResolutionEvents: RestaurantAccountingResolutionEvent[];
+  /** Append-only записи закрытых групповых расчётов (v11). */
+  restaurantSettlementRecords: RestaurantSettlementRecord[];
   cancellationRequests: CancellationRequest[];
   operationalEvents: OperationalEvent[];
 }

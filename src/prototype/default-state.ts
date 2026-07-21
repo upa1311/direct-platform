@@ -550,6 +550,7 @@ export function createDefaultState(): PrototypeState {
     settlements: [],
     restaurantAccountingEntries: [],
     restaurantAccountingResolutionEvents: [],
+    restaurantSettlementRecords: [],
     cancellationRequests: [],
     operationalEvents: [],
   };
