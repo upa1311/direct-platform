@@ -43,6 +43,17 @@ import {
   type RestaurantStatementResolutionViewRow,
   type RestaurantStatementViewResult,
 } from "@/prototype/restaurant-statement-view";
+import {
+  buildRestaurantFinanceReadModel,
+  type RestaurantFinanceReadModelResult,
+} from "@/prototype/restaurant-finance-read-model";
+import {
+  describeFinanceNet,
+  FINANCE_CHANNEL_LABELS,
+  FINANCE_DATA_STATUS_LABELS,
+  FINANCE_DELIVERY_LABELS,
+  FINANCE_DIRECTION_LABELS,
+} from "./overview-presentation";
 import { describeOpenPosition } from "./open-position";
 import { defaultStatementRange } from "./statement-range";
 import {
@@ -57,8 +68,8 @@ import "./statement-print.css";
 
 import type { PrototypeState } from "@/prototype/models";
 
-/** Вид раздела: по заказам, по дням, журнал обязательств или выписка. */
-type SettlementView = "ORDERS" | "DAILY" | "OBLIGATIONS" | "STATEMENT";
+/** Вид раздела: главный обзор, по заказам, по дням, журнал или выписка. */
+type SettlementView = "OVERVIEW" | "ORDERS" | "DAILY" | "OBLIGATIONS" | "STATEMENT";
 
 /** Локальная дата ресторана YYYY-MM-DD → «16.07.2026» без пересчёта пояса. */
 function formatLocalDateRu(localDate: string): string {
@@ -116,7 +127,7 @@ export default function RestaurantSettlementsPage() {
     useRestaurantWorkspace();
   const nowMs = useNowMs();
   const [period, setPeriod] = useState<RestaurantSettlementPeriod>("TODAY");
-  const [view, setView] = useState<SettlementView>("ORDERS");
+  const [view, setView] = useState<SettlementView>("OVERVIEW");
 
   // Presentation-only флаги контекста представления (без пересчёта данных).
   // Период и сводка заказов имеют смысл только в отчётах по заказам/дням;
@@ -127,8 +138,24 @@ export default function RestaurantSettlementsPage() {
   const restaurant = getRestaurant(state, selectedRestaurantId);
   const timeZone = restaurant?.timeZone ?? "Europe/Chisinau";
 
+  // Канонический финансовый read-model — единственный источник главного
+  // экрана OVERVIEW. Не зависит от nowMs и старых report-builders.
+  const financeResult = useMemo<RestaurantFinanceReadModelResult | null>(() => {
+    if (!isHydrated || !restaurant) return null;
+    return buildRestaurantFinanceReadModel(state, selectedRestaurantId);
+  }, [isHydrated, restaurant, state, selectedRestaurantId]);
+
+  // Старый отчёт по заказам/дням — только для подробных режимов ORDERS/DAILY;
+  // канонический OVERVIEW от него (и от nowMs) не зависит.
   const overview = useMemo(() => {
-    if (!isHydrated || nowMs === 0 || !restaurant) return null;
+    if (
+      (view !== "ORDERS" && view !== "DAILY") ||
+      !isHydrated ||
+      nowMs === 0 ||
+      !restaurant
+    ) {
+      return null;
+    }
     return buildRestaurantSettlementOverview(
       state,
       selectedRestaurantId,
@@ -136,7 +163,7 @@ export default function RestaurantSettlementsPage() {
       new Date(nowMs).toISOString(),
       timeZone,
     );
-  }, [isHydrated, nowMs, restaurant, state, selectedRestaurantId, period, timeZone]);
+  }, [view, isHydrated, nowMs, restaurant, state, selectedRestaurantId, period, timeZone]);
 
   const daily = useMemo(() => {
     if (view !== "DAILY" || !isHydrated || nowMs === 0 || !restaurant) return null;
@@ -149,15 +176,16 @@ export default function RestaurantSettlementsPage() {
     );
   }, [view, isHydrated, nowMs, restaurant, state, selectedRestaurantId, period, timeZone]);
 
-  // Открытая позиция двустороннего журнала — не зависит от выбранного периода.
+  // Открытая позиция двустороннего журнала — только для старого режима
+  // «Обязательства»; канонический OVERVIEW эти helpers не использует.
   const position = useMemo(() => {
-    if (!isHydrated || !restaurant) return null;
+    if (view !== "OBLIGATIONS" || !isHydrated || !restaurant) return null;
     return {
       receivable: getRestaurantOpenReceivableCents(state, selectedRestaurantId),
       payable: getRestaurantOpenPayableCents(state, selectedRestaurantId),
       net: getRestaurantNetPositionCents(state, selectedRestaurantId),
     };
-  }, [isHydrated, restaurant, state, selectedRestaurantId]);
+  }, [view, isHydrated, restaurant, state, selectedRestaurantId]);
 
   // Журнал обязательств — вся история, независимо от периода отчёта.
   const journal = useMemo(() => {
@@ -194,12 +222,33 @@ export default function RestaurantSettlementsPage() {
         </div>
       </div>
 
-      {!isHydrated || !overview ? (
+      {!isHydrated ? (
         <div className={kds.empty}>Загружаем расчёты…</div>
       ) : !restaurant ? (
         <div className={kds.empty}>Ресторан не найден.</div>
+      ) : view === "OVERVIEW" ? (
+        <div className={`${styles.container} direct-print-screen`}>
+          <FinanceOverview
+            result={financeResult}
+            money={money}
+            timeZone={timeZone}
+            onShowOrders={() => setView("ORDERS")}
+            onShowStatement={() => setView("STATEMENT")}
+          />
+        </div>
       ) : (
         <div className={`${styles.container} direct-print-screen`}>
+          {/* Возврат на главный канонический обзор. */}
+          <div className={styles.overviewBackRow}>
+            <button
+              type="button"
+              className={styles.periodButton}
+              onClick={() => setView("OVERVIEW")}
+            >
+              ← К расчётам
+            </button>
+          </div>
+
           {/* Переключатель представления всегда первым (не пункт навигации). */}
           <div className={styles.periods} role="group" aria-label="Представление">
             <button
@@ -237,7 +286,7 @@ export default function RestaurantSettlementsPage() {
           </div>
 
           {/* Период и сводка заказов — только в отчётах по заказам/дням. */}
-          {isPeriodReport ? (
+          {isPeriodReport && overview ? (
             <>
               {/* Переключатель периода */}
               <div className={styles.periods} role="group" aria-label="Период">
@@ -373,12 +422,165 @@ export default function RestaurantSettlementsPage() {
               timeZone={timeZone}
               nowMs={nowMs}
             />
-          ) : (
+          ) : overview ? (
             <OrdersView overview={overview} money={money} timeZone={timeZone} />
+          ) : (
+            <div className={styles.empty}>Загружаем расчёты…</div>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Главный канонический обзор «Расчёты с Direct». ЕДИНСТВЕННЫЙ источник всех
+ * финансовых значений — buildRestaurantFinanceReadModel: React только выбирает
+ * тексты по enum и форматирует готовые суммы/даты. Ошибка read-model — честный
+ * fail-closed блок без fallback на старые helpers и без правдоподобного
+ * баланса.
+ */
+function FinanceOverview({
+  result,
+  money,
+  timeZone,
+  onShowOrders,
+  onShowStatement,
+}: {
+  result: RestaurantFinanceReadModelResult | null;
+  money: (cents: number) => string;
+  timeZone: string;
+  onShowOrders: () => void;
+  onShowStatement: () => void;
+}) {
+  if (result === null) {
+    return <div className={styles.empty}>Загружаем расчёты…</div>;
+  }
+  if (!result.ok) {
+    return (
+      <div className={styles.failCard} role="alert">
+        <strong className={styles.failTitle}>Данные требуют проверки</strong>
+        <p className={styles.failText}>
+          Сейчас невозможно безопасно рассчитать баланс ресторана.
+        </p>
+        <p className={styles.failReason}>{result.error}</p>
+      </div>
+    );
+  }
+  const model = result.model;
+  // Готовое направление и сумма после взаимозачёта — из model, без арифметики.
+  const net = describeFinanceNet(model);
+
+  return (
+    <>
+      <h2 className={styles.sectionTitle}>Расчёты с Direct</h2>
+
+      {/* Главная карточка баланса. */}
+      <section
+        className={styles.overviewCard}
+        aria-label="Итог взаиморасчётов"
+      >
+        <span className={styles.overviewTitle}>{net.title}</span>
+        <span className={styles.overviewAmount}>{money(net.amountCents)}</span>
+        <span className={styles.overviewNote}>{net.note}</span>
+
+        {/* Информационная gross-разбивка исходных сторон. */}
+        <dl className={styles.overviewGross}>
+          <div className={styles.grossRow}>
+            <dt>Direct должен вам</dt>
+            <dd>{money(model.directOwesRestaurantCents)}</dd>
+          </div>
+          <div className={styles.grossRow}>
+            <dt>Вы должны Direct</dt>
+            <dd>{money(model.restaurantOwesDirectCents)}</dd>
+          </div>
+        </dl>
+      </section>
+
+      {/* Компактная сводная метаинформация. */}
+      <dl className={styles.overviewMeta}>
+        <div className={styles.metaItem}>
+          <dt>Открытых заказов</dt>
+          <dd>{model.openOrderCount}</dd>
+        </div>
+        <div className={styles.metaItem}>
+          <dt>Открытых обязательств</dt>
+          <dd>{model.openAccountingEntryCount}</dd>
+        </div>
+        <div className={styles.metaItem}>
+          <dt>Самый старый открытый заказ</dt>
+          <dd>
+            {model.oldestOpenRecognizedAt
+              ? formatInZone(model.oldestOpenRecognizedAt, timeZone)
+              : "—"}
+          </dd>
+        </div>
+      </dl>
+
+      {/* Данные, требующие внимания (в баланс не входят). */}
+      {model.reviewRequiredOrderCount > 0 ? (
+        <div className={styles.noticeCard} role="status">
+          Есть заказы, требующие проверки данных —{" "}
+          {model.reviewRequiredOrderCount}
+        </div>
+      ) : null}
+      {model.pendingPaymentChannelOrderCount > 0 ? (
+        <div className={styles.noticeCard} role="status">
+          Есть самовывозы, ожидающие подтверждения способа оплаты —{" "}
+          {model.pendingPaymentChannelOrderCount}
+        </div>
+      ) : null}
+
+      {/* Открытые заказы, из которых состоит баланс. */}
+      <h3 className={styles.sectionSubTitle}>Открытые заказы</h3>
+      {model.openOrders.length === 0 ? (
+        <div className={styles.empty}>Открытых заказов для расчёта нет</div>
+      ) : (
+        <ul className={styles.financeList}>
+          {model.openOrders.map((row) => (
+            <li className={styles.financeRow} key={row.orderId}>
+              <div className={styles.financeRowHead}>
+                <span className={styles.orderNumber}>{row.publicNumber}</span>
+                <span className={styles.financeRowDate}>
+                  {formatInZone(row.recognizedAt, timeZone)}
+                </span>
+              </div>
+              <div className={styles.financeRowTags}>
+                <span>{FINANCE_DELIVERY_LABELS[row.deliveryMode]}</span>
+                <span>{FINANCE_CHANNEL_LABELS[row.paymentChannel]}</span>
+                {row.dataStatus !== "COMPLETE" ? (
+                  <span className={styles.financeRowStatus}>
+                    {FINANCE_DATA_STATUS_LABELS[row.dataStatus]}
+                  </span>
+                ) : null}
+              </div>
+              <div className={styles.financeRowAmount}>
+                <span>{FINANCE_DIRECTION_LABELS[row.direction]}</span>
+                <strong>{money(row.amountCents)}</strong>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Переходы к подробным отчётам (внутреннее переключение страницы). */}
+      <div className={styles.overviewActions}>
+        <button
+          type="button"
+          className={styles.periodButton}
+          onClick={onShowOrders}
+        >
+          Все заказы
+        </button>
+        <button
+          type="button"
+          className={styles.periodButton}
+          onClick={onShowStatement}
+        >
+          История расчётов
+        </button>
+      </div>
+    </>
   );
 }
 
