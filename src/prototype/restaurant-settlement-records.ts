@@ -13,6 +13,7 @@ import {
 } from "./restaurant-accounting";
 import {
   isAllowedDirectionTypePair,
+  isCanonicalIsoTimestamp,
   SETTLEMENT_DIRECTION_TYPE_ERROR,
   validateRestaurantSettlementRecord,
 } from "./restaurant-settlement-integrity";
@@ -258,7 +259,10 @@ export function confirmRestaurantSettlement(
     result: { ok: false, error, settlementRecordId: null },
   });
 
-  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+  // Момент операции проверяется ПЕРВЫМ — до preview, id расчёта, черновика
+  // записи и любых изменений: принимается только полный ISO-8601 с часовым
+  // поясом, автонормализация неканонического значения запрещена.
+  if (!isCanonicalIsoTimestamp(nowIso)) {
     return fail("Некорректное время операции.");
   }
 

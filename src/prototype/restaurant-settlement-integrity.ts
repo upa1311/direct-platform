@@ -44,6 +44,61 @@ export function isAllowedDirectionTypePair(
   return ALLOWED_DIRECTION_TYPE[direction] === type;
 }
 
+/**
+ * Канонический ISO-8601 timestamp финансовой операции: полная дата, время с
+ * секундами, необязательные дробные секунды и ОБЯЗАТЕЛЬНЫЙ часовой пояс (Z
+ * либо ±HH:MM). Дата без времени и время без пояса — не канон: момент такой
+ * строки зависит от интерпретатора, а финансовая операция обязана быть
+ * однозначной.
+ */
+const CANONICAL_ISO_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** Дней в месяце с учётом високосного года (григорианский календарь). */
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) {
+    const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    return isLeap ? 29 : 28;
+  }
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
+/**
+ * Единый validator времени финансовых операций расчёта. Проверяет и ФОРМУ
+ * (полный ISO-8601 с обязательным поясом), и реальность календарной даты и
+ * времени, и итоговую парсируемость в конкретный момент.
+ *
+ * Нормализация запрещена: «2026-07-20» не превращается в полночь UTC, пояс не
+ * добавляется автоматически — неканоническое значение отклоняется fail-closed.
+ * Исходная строка не переписывается: timestamp со смещением сохраняется как
+ * есть и в UTC не конвертируется.
+ */
+export function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = CANONICAL_ISO_PATTERN.exec(value);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const zone = match[8];
+
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  // Секунда 60 (leap second) в момент не парсится — время должно быть реальным.
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  if (zone !== "Z") {
+    const offsetHour = Number(zone.slice(1, 3));
+    const offsetMinute = Number(zone.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) return false;
+  }
+  // Форма верна — убеждаемся, что строка действительно даёт валидный момент.
+  return !Number.isNaN(Date.parse(value));
+}
+
 export type SettlementRecordValidationResult =
   | { ok: true; record: RestaurantSettlementRecord }
   | { ok: false; error: string };
@@ -66,10 +121,6 @@ function isValidCents(value: unknown): value is number {
     Number.isSafeInteger(value) &&
     value >= 0
   );
-}
-
-function isValidIso(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && !Number.isNaN(Date.parse(value));
 }
 
 /** Ожидаемое направление итога по gross-суммам сторон. */
@@ -169,7 +220,9 @@ export function validateRestaurantSettlementRecord(
     return invalid("Направление итога не соответствует суммам сторон.");
   }
 
-  if (!isValidIso(raw.settledAt)) {
+  // Момент расчёта — только полный ISO-8601 с часовым поясом: дата без времени
+  // или время без пояса делают момент неоднозначным.
+  if (!isCanonicalIsoTimestamp(raw.settledAt)) {
     return invalid("Некорректная дата расчёта.");
   }
   if (raw.actor !== "ADMIN") {
