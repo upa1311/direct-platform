@@ -8,6 +8,7 @@ import {
   validateFinancialRuleSnapshot,
   type FinancialRuleSnapshot,
 } from "./financial-rule";
+import type { RestaurantFinancialCollectionMode } from "./models";
 
 // Канонический чистый расчёт движения денег по ОДНОМУ заказу.
 //
@@ -31,7 +32,10 @@ export type CustomerMoneyRecipient = "DIRECT" | "RESTAURANT";
  * способа получения, ни из получателя денег.
  */
 export type OrderPaymentChannel =
+  /** Онлайн-карта, деньги получает Direct (MIXED_COLLECTION). */
   | "ONLINE_CARD"
+  /** Онлайн-карта, деньги получает ресторан (RESTAURANT_COLLECTS_ALL). */
+  | "ONLINE_CARD_TO_RESTAURANT"
   | "CARD_AT_RESTAURANT"
   | "CASH_AT_RESTAURANT"
   | "CASH_TO_RESTAURANT_COURIER";
@@ -65,6 +69,11 @@ export interface OrderMoneyMovementInput {
    * исторический заказ пересчитался бы по сегодняшним константам.
    */
   financialRule: FinancialRuleSnapshot;
+  /**
+   * Финансовый режим ЗАКАЗА (v13). Обязателен: функция не читает текущий
+   * Restaurant, не выводит режим из канала и не использует fallback.
+   */
+  financialCollectionMode: RestaurantFinancialCollectionMode;
 }
 
 /** Единый канонический результат движения денег по заказу. */
@@ -89,6 +98,13 @@ function fail(error: string): OrderMoneyMovementResult {
   return { ok: false, error };
 }
 
+/** Сложение с проверкой безопасного целочисленного диапазона. */
+function addChecked(a: number | null, b: number): number | null {
+  if (a === null) return null;
+  const sum = a + b;
+  return Number.isSafeInteger(sum) ? sum : null;
+}
+
 /** Целые неотрицательные конечные центы. */
 function isValidCents(value: number): boolean {
   return (
@@ -104,21 +120,27 @@ const KNOWN_DELIVERY_MODES: readonly DeliveryMode[] = [
 
 const KNOWN_PAYMENT_CHANNELS: readonly OrderPaymentChannel[] = [
   "ONLINE_CARD",
+  "ONLINE_CARD_TO_RESTAURANT",
   "CARD_AT_RESTAURANT",
   "CASH_AT_RESTAURANT",
   "CASH_TO_RESTAURANT_COURIER",
 ];
 
 /**
- * Совместимость режима получения и канала оплаты текущей модели:
- * - PLATFORM_DRIVER — только ONLINE_CARD (деньги получает Direct);
- * - PICKUP — карта или наличные на точке (деньги получает ресторан);
- * - RESTAURANT_DELIVERY — только наличные собственному курьеру; карта/онлайн
- *   для этого канала не существуют и отклоняются fail-closed.
+ * Совместимость режима получения, финансового режима и канала оплаты:
+ * - PLATFORM_DRIVER + MIXED_COLLECTION — только ONLINE_CARD (деньги получает
+ *   Direct);
+ * - PLATFORM_DRIVER + RESTAURANT_COLLECTS_ALL — только
+ *   ONLINE_CARD_TO_RESTAURANT (деньги получает ресторан);
+ * - PICKUP — карта или наличные на точке в обоих режимах (получает ресторан);
+ * - RESTAURANT_DELIVERY — только наличные собственному курьеру в обоих
+ *   режимах; карта/онлайн для этого канала не существуют.
+ * Любая другая комбинация отклоняется fail-closed.
  */
 function resolveChannelContext(
   deliveryMode: DeliveryMode,
   paymentChannel: OrderPaymentChannel,
+  financialCollectionMode: RestaurantFinancialCollectionMode,
 ):
   | {
       recipient: CustomerMoneyRecipient;
@@ -127,6 +149,11 @@ function resolveChannelContext(
     }
   | string {
   if (deliveryMode === "PLATFORM_DRIVER") {
+    if (financialCollectionMode === "RESTAURANT_COLLECTS_ALL") {
+      return paymentChannel === "ONLINE_CARD_TO_RESTAURANT"
+        ? { recipient: "RESTAURANT", collector: "RESTAURANT", instrument: "CARD" }
+        : "В этом режиме онлайн-платёж по доставке Direct получает ресторан.";
+    }
     return paymentChannel === "ONLINE_CARD"
       ? { recipient: "DIRECT", collector: "DIRECT", instrument: "CARD" }
       : "Для доставки водителем Direct поддерживается только онлайн-оплата картой.";
@@ -155,11 +182,15 @@ function resolveChannelContext(
  *   увеличивает долг перед Direct;
  * - доставка собственным курьером ресторана (только наличные): деньги и
  *   стоимость доставки остаются ресторану; ресторан должен Direct комиссию;
- * - доставка водителем Direct (только онлайн-карта): деньги получает Direct;
- *   Direct должен ресторану еду за вычетом комиссии и банковской части
- *   ресторана; стоимость доставки предназначена водителю и НЕ является
- *   доходом Direct; чистый доход Direct — комиссия + small-order fee минус
- *   банковская часть Direct.
+ * - доставка водителем Direct + MIXED_COLLECTION (онлайн-карта Direct): деньги
+ *   получает Direct; Direct должен ресторану еду за вычетом комиссии и
+ *   банковской части ресторана; стоимость доставки предназначена водителю и НЕ
+ *   является доходом Direct; чистый доход Direct — комиссия + small-order fee
+ *   минус банковская часть Direct;
+ * - доставка водителем Direct + RESTAURANT_COLLECTS_ALL (онлайн-карта
+ *   ресторану): деньги получает ресторан и перечисляет Direct комиссию +
+ *   стоимость доставки + small-order fee; доставка проходит транзитом к
+ *   водителю и в доход Direct не входит; вся банковская комиссия у ресторана.
  *
  * Инварианты: банковские части сходятся с общей комиссией (гарантирует
  * allocateBankFee); у одного обычного заказа не бывают одновременно
@@ -177,6 +208,13 @@ export function computeOrderMoneyMovement(
   }
   if (!KNOWN_PAYMENT_CHANNELS.includes(input.paymentChannel)) {
     return fail("Неизвестный канал оплаты заказа.");
+  }
+  // Финансовый режим заказа обязателен и не выводится из канала.
+  if (
+    input.financialCollectionMode !== "MIXED_COLLECTION" &&
+    input.financialCollectionMode !== "RESTAURANT_COLLECTS_ALL"
+  ) {
+    return fail("Неизвестный финансовый режим ресторана.");
   }
   // Правило заказа обязано быть валидным снимком известной версии: без него
   // банковские суммы считать нечем, подстановка активного правила запрещена.
@@ -232,7 +270,11 @@ export function computeOrderMoneyMovement(
     );
   }
 
-  const context = resolveChannelContext(input.deliveryMode, input.paymentChannel);
+  const context = resolveChannelContext(
+    input.deliveryMode,
+    input.paymentChannel,
+    input.financialCollectionMode,
+  );
   if (typeof context === "string") {
     return fail(context);
   }
@@ -261,6 +303,7 @@ export function computeOrderMoneyMovement(
     customerTotalCents: input.customerTotalCents,
     // Ставка — из снимка правила заказа, не из глобальной константы.
     bankCardFeeRateBps: ruleResult.rule.bankCardFeeRateBps,
+    financialCollectionMode: input.financialCollectionMode,
   });
   if (!bank.ok) {
     return fail(bank.error);
@@ -273,7 +316,32 @@ export function computeOrderMoneyMovement(
   let restaurantNetCents: number;
   let directNetRevenueCents: number;
 
-  if (input.deliveryMode === "PLATFORM_DRIVER") {
+  if (
+    input.deliveryMode === "PLATFORM_DRIVER" &&
+    input.financialCollectionMode === "RESTAURANT_COLLECTS_ALL"
+  ) {
+    // Деньги у ресторана, доставку выполняет водитель Direct: ресторан
+    // перечисляет Direct комиссию, стоимость доставки (её Direct выплатит
+    // водителю) и доплату за небольшой заказ. Стоимость доставки проходит
+    // через Direct транзитом и доходом Direct НЕ является. Вся банковская
+    // комиссия у ресторана — карточный платёж принял он.
+    const remittance = addChecked(
+      addChecked(input.restaurantCommissionCents, input.deliveryFeeCents),
+      input.smallOrderFeeCents,
+    );
+    const revenue = addChecked(
+      input.restaurantCommissionCents,
+      input.smallOrderFeeCents,
+    );
+    if (remittance === null || revenue === null) {
+      return fail("Суммы заказа выходят за безопасный диапазон.");
+    }
+    restaurantOwesDirectCents = remittance;
+    directOwesRestaurantCents = 0;
+    restaurantNetCents =
+      input.customerTotalCents - remittance - restaurantBankFeeCents;
+    directNetRevenueCents = revenue - directBankFeeCents;
+  } else if (input.deliveryMode === "PLATFORM_DRIVER") {
     // Деньги у Direct: он должен ресторану еду за вычетом комиссии и
     // банковской части ресторана; доставка предназначена водителю.
     restaurantOwesDirectCents = 0;

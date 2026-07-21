@@ -50,6 +50,7 @@ const pickupCard = (): OrderMoneyMovementInput => ({
   customerTotalCents: 10_000,
   restaurantCommissionCents: 1_500,
   financialRule: V1_RULE,
+  financialCollectionMode: "MIXED_COLLECTION",
 });
 
 const platformOnline = (): OrderMoneyMovementInput => ({
@@ -62,6 +63,7 @@ const platformOnline = (): OrderMoneyMovementInput => ({
   restaurantCommissionCents: 1_500,
   driverPayoutCents: 500,
   financialRule: V1_RULE,
+  financialCollectionMode: "MIXED_COLLECTION",
 });
 
 // 1 — самовывоз картой ---------------------------------------------------------
@@ -104,6 +106,7 @@ test("курьер ресторана наличными: 7%, доставка �
     customerTotalCents: 10_350,
     restaurantCommissionCents: 700,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(m.customerMoneyRecipient, "RESTAURANT");
   assert.equal(m.totalBankFeeCents, 0);
@@ -141,6 +144,7 @@ test("доставка Direct со small-order fee: доплата в чисто
     restaurantCommissionCents: 120,
     driverPayoutCents: 500,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(m.totalBankFeeCents, 15); // round(14.5)
   assert.equal(m.restaurantBankFeeCents, 8);
@@ -160,6 +164,7 @@ test("стоимость доставки не попадает в чистый 
     customerTotalCents: 11_000,
     driverPayoutCents: 1_000,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   // Банковская часть Direct растёт вместе с транзакцией (110 - 100 = 10),
   // но сама доставка в доход не входит: доход меняется только на дельту банка.
@@ -206,6 +211,7 @@ test("все результаты — целые неотрицательные 
     restaurantCommissionCents: 1_499,
     driverPayoutCents: 501,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(m.totalBankFeeCents, 105);
   assert.equal(m.restaurantBankFeeCents, 100);
@@ -240,6 +246,7 @@ test("онлайн и карта для собственного курьера 
       customerTotalCents: 10_350,
       restaurantCommissionCents: 700,
       financialRule: V1_RULE,
+      financialCollectionMode: "MIXED_COLLECTION",
     });
     assert.equal(result.ok, false);
     assert.ok(!result.ok && /курьера ресторана/.test(result.error));
@@ -263,6 +270,7 @@ test("small-order fee для PICKUP и RESTAURANT_DELIVERY отклоняетс�
     customerTotalCents: 10_500,
     restaurantCommissionCents: 700,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(courier.ok, false);
 });
@@ -275,6 +283,7 @@ test("комиссия больше еды и повреждённые сумм�
       ...pickupCard(),
       restaurantCommissionCents: 10_001,
       financialRule: V1_RULE,
+      financialCollectionMode: "MIXED_COLLECTION",
     }).ok,
     false,
   );
@@ -304,6 +313,7 @@ test("комиссия больше еды и повреждённые сумм�
     ...pickupCard(),
     restaurantCommissionCents: 10_000,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(negativeNet.ok, false);
 });
@@ -322,6 +332,7 @@ test("PLATFORM_DRIVER: выплата водителю обязательна и
     ...platformOnline(),
     driverPayoutCents: 0,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(less.ok, false);
   assert.ok(!less.ok && /стоимости доставки/.test(less.error));
@@ -330,6 +341,7 @@ test("PLATFORM_DRIVER: выплата водителю обязательна и
     ...platformOnline(),
     driverPayoutCents: 1_000,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(more.ok, false);
   // Точно равна доставке → успех (уже покрыто и базовым сценарием).
@@ -345,6 +357,7 @@ test("PLATFORM_DRIVER: выплата водителю обязательна и
     restaurantCommissionCents: 1_500,
     driverPayoutCents: 0,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(freeDelivery.directOwesRestaurantCents, 10_000 - 1_500 - 100);
 });
@@ -355,6 +368,7 @@ test("PICKUP и RESTAURANT_DELIVERY: выплаты водителю Direct не
     ...pickupCard(),
     driverPayoutCents: 500,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(pickupPaid.ok, false);
   assert.ok(!pickupPaid.ok && /водитель Direct/.test(pickupPaid.error));
@@ -368,11 +382,13 @@ test("PICKUP и RESTAURANT_DELIVERY: выплаты водителю Direct не
     customerTotalCents: 10_350,
     restaurantCommissionCents: 700,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   };
   const courierPaid = computeOrderMoneyMovement({
     ...courierInput,
     driverPayoutCents: 350,
     financialRule: V1_RULE,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(courierPaid.ok, false);
   // Отсутствие поля и явный 0 существующие сценарии не ломают.

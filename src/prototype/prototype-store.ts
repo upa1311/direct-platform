@@ -95,12 +95,12 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * надмножество предыдущей (v8 добавил restaurantAccountingEntries, v9 —
  * restaurantAccountingResolutionEvents, v10 — каноническое движение денег в
  * FinancialSnapshot, v11 — restaurantSettlementRecords, v12 — снимок
- * финансового правила заказа), поэтому состояние прежней версии безопасно
- * принимается и доводится нормализацией до текущей без потери данных. Ключ
- * хранилища не меняется.
+ * финансового правила заказа, v13 — финансовый режим получения платежей),
+ * поэтому состояние прежней версии безопасно принимается и доводится
+ * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12,
+  7, 8, 9, 10, 11, 12, 13,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -270,6 +270,14 @@ function normalizeFinancials(
   // или отсутствующий НЕ подменяется активным правилом — иначе исторический
   // заказ молча получил бы сегодняшнюю ставку.
   const ruleResult = validateFinancialRuleSnapshot(raw.financialRule);
+  // v13: финансовый режим заказа сохраняется только если он был записан в
+  // самом снимке. Текущая настройка ресторана сюда не подставляется — она
+  // могла измениться после оформления заказа.
+  const storedCollectionMode =
+    raw.financialCollectionMode === "RESTAURANT_COLLECTS_ALL" ||
+    raw.financialCollectionMode === "MIXED_COLLECTION"
+      ? raw.financialCollectionMode
+      : null;
   return {
     ...base,
     moneyMovementStatus: recovered.moneyMovementStatus,
@@ -277,6 +285,9 @@ function normalizeFinancials(
       ? { moneyMovement: recovered.moneyMovement }
       : {}),
     ...(ruleResult.ok ? { financialRule: ruleResult.rule } : {}),
+    ...(storedCollectionMode
+      ? { financialCollectionMode: storedCollectionMode }
+      : {}),
   };
 }
 
@@ -734,6 +745,14 @@ function normalizeRestaurantV5(
       raw.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN"
         ? "SPLIT_OPERATOR_KITCHEN"
         : "COMBINED",
+    // v13: legacy-ресторан без финансового режима → MIXED_COLLECTION. Это
+    // ТОЧНОЕ прежнее поведение платформы (Direct собирал онлайн-платёж своей
+    // доставки, ресторан — самовывоз и своего курьера), а не догадка по
+    // deliveryProvider, orderWorkflowMode или набору paymentMethods.
+    financialCollectionMode:
+      raw.financialCollectionMode === "RESTAURANT_COLLECTS_ALL"
+        ? "RESTAURANT_COLLECTS_ALL"
+        : "MIXED_COLLECTION",
   };
 }
 

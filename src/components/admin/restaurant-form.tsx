@@ -26,6 +26,8 @@ import {
   createDefaultWeeklySchedule,
 } from "@/prototype/default-state";
 import {
+  financialCollectionModeHints,
+  financialCollectionModeLabels,
   getZoneName,
   parseDollarsToCents,
   publicationStatusLabels,
@@ -278,6 +280,7 @@ export function RestaurantBuilderEditor({
     pickupCommissionPercent: (restaurant.pickupCommissionRateBps / 100).toString(),
     timeZone: restaurant.timeZone,
     orderWorkflowMode: restaurant.orderWorkflowMode,
+    financialCollectionMode: restaurant.financialCollectionMode,
   });
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -302,6 +305,7 @@ export function RestaurantBuilderEditor({
       ),
       timeZone: form.timeZone.trim() || "Europe/Chisinau",
       orderWorkflowMode: form.orderWorkflowMode,
+      financialCollectionMode: form.financialCollectionMode,
       defaultPreparationMinutes:
         Number.parseInt(form.defaultPreparationMinutes, 10) || 25,
       pickupEnabled: form.pickupEnabled,
@@ -547,6 +551,29 @@ export function RestaurantBuilderEditor({
               </select>
             </label>
             <label className={flowStyles.field}>
+              <span>Кто получает платежи клиентов</span>
+              <select
+                value={form.financialCollectionMode}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    financialCollectionMode: e.target
+                      .value as Restaurant["financialCollectionMode"],
+                  }))
+                }
+              >
+                <option value="MIXED_COLLECTION">
+                  {financialCollectionModeLabels.MIXED_COLLECTION}
+                </option>
+                <option value="RESTAURANT_COLLECTS_ALL">
+                  {financialCollectionModeLabels.RESTAURANT_COLLECTS_ALL}
+                </option>
+              </select>
+              <small className={flowStyles.summaryHint}>
+                {financialCollectionModeHints[form.financialCollectionMode]}
+              </small>
+            </label>
+            <label className={flowStyles.field}>
               <span>Комиссия Direct за доставку, %</span>
               <input
                 value={form.commissionPercent}
@@ -747,6 +774,12 @@ export function CreateRestaurantForm() {
       address: "",
       zoneId: "zone-1",
       deliveryProvider: template,
+      // v13: шаблон задаёт только НАЧАЛЬНОЕ значение финансового режима —
+      // ресторан со своим курьером и так получает все платежи сам, ресторан с
+      // водителями Direct стартует с прежнего смешанного порядка. Режим
+      // остаётся отдельной настройкой и меняется в конструкторе.
+      financialCollectionMode:
+        template === "RESTAURANT" ? "RESTAURANT_COLLECTS_ALL" : "MIXED_COLLECTION",
       commissionRateBps: template === "RESTAURANT" ? 700 : 1500,
       defaultPreparationMinutes: 25,
       pickupEnabled: true,

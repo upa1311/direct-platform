@@ -22,6 +22,7 @@ import type {
   PrototypeState,
   PublicationStatus,
   Restaurant,
+  RestaurantFinancialCollectionMode,
   RestaurantOrderWorkflowMode,
   RestaurantWorkspaceRole,
   SettlementEntry,
@@ -217,6 +218,29 @@ export const publicationStatusLabels: Record<PublicationStatus, string> = {
 export const workflowModeLabels: Record<RestaurantOrderWorkflowMode, string> = {
   COMBINED: "Общий экран",
   SPLIT_OPERATOR_KITCHEN: "Оператор и кухня раздельно",
+};
+
+/**
+ * v13: русские подписи финансового режима ресторана — кто получает платежи
+ * клиентов. Сырой enum в интерфейсе не показывается.
+ */
+export const financialCollectionModeLabels: Record<
+  RestaurantFinancialCollectionMode,
+  string
+> = {
+  MIXED_COLLECTION: "Смешанный: онлайн-доставку получает Direct",
+  RESTAURANT_COLLECTS_ALL: "Все платежи получает ресторан",
+};
+
+/** Короткое пояснение режима для форм и карточек. */
+export const financialCollectionModeHints: Record<
+  RestaurantFinancialCollectionMode,
+  string
+> = {
+  MIXED_COLLECTION:
+    "Онлайн-оплату заказов с доставкой Direct получает Direct и перечисляет ресторану его часть. Самовывоз и свой курьер — деньги у ресторана.",
+  RESTAURANT_COLLECTS_ALL:
+    "Все платежи клиентов получает ресторан. По заказам с доставкой Direct ресторан перечисляет Direct комиссию, стоимость доставки и сбор за маленький заказ.",
 };
 
 /**

@@ -8,6 +8,7 @@ import {
   validateFinancialRuleSnapshot,
   type FinancialRuleSnapshot,
 } from "./financial-rule";
+import type { RestaurantFinancialCollectionMode } from "./models";
 
 // Прослойка между каноническим расчётом движения денег и финансовым снимком
 // заказа. Чистая: без React, состояния прототипа и localStorage. Формулы НЕ
@@ -34,9 +35,17 @@ export interface MoneyMovementSnapshotSums {
   restaurantCommissionCents: number;
 }
 
-/** Суммы заказа вместе со снимком его финансового правила. */
+/** Суммы заказа со снимками его финансового правила и режима сбора денег. */
 export interface MoneyMovementSnapshotInput extends MoneyMovementSnapshotSums {
   financialRule: FinancialRuleSnapshot;
+  financialCollectionMode: RestaurantFinancialCollectionMode;
+}
+
+/** Известен ли финансовый режим (fallback и подстановки запрещены). */
+function isKnownCollectionMode(
+  value: unknown,
+): value is RestaurantFinancialCollectionMode {
+  return value === "MIXED_COLLECTION" || value === "RESTAURANT_COLLECTS_ALL";
 }
 
 /** Результат построения движения при СОЗДАНИИ заказа. */
@@ -56,9 +65,21 @@ export function pickupChannelForPaidWith(
   return paidWith === "CARD" ? "CARD_AT_RESTAURANT" : "CASH_AT_RESTAURANT";
 }
 
-/** Заранее известный канал оплаты режима, либо null (PICKUP — неизвестен). */
-function knownChannelForMode(mode: DeliveryMode): OrderPaymentChannel | null {
-  if (mode === "PLATFORM_DRIVER") return "ONLINE_CARD";
+/**
+ * Заранее известный канал оплаты, либо null (PICKUP — станет известен только
+ * при выдаче). Для доставки водителем Direct канал зависит от финансового
+ * режима: платёж получает Direct (ONLINE_CARD) либо ресторан
+ * (ONLINE_CARD_TO_RESTAURANT).
+ */
+function knownChannelForMode(
+  mode: DeliveryMode,
+  collectionMode: RestaurantFinancialCollectionMode,
+): OrderPaymentChannel | null {
+  if (mode === "PLATFORM_DRIVER") {
+    return collectionMode === "RESTAURANT_COLLECTS_ALL"
+      ? "ONLINE_CARD_TO_RESTAURANT"
+      : "ONLINE_CARD";
+  }
   if (mode === "RESTAURANT_DELIVERY") return "CASH_TO_RESTAURANT_COURIER";
   return null;
 }
@@ -83,6 +104,7 @@ function computeForChannel(
     driverPayoutCents:
       input.deliveryMode === "PLATFORM_DRIVER" ? input.deliveryFeeCents : 0,
     financialRule: input.financialRule,
+    financialCollectionMode: input.financialCollectionMode,
   });
   return result.ok
     ? { ok: true, movement: result.movement }
@@ -106,7 +128,13 @@ export function buildCreationMoneyMovement(
   if (!ruleResult.ok) {
     return { ok: false, error: ruleResult.error };
   }
-  const channel = knownChannelForMode(input.deliveryMode);
+  if (!isKnownCollectionMode(input.financialCollectionMode)) {
+    return { ok: false, error: "Неизвестный финансовый режим ресторана." };
+  }
+  const channel = knownChannelForMode(
+    input.deliveryMode,
+    input.financialCollectionMode,
+  );
   if (channel === null) {
     return { ok: true, moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" };
   }
@@ -127,6 +155,8 @@ export interface PickupFinalizeSnapshot extends MoneyMovementSnapshotSums {
   moneyMovement?: OrderMoneyMovement;
   /** Правило, сохранённое при СОЗДАНИИ заказа (не активное на момент выдачи). */
   financialRule?: FinancialRuleSnapshot;
+  /** Финансовый режим заказа; текущая настройка ресторана не читается. */
+  financialCollectionMode?: RestaurantFinancialCollectionMode;
 }
 
 export type PickupFinalizeResult =
@@ -180,13 +210,21 @@ export function finalizePickupMoneyMovement(
       moneyMovement: snapshot.moneyMovement,
     };
   }
-  // Правило берётся из заказа; legacy-заказ без него финализировать нельзя.
+  // Правило и режим берутся из ЗАКАЗА; текущая настройка ресторана не
+  // читается. Legacy-заказ без них финализировать нельзя.
   const ruleResult = validateFinancialRuleSnapshot(snapshot.financialRule);
   if (!ruleResult.ok) {
     return { ok: false, error: ruleResult.error };
   }
+  if (!isKnownCollectionMode(snapshot.financialCollectionMode)) {
+    return { ok: false, error: "Неизвестный финансовый режим ресторана." };
+  }
   const computed = computeForChannel(
-    { ...snapshot, financialRule: ruleResult.rule },
+    {
+      ...snapshot,
+      financialRule: ruleResult.rule,
+      financialCollectionMode: snapshot.financialCollectionMode,
+    },
     channel,
   );
   if (!computed.ok) {
@@ -203,6 +241,7 @@ export function finalizePickupMoneyMovement(
 
 const PAYMENT_CHANNELS: readonly OrderPaymentChannel[] = [
   "ONLINE_CARD",
+  "ONLINE_CARD_TO_RESTAURANT",
   "CARD_AT_RESTAURANT",
   "CASH_AT_RESTAURANT",
   "CASH_TO_RESTAURANT_COURIER",
@@ -304,6 +343,7 @@ export function readConfirmedSnapshotSums(
 /** Ожидаемый канал по режиму и (для самовывоза) фактическому способу оплаты. */
 function expectedChannel(
   deliveryMode: DeliveryMode,
+  collectionMode: RestaurantFinancialCollectionMode,
   context: MoneyMovementRecoveryContext,
 ): OrderPaymentChannel | null {
   if (deliveryMode === "PICKUP") {
@@ -311,7 +351,7 @@ function expectedChannel(
       ? pickupChannelForPaidWith(context.pickupPaidWith)
       : null;
   }
-  return knownChannelForMode(deliveryMode);
+  return knownChannelForMode(deliveryMode, collectionMode);
 }
 
 /**
@@ -331,7 +371,11 @@ export function verifyStoredCompleteMovement(
   context: MoneyMovementRecoveryContext,
 ): OrderMoneyMovement | null {
   if (!isValidStoredMoneyMovement(stored)) return null;
-  const channel = expectedChannel(input.deliveryMode, context);
+  const channel = expectedChannel(
+    input.deliveryMode,
+    input.financialCollectionMode,
+    context,
+  );
   if (channel === null) return null;
   const canonical = computeForChannel(input, channel);
   if (!canonical.ok) return null;
@@ -362,9 +406,10 @@ export function verifyStoredCompleteMovement(
  * 5) recovery разрешён ТОЛЬКО при подтверждённых суммах И валидном правиле;
  *    иначе — REVIEW_REQUIRED либо законный PENDING незавершённого самовывоза.
  *
- * Ключевая политика v12: заказ БЕЗ валидного снимка правила не восстанавливается
- * и не подтверждается — текущая ставка задним числом не подставляется, даже
- * если все прежние суммы на месте и структурно выглядят корректно.
+ * Ключевая политика v12/v13: заказ БЕЗ валидного снимка правила ИЛИ без
+ * снимка финансового режима не восстанавливается и не подтверждается — ни
+ * текущая ставка, ни текущий режим ресторана задним числом не подставляются,
+ * даже если все прежние суммы на месте и структурно выглядят корректно.
  */
 export function normalizeStoredMoneyMovement(
   rawFinancials: unknown,
@@ -377,9 +422,18 @@ export function normalizeStoredMoneyMovement(
       : {};
   const sums = readConfirmedSnapshotSums(rawFinancials, deliveryMode);
   const ruleResult = validateFinancialRuleSnapshot(raw.financialRule);
-  // Правило и суммы вместе — единственное основание что-либо считать.
+  const collectionMode = raw.financialCollectionMode;
+  // Суммы, правило И финансовый режим вместе — единственное основание
+  // что-либо считать. Текущая настройка ресторана здесь недоступна намеренно:
+  // она могла измениться после оформления заказа.
   const confirmed: MoneyMovementSnapshotInput | null =
-    sums && ruleResult.ok ? { ...sums, financialRule: ruleResult.rule } : null;
+    sums && ruleResult.ok && isKnownCollectionMode(collectionMode)
+      ? {
+          ...sums,
+          financialRule: ruleResult.rule,
+          financialCollectionMode: collectionMode,
+        }
+      : null;
   const pendingAllowed =
     deliveryMode === "PICKUP" &&
     context.pickupPaidWith === null &&
@@ -443,7 +497,10 @@ export function recoverMoneyMovement(
       return { moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" };
     }
   } else {
-    channel = knownChannelForMode(sums.deliveryMode);
+    channel = knownChannelForMode(
+      sums.deliveryMode,
+      sums.financialCollectionMode,
+    );
   }
   if (channel === null) {
     return { moneyMovementStatus: "REVIEW_REQUIRED" };

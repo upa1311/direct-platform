@@ -59,7 +59,10 @@ export const FINANCE_DELIVERY_LABELS: Record<
 
 /** Канал оплаты строки. */
 export const FINANCE_CHANNEL_LABELS: Record<FinanceRowPaymentChannel, string> = {
-  ONLINE_CARD: "Онлайн-карта",
+  // v13: онлайн-карта различается по получателю платежа — ресторану важно
+  // видеть, пришли деньги ему или Direct.
+  ONLINE_CARD: "Онлайн-карта · получает Direct",
+  ONLINE_CARD_TO_RESTAURANT: "Онлайн-карта · получает ресторан",
   CARD_AT_RESTAURANT: "Карта в ресторане",
   CASH_AT_RESTAURANT: "Наличные в ресторане",
   CASH_TO_RESTAURANT_COURIER: "Наличные курьеру ресторана",

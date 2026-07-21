@@ -163,13 +163,15 @@ export function buildRestaurantSettlementPreview(
     }
     if (
       entry.type !== "PLATFORM_COMMISSION" &&
-      entry.type !== "RESTAURANT_PAYOUT"
+      entry.type !== "RESTAURANT_PAYOUT" &&
+      entry.type !== "RESTAURANT_REMITTANCE"
     ) {
       return previewFail("Неизвестный тип обязательства.");
     }
-    // Направление и основание проверяются ПАРОЙ: комиссия всегда от ресторана
-    // к Direct, выплата — от Direct ресторану. Смешанная пара — повреждённые
-    // данные: до суммирования, поэтому в gross/net она не попадает.
+    // Направление и основание проверяются ПАРОЙ: комиссия и перечисление
+    // ресторана всегда идут от ресторана к Direct, выплата — от Direct
+    // ресторану. Смешанная пара — повреждённые данные: проверка до
+    // суммирования, поэтому в gross/net такая запись не попадает.
     if (!isAllowedDirectionTypePair(entry.direction, entry.type)) {
       return previewFail(SETTLEMENT_DIRECTION_TYPE_ERROR);
     }

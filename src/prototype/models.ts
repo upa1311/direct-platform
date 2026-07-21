@@ -6,7 +6,22 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 12 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 13 as const;
+
+/**
+ * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
+ * НЕ выводится из orderWorkflowMode (организация кухни), deliveryProvider или
+ * набора paymentMethods.
+ *
+ * MIXED_COLLECTION — прежнее поведение платформы: онлайн-платёж за доставку
+ * водителем Direct получает Direct, самовывоз и собственную доставку оплачивают
+ * ресторану. RESTAURANT_COLLECTS_ALL — ресторан получает все платежи клиентов,
+ * включая онлайн-заказы с водителем Direct, и перечисляет Direct комиссию,
+ * стоимость доставки и доплату за небольшой заказ.
+ */
+export type RestaurantFinancialCollectionMode =
+  | "RESTAURANT_COLLECTS_ALL"
+  | "MIXED_COLLECTION";
 
 export type { OrderMoneyMovement } from "./order-money-movement";
 
@@ -96,8 +111,17 @@ export type RestaurantAccountingDirection =
   | "RESTAURANT_OWES_DIRECT"
   | "DIRECT_OWES_RESTAURANT";
 
-/** Природа обязательства: комиссия Direct или выплата ресторану. */
-export type RestaurantAccountingType = "PLATFORM_COMMISSION" | "RESTAURANT_PAYOUT";
+/**
+ * Природа обязательства: комиссия Direct, выплата ресторану либо перечисление
+ * рестораном (v13). RESTAURANT_REMITTANCE появляется, когда ресторан собрал
+ * деньги за заказ с водителем Direct: сумма содержит не только комиссию, но и
+ * стоимость доставки водителю и доплату за небольшой заказ, поэтому списывать
+ * её как обычную комиссию нельзя.
+ */
+export type RestaurantAccountingType =
+  | "PLATFORM_COMMISSION"
+  | "RESTAURANT_PAYOUT"
+  | "RESTAURANT_REMITTANCE";
 
 /** Жизненный статус обязательства (взаимозачёт/выплаты пока не выполняются). */
 export type RestaurantAccountingStatus = "OPEN" | "SETTLED" | "WAIVED";
@@ -381,6 +405,12 @@ export interface Restaurant {
    * только экран/роли/права, не заказы и не жизненный цикл.
    */
   orderWorkflowMode: RestaurantOrderWorkflowMode;
+  /**
+   * Кто получает платежи клиентов (v13). Legacy-рестораны → MIXED_COLLECTION
+   * (точное прежнее поведение). Изменение режима влияет ТОЛЬКО на новые
+   * заказы: у оформленных заказов режим уже зафиксирован в их снимке.
+   */
+  financialCollectionMode: RestaurantFinancialCollectionMode;
 }
 
 /** Единица измерения порции. Свободная строка источником истины не является. */
@@ -596,6 +626,13 @@ export interface FinancialSnapshot {
    * legacy-состояний — новый заказ без него не создаётся.
    */
   financialRule?: FinancialRuleSnapshot;
+  /**
+   * Финансовый режим ресторана на момент ОФОРМЛЕНИЯ заказа (v13). Определяет
+   * допустимый канал оплаты и получателя денег. Optional только для чтения
+   * legacy-заказов: новый заказ без него не создаётся, а старый заказ без
+   * снимка НЕ получает текущую настройку ресторана задним числом.
+   */
+  financialCollectionMode?: RestaurantFinancialCollectionMode;
 }
 
 export interface OrderHistoryEvent {

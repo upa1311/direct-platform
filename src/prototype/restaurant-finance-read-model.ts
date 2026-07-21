@@ -115,6 +115,7 @@ const KNOWN_STATUSES: readonly RestaurantAccountingEntry["status"][] = [
 const KNOWN_TYPES: readonly RestaurantAccountingEntry["type"][] = [
   "PLATFORM_COMMISSION",
   "RESTAURANT_PAYOUT",
+  "RESTAURANT_REMITTANCE",
 ];
 const KNOWN_SOURCES: readonly RestaurantAccountingEntry["source"][] = [
   "ORDER_FINANCIAL_SNAPSHOT",
@@ -224,9 +225,16 @@ function validateSnapshotEntryAgainstOrder(
   ) {
     return "Обязательство существует при нулевом движении денег заказа.";
   }
+  // v13: основание долга ресторана задаётся каналом оплаты самого движения —
+  // ONLINE_CARD_TO_RESTAURANT означает перечисление, любой другой канал —
+  // комиссию. Тип, не соответствующий каналу, — повреждение, а не вариант.
+  const expectedDebtType =
+    movement.paymentChannel === "ONLINE_CARD_TO_RESTAURANT"
+      ? "RESTAURANT_REMITTANCE"
+      : "PLATFORM_COMMISSION";
   const matches =
     entry.direction === "RESTAURANT_OWES_DIRECT"
-      ? entry.type === "PLATFORM_COMMISSION" &&
+      ? entry.type === expectedDebtType &&
         entry.amountCents === movement.restaurantOwesDirectCents
       : entry.type === "RESTAURANT_PAYOUT" &&
         entry.amountCents === movement.directOwesRestaurantCents;

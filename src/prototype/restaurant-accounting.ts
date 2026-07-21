@@ -115,7 +115,15 @@ export function computeCompletedOrderAccounting(
   let amountCents: number;
   if (movement.restaurantOwesDirectCents > 0) {
     direction = "RESTAURANT_OWES_DIRECT";
-    type = "PLATFORM_COMMISSION";
+    // v13: тип долга ресторана определяется каналом оплаты самого снимка, а не
+    // текущей настройкой ресторана. ONLINE_CARD_TO_RESTAURANT существует только
+    // при доставке водителем Direct в режиме RESTAURANT_COLLECTS_ALL: ресторан
+    // получил всю сумму клиента и перечисляет Direct комиссию, доставку и
+    // small-order fee одним обязательством — это перечисление, а не комиссия.
+    type =
+      movement.paymentChannel === "ONLINE_CARD_TO_RESTAURANT"
+        ? "RESTAURANT_REMITTANCE"
+        : "PLATFORM_COMMISSION";
     amountCents = movement.restaurantOwesDirectCents;
   } else if (movement.directOwesRestaurantCents > 0) {
     direction = "DIRECT_OWES_RESTAURANT";
@@ -271,11 +279,13 @@ export function migrateLegacySettlementsToAccounting(
       .map((entry) => entry.legacySettlementId)
       .filter((id): id is string => id !== null),
   );
-  // Заказы, у которых уже есть комиссия (любого источника) — включая записи,
-  // добавляемые ниже по ходу цикла.
+  // Заказы, у которых уже есть долг перед Direct (любого источника и типа —
+  // комиссия или перечисление v13) — включая записи, добавляемые ниже по ходу
+  // цикла. Тип учитывать нельзя: legacy settlement и каноническое перечисление
+  // одного заказа — одно и то же обязательство, а не два.
   const ordersWithCommission = new Set(
     existingEntries
-      .filter((entry) => entry.type === "PLATFORM_COMMISSION")
+      .filter((entry) => entry.direction === "RESTAURANT_OWES_DIRECT")
       .map((entry) => entry.orderId),
   );
   for (const settlement of settlements) {
@@ -445,6 +455,9 @@ export function resolveRestaurantAccountingEntry(
 
   if (outcome === "WAIVED") {
     // Списать можно только собственное комиссионное требование Direct.
+    // RESTAURANT_REMITTANCE списанию НЕ подлежит: ресторан уже получил деньги
+    // клиента, в этой сумме есть чужие средства (доставка Direct), и списание
+    // означало бы подарок чужих денег, а не отказ Direct от своего дохода.
     if (
       entry.direction !== "RESTAURANT_OWES_DIRECT" ||
       entry.type !== "PLATFORM_COMMISSION"
@@ -520,6 +533,7 @@ export const ACCOUNTING_TYPE_LABELS: Record<
 > = {
   PLATFORM_COMMISSION: "Комиссия Direct",
   RESTAURANT_PAYOUT: "Выплата ресторану",
+  RESTAURANT_REMITTANCE: "Перечисление рестораном",
 };
 
 export const ACCOUNTING_STATUS_LABELS: Record<

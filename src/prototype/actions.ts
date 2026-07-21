@@ -38,6 +38,7 @@ import type {
   RestaurantDeliveryProvider,
   RestaurantDeliverySnapshot,
   RestaurantDeliverySettings,
+  RestaurantFinancialCollectionMode,
   RestaurantOrderWorkflowMode,
   RestaurantWorkspaceAction,
   RestaurantWorkspaceRole,
@@ -553,6 +554,16 @@ export function createOrderFromCart(
   // канал которого станет известен только при выдаче.
   const financialRule = getActiveFinancialRule();
 
+  // Финансовый режим ресторана (v13) фиксируется в снимке заказа: последующая
+  // смена настройки ресторана этот заказ не меняет.
+  const financialCollectionMode = restaurant.financialCollectionMode;
+  if (
+    financialCollectionMode !== "MIXED_COLLECTION" &&
+    financialCollectionMode !== "RESTAURANT_COLLECTS_ALL"
+  ) {
+    return fail("У ресторана не задан финансовый режим получения платежей.");
+  }
+
   // Каноническое движение денег (v10). Канал заранее известен для доставки
   // Direct (онлайн-карта) и собственного курьера (наличные) — фиксируется
   // сразу; для самовывоза канал не угадывается (клиент заплатит на точке).
@@ -566,6 +577,7 @@ export function createOrderFromCart(
     customerTotalCents,
     restaurantCommissionCents,
     financialRule,
+    financialCollectionMode,
   });
   if (!creationMovement.ok) {
     return fail(creationMovement.error);
@@ -648,6 +660,7 @@ export function createOrderFromCart(
         ? { moneyMovement: creationMovement.moneyMovement }
         : {}),
       financialRule,
+      financialCollectionMode,
     },
     history: [
       {
@@ -4708,6 +4721,18 @@ export interface RestaurantFormInput {
   weeklySchedule?: WeeklySchedule;
   /** Этап 10: организация работы с заказами; по умолчанию COMBINED. */
   orderWorkflowMode?: RestaurantOrderWorkflowMode;
+  /**
+   * v13: кто получает платежи клиентов. Отдельное финансовое понятие, не
+   * связанное с организацией кухни. Обязательно при создании.
+   */
+  financialCollectionMode: RestaurantFinancialCollectionMode;
+}
+
+/** Известен ли финансовый режим (fail-closed: fallback запрещён). */
+function isKnownFinancialCollectionMode(
+  value: unknown,
+): value is RestaurantFinancialCollectionMode {
+  return value === "MIXED_COLLECTION" || value === "RESTAURANT_COLLECTS_ALL";
 }
 
 export interface CreateRestaurantResult {
@@ -4726,6 +4751,15 @@ export function createRestaurant(
   );
   if (validationError) {
     return { state, result: { restaurantId: null, error: validationError } };
+  }
+  if (!isKnownFinancialCollectionMode(input.financialCollectionMode)) {
+    return {
+      state,
+      result: {
+        restaurantId: null,
+        error: "Неизвестный финансовый режим получения платежей.",
+      },
+    };
   }
 
   const id = nextRestaurantId(state);
@@ -4772,6 +4806,7 @@ export function createRestaurant(
       timeZone: input.timeZone,
       orderWorkflowMode: input.orderWorkflowMode,
     }),
+    financialCollectionMode: input.financialCollectionMode,
   };
   const nextState = finalizeMutation(state, {
     ...state,
@@ -4810,6 +4845,20 @@ export function updateRestaurant(
   if (validationError) {
     return { state, result: { ok: false, error: validationError } };
   }
+  // Финансовый режим меняется только на известное значение; неизвестное —
+  // ошибка без мутации (state и revision не меняются).
+  if (
+    patch.financialCollectionMode !== undefined &&
+    !isKnownFinancialCollectionMode(patch.financialCollectionMode)
+  ) {
+    return {
+      state,
+      result: {
+        ok: false,
+        error: "Неизвестный финансовый режим получения платежей.",
+      },
+    };
+  }
 
   const nextRestaurant: Restaurant = {
     ...target,
@@ -4847,6 +4896,10 @@ export function updateRestaurant(
       ? cloneWeeklySchedule(patch.weeklySchedule)
       : target.weeklySchedule,
     orderWorkflowMode: patch.orderWorkflowMode ?? target.orderWorkflowMode,
+    // Смена режима влияет только на НОВЫЕ заказы: снимки уже оформленных
+    // заказов не пересматриваются.
+    financialCollectionMode:
+      patch.financialCollectionMode ?? target.financialCollectionMode,
   };
 
   const nextState = finalizeMutation(state, {

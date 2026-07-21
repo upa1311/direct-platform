@@ -526,6 +526,8 @@ test("старые Direct/restaurant-delivery восстанавливаются
           : 0,
       // Правило берётся из самого заказа, а не из активной версии.
       financialRule: original.financials.financialRule!,
+      // v13: режим тоже берётся из снимка заказа.
+      financialCollectionMode: original.financials.financialCollectionMode!,
     });
     assert.equal(canonical.ok, true);
     assert.ok(canonical.ok);

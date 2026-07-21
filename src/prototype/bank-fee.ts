@@ -1,4 +1,5 @@
 import type { DeliveryMode } from "./pricing-engine";
+import type { RestaurantFinancialCollectionMode } from "./models";
 
 // Канонический чистый расчёт банковской комиссии (1% карточной транзакции).
 //
@@ -50,6 +51,12 @@ export interface BankFeeInput {
    * иначе смена ставки переписала бы исторические расчёты.
    */
   bankCardFeeRateBps: number;
+  /**
+   * Финансовый режим ЗАКАЗА (v13). Передаётся явно: распределение банковской
+   * комиссии при доставке водителем Direct зависит от того, кто принял
+   * карточный платёж, и косвенно по moneyCollector не выводится.
+   */
+  financialCollectionMode: RestaurantFinancialCollectionMode;
 }
 
 /** Распределение банковской комиссии между рестораном и Direct. */
@@ -94,7 +101,9 @@ function fail(error: string): BankFeeResult {
 /**
  * Допустимые комбинации режима, получателя денег и канала оплаты.
  *
- * - PLATFORM_DRIVER: деньги собирает Direct; CARD (онлайн) или CASH.
+ * - PLATFORM_DRIVER: получатель зависит от финансового режима заказа —
+ *   MIXED_COLLECTION собирает Direct, RESTAURANT_COLLECTS_ALL — ресторан;
+ *   CARD (онлайн) или CASH.
  * - PICKUP: деньги собирает ресторан на точке; CARD или CASH.
  * - RESTAURANT_DELIVERY: только наличные собственному курьеру ресторана;
  *   онлайн-оплата для этого канала НЕ существует и отклоняется.
@@ -102,9 +111,16 @@ function fail(error: string): BankFeeResult {
 function validateCombination(input: BankFeeInput): string | null {
   const { deliveryMode, moneyCollector, paymentInstrument } = input;
   if (deliveryMode === "PLATFORM_DRIVER") {
-    return moneyCollector === "DIRECT"
-      ? null
-      : "При доставке водителем Direct деньги клиента собирает Direct.";
+    const expected =
+      input.financialCollectionMode === "RESTAURANT_COLLECTS_ALL"
+        ? "RESTAURANT"
+        : "DIRECT";
+    if (moneyCollector !== expected) {
+      return expected === "DIRECT"
+        ? "При доставке водителем Direct деньги клиента собирает Direct."
+        : "В этом режиме платежи по доставке Direct получает ресторан.";
+    }
+    return null;
   }
   if (deliveryMode === "PICKUP") {
     return moneyCollector === "RESTAURANT"
@@ -129,10 +145,12 @@ function validateCombination(input: BankFeeInput): string | null {
  *
  * Правила:
  * - наличные (любой допустимый канал): банковской комиссии нет — все суммы 0;
- * - доставка водителем Direct + онлайн-карта: банк удерживает 1% всей
- *   транзакции; ресторан несёт 1% от еды, Direct — остаток (его доставка,
- *   small-order fee и прочие компоненты Direct);
- * - самовывоз + карта на точке: весь 1% несёт ресторан (комиссия уменьшает его
+ * - доставка водителем Direct + MIXED_COLLECTION (платёж принимает Direct):
+ *   банк удерживает комиссию со всей транзакции; ресторан несёт долю от еды,
+ *   Direct — остаток (его доставка, small-order fee и прочие компоненты);
+ * - доставка водителем Direct + RESTAURANT_COLLECTS_ALL (платёж принимает
+ *   ресторан): всю комиссию несёт ресторан, доля Direct — 0;
+ * - самовывоз + карта на точке: всю комиссию несёт ресторан (она уменьшает его
  *   чистый доход и НЕ увеличивает долг перед Direct), Direct — 0.
  *
  * Инвариант: restaurantBankFeeCents + directBankFeeCents === totalBankFeeCents.
@@ -152,6 +170,12 @@ export function allocateBankFee(input: BankFeeInput): BankFeeResult {
   }
   if (!isValidRateBps(input.bankCardFeeRateBps)) {
     return fail("Некорректная ставка банковской комиссии.");
+  }
+  if (
+    input.financialCollectionMode !== "MIXED_COLLECTION" &&
+    input.financialCollectionMode !== "RESTAURANT_COLLECTS_ALL"
+  ) {
+    return fail("Неизвестный финансовый режим ресторана.");
   }
   if (!isValidCents(input.foodSubtotalCents)) {
     return fail("Стоимость еды должна быть целым неотрицательным числом центов.");
@@ -184,8 +208,13 @@ export function allocateBankFee(input: BankFeeInput): BankFeeResult {
     input.bankCardFeeRateBps,
   );
 
-  // Самовывоз картой на точке: платёж принимает ресторан — весь 1% его.
-  if (input.deliveryMode === "PICKUP") {
+  // Карточный платёж принимает ресторан — вся комиссия его: самовывоз на
+  // точке, а также доставка водителем Direct в режиме RESTAURANT_COLLECTS_ALL
+  // (банк удерживает комиссию у стороны, принявшей платёж).
+  if (
+    input.deliveryMode === "PICKUP" ||
+    input.financialCollectionMode === "RESTAURANT_COLLECTS_ALL"
+  ) {
     return {
       ok: true,
       fee: {

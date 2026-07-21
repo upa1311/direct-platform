@@ -63,6 +63,7 @@ type RestaurantExtras = Pick<
   | "timeZone"
   | "orderPause"
   | "orderWorkflowMode"
+  | "financialCollectionMode"
 >;
 
 /** Часовой пояс по умолчанию (Бендеры / Приднестровье). */
@@ -89,6 +90,10 @@ export function createRestaurantExtras(
     orderPause: overrides.orderPause ?? null,
     // Этап 1: по умолчанию единый общий экран.
     orderWorkflowMode: overrides.orderWorkflowMode ?? "COMBINED",
+    // v13: по умолчанию прежнее поведение платформы — Direct получает
+    // онлайн-платежи своей доставки, ресторан — самовывоз и своего курьера.
+    financialCollectionMode:
+      overrides.financialCollectionMode ?? "MIXED_COLLECTION",
   };
 }
 

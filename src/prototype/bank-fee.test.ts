@@ -39,6 +39,7 @@ const directCardOrder = (
   foodSubtotalCents,
   customerTotalCents,
   bankCardFeeRateBps: V1_RATE_BPS,
+  financialCollectionMode: "MIXED_COLLECTION",
 });
 
 // 1 — доставка Direct онлайн ---------------------------------------------------
@@ -70,6 +71,7 @@ test("самовывоз картой: весь 1% несёт ресторан, 
     foodSubtotalCents: 10_000,
     customerTotalCents: 10_000,
     bankCardFeeRateBps: V1_RATE_BPS,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(fee.totalBankFeeCents, 100);
   assert.equal(fee.restaurantBankFeeCents, 100);
@@ -86,6 +88,7 @@ test("самовывоз наличными: банковская комисси
     foodSubtotalCents: 10_000,
     customerTotalCents: 10_000,
     bankCardFeeRateBps: V1_RATE_BPS,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.deepEqual(fee, {
     totalBankFeeCents: 0,
@@ -102,6 +105,7 @@ test("курьер ресторана наличными: банковская �
     foodSubtotalCents: 1_420,
     customerTotalCents: 1_770,
     bankCardFeeRateBps: V1_RATE_BPS,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.deepEqual(fee, {
     totalBankFeeCents: 0,
@@ -131,6 +135,7 @@ test("нечётные суммы округляются до цента, инв
     foodSubtotalCents: 1_049,
     customerTotalCents: 1_049,
     bankCardFeeRateBps: V1_RATE_BPS,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(c.totalBankFeeCents, 10);
   assert.equal(c.restaurantBankFeeCents, 10);
@@ -182,6 +187,7 @@ test("невозможные комбинации не маскируются н
       foodSubtotalCents: 1_000,
       customerTotalCents: 1_000,
       bankCardFeeRateBps: V1_RATE_BPS,
+      financialCollectionMode: "MIXED_COLLECTION",
     }).ok,
     false,
   );
@@ -194,6 +200,7 @@ test("невозможные комбинации не маскируются н
       foodSubtotalCents: 1_000,
       customerTotalCents: 1_500,
       bankCardFeeRateBps: V1_RATE_BPS,
+      financialCollectionMode: "MIXED_COLLECTION",
     }).ok,
     false,
   );
@@ -209,6 +216,7 @@ test("повреждённый paymentInstrument отклоняется, а не
     foodSubtotalCents: 10_000,
     customerTotalCents: 10_500,
     bankCardFeeRateBps: V1_RATE_BPS,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(platform.ok, false);
   assert.ok(!platform.ok && /канал оплаты/.test(platform.error));
@@ -220,6 +228,7 @@ test("повреждённый paymentInstrument отклоняется, а не
     foodSubtotalCents: 10_000,
     customerTotalCents: 10_000,
     bankCardFeeRateBps: V1_RATE_BPS,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(pickup.ok, false);
   assert.ok(!pickup.ok && /канал оплаты/.test(pickup.error));
@@ -232,6 +241,7 @@ test("повреждённый paymentInstrument отклоняется, а не
     foodSubtotalCents: Number.NaN,
     customerTotalCents: -1,
     bankCardFeeRateBps: V1_RATE_BPS,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(beforeMath.ok, false);
   assert.ok(!beforeMath.ok && /канал оплаты/.test(beforeMath.error));
@@ -247,6 +257,7 @@ test("онлайн-оплата для собственного курьера �
     foodSubtotalCents: 1_420,
     customerTotalCents: 1_770,
     bankCardFeeRateBps: V1_RATE_BPS,
+    financialCollectionMode: "MIXED_COLLECTION",
   });
   assert.equal(result.ok, false);
   assert.ok(

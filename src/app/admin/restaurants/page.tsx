@@ -13,6 +13,7 @@ import {
   getRestaurantActiveOrderCount,
   getRestaurantLocalNow,
   getRestaurantTimeZoneLabel,
+  financialCollectionModeLabels,
   getRestaurantTotalDebtCents,
   getScheduleLabel,
   getZoneName,
@@ -111,6 +112,14 @@ function RestaurantOperationalCard({
             <div className={flowStyles.definitionRow}>
               <dt>Организация работы</dt>
               <dd>{workflowModeLabels[restaurant.orderWorkflowMode]}</dd>
+            </div>
+            <div className={flowStyles.definitionRow}>
+              <dt>Платежи клиентов</dt>
+              <dd>
+                {financialCollectionModeLabels[
+                  restaurant.financialCollectionMode
+                ]}
+              </dd>
             </div>
             <div className={flowStyles.definitionRow}>
               <dt>Публичный телефон</dt>

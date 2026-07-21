@@ -17,17 +17,18 @@ import {
  */
 
 /**
- * Единственно допустимые пары «направление + основание» обязательства:
- * комиссия Direct всегда идёт от ресторана к Direct, выплата — от Direct
- * ресторану. Проверять их независимо нельзя: смешанная пара — повреждённые
- * данные, а не редкий бизнес-случай.
+ * Единственно допустимые пары «направление + основание» обязательства. Ровно
+ * три: комиссия Direct и перечисление ресторана (v13) всегда идут от ресторана
+ * к Direct, выплата — от Direct ресторану. Проверять направление и тип
+ * независимо нельзя: смешанная пара (например, выплата в сторону Direct) —
+ * повреждённые данные, а не редкий бизнес-случай.
  */
 const ALLOWED_DIRECTION_TYPE: Record<
   RestaurantAccountingEntry["direction"],
-  RestaurantAccountingEntry["type"]
+  readonly RestaurantAccountingEntry["type"][]
 > = {
-  RESTAURANT_OWES_DIRECT: "PLATFORM_COMMISSION",
-  DIRECT_OWES_RESTAURANT: "RESTAURANT_PAYOUT",
+  RESTAURANT_OWES_DIRECT: ["PLATFORM_COMMISSION", "RESTAURANT_REMITTANCE"],
+  DIRECT_OWES_RESTAURANT: ["RESTAURANT_PAYOUT"],
 };
 
 export const SETTLEMENT_DIRECTION_TYPE_ERROR =
@@ -41,7 +42,9 @@ export function isAllowedDirectionTypePair(
   if (direction !== "RESTAURANT_OWES_DIRECT" && direction !== "DIRECT_OWES_RESTAURANT") {
     return false;
   }
-  return ALLOWED_DIRECTION_TYPE[direction] === type;
+  return ALLOWED_DIRECTION_TYPE[direction].some(
+    (allowed) => allowed === type,
+  );
 }
 
 /**
