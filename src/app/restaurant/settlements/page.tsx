@@ -21,6 +21,7 @@ import {
   RESTAURANT_SETTLEMENT_PERIOD_LABELS,
   RESTAURANT_SETTLEMENT_PERIOD_ORDER,
   SETTLEMENT_COLLECTOR_LABELS,
+  SETTLEMENT_ROW_DATA_STATUS_LABELS,
   type RestaurantDailySettlementRow,
   type RestaurantSettlementPeriod,
   type RestaurantSettlementRow,
@@ -710,6 +711,30 @@ function OrderDetails({
         <OrderDetailRow
           label="Собрано Direct с клиента"
           value={money(row.platformCollectedFromCustomerCents)}
+        />
+        <OrderDetailRow
+          label="Комиссия Direct"
+          value={money(row.restaurantCommissionCents)}
+        />
+        {/* Полное обязательство ресторана — это перечисление, а не комиссия:
+            в него могут входить доставка и доплата за небольшой заказ. */}
+        {row.restaurantOwesDirectCents !== null &&
+        row.restaurantOwesDirectCents > 0 ? (
+          <OrderDetailRow
+            label="Перечисление рестораном"
+            value={money(row.restaurantOwesDirectCents)}
+          />
+        ) : null}
+        {row.directOwesRestaurantCents !== null &&
+        row.directOwesRestaurantCents > 0 ? (
+          <OrderDetailRow
+            label="Direct должен ресторану"
+            value={money(row.directOwesRestaurantCents)}
+          />
+        ) : null}
+        <OrderDetailRow
+          label="Источник данных"
+          value={SETTLEMENT_ROW_DATA_STATUS_LABELS[row.dataStatus]}
         />
         <OrderDetailRow label="Комиссионное начисление" value={ledgerText} />
       </dl>

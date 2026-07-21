@@ -81,6 +81,7 @@ import {
 } from "./pricing-engine";
 import { isValidMenuMediaId } from "./media-store";
 import {
+  buildCompatibilityCollectionFields,
   buildCreationMoneyMovement,
   finalizePickupMoneyMovement,
 } from "./money-movement-snapshot";
@@ -505,24 +506,6 @@ export function createOrderFromCart(
   const restaurantPayoutBeforeBankFeeCents = isPickup
     ? 0
     : pricing.restaurantPayoutBeforeBankFeeCents;
-  const restaurantCollectedFromCustomerCents = pickup
-    ? pickup.restaurantCollectedFromCustomerCents
-    : isRestaurantDelivery
-      ? customerTotalCents
-      : 0;
-  const platformCollectedFromCustomerCents =
-    pickup || isRestaurantDelivery ? 0 : customerTotalCents;
-  const platformCommissionReceivableCents = pickup
-    ? pickup.platformCommissionReceivableCents
-    : isRestaurantDelivery
-      ? pricing.restaurantCommissionCents
-      : 0;
-  const restaurantNetAfterPlatformCommissionCents = pickup
-    ? pickup.restaurantNetAfterPlatformCommissionCents
-    : isRestaurantDelivery
-      ? customerTotalCents - pricing.restaurantCommissionCents
-      : pricing.restaurantPayoutBeforeBankFeeCents;
-
   const items: OrderItemSnapshot[] = itemViews.map((view) => ({
     menuItemId: view.menuItem.id,
     name: view.menuItem.name,
@@ -582,6 +565,33 @@ export function createOrderFromCart(
   if (!creationMovement.ok) {
     return fail(creationMovement.error);
   }
+
+  // Compatibility-поля снимка заполняются ИЗ канонического движения и не
+  // выводятся заново по deliveryMode/deliveryProvider/financialCollectionMode/
+  // paymentMethod: иначе старые поля могли бы противоречить movement (именно
+  // так режим RESTAURANT_COLLECTS_ALL раньше записывался как «деньги у
+  // Direct»). Единственный источник истины — movement.
+  const creationMoneyMovement =
+    creationMovement.moneyMovementStatus === "COMPLETE"
+      ? creationMovement.moneyMovement
+      : null;
+  const compatibility = buildCompatibilityCollectionFields({
+    movement: creationMoneyMovement,
+    customerTotalCents,
+    restaurantCommissionCents,
+    // Самовывоз до оплаты: клиент фактически ещё не заплатил, поэтому
+    // собранные суммы равны нулю, а чистая сумма остаётся предварительной
+    // оценкой самовывоза до фиксации фактического канала оплаты.
+    pendingRestaurantNetCents: pickup
+      ? pickup.restaurantNetAfterPlatformCommissionCents
+      : 0,
+  });
+  const {
+    restaurantCollectedFromCustomerCents,
+    platformCollectedFromCustomerCents,
+    platformCommissionReceivableCents,
+    restaurantNetAfterPlatformCommissionCents,
+  } = compatibility;
 
   const now = new Date().toISOString();
   const orderId = `order-${state.nextOrderNumber}`;
@@ -2887,6 +2897,16 @@ export function completePickupAtRestaurant(
     pickupPaidWith: paidWith,
     financials: {
       ...order.financials,
+      // Compatibility-поля обновляются из ФИНАЛЬНОГО движения в той же
+      // атомарной мутации: после выдачи снимок обязан объяснять заказ
+      // одинаково и каноническими, и старыми полями.
+      ...buildCompatibilityCollectionFields({
+        movement: finalizedMovement.moneyMovement,
+        customerTotalCents: order.financials.customerTotalCents,
+        restaurantCommissionCents: order.financials.restaurantCommissionCents,
+        pendingRestaurantNetCents:
+          order.financials.restaurantNetAfterPlatformCommissionCents,
+      }),
       moneyMovementStatus: finalizedMovement.moneyMovementStatus,
       moneyMovement: finalizedMovement.moneyMovement,
     },
@@ -4537,6 +4557,16 @@ export function issuePickupWithoutCode(
     pickupPaidWith: paidWith,
     financials: {
       ...order.financials,
+      // Compatibility-поля обновляются из ФИНАЛЬНОГО движения в той же
+      // атомарной мутации: после выдачи снимок обязан объяснять заказ
+      // одинаково и каноническими, и старыми полями.
+      ...buildCompatibilityCollectionFields({
+        movement: finalizedMovement.moneyMovement,
+        customerTotalCents: order.financials.customerTotalCents,
+        restaurantCommissionCents: order.financials.restaurantCommissionCents,
+        pendingRestaurantNetCents:
+          order.financials.restaurantNetAfterPlatformCommissionCents,
+      }),
       moneyMovementStatus: finalizedMovement.moneyMovementStatus,
       moneyMovement: finalizedMovement.moneyMovement,
     },

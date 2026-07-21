@@ -48,6 +48,70 @@ function isKnownCollectionMode(
   return value === "MIXED_COLLECTION" || value === "RESTAURANT_COLLECTS_ALL";
 }
 
+/**
+ * Старые «collection»-поля финансового снимка. Они сохраняются только ради
+ * совместимости со старыми отчётами и НЕ являются отдельной формулой:
+ * современный заказ объясняется каноническим moneyMovement, а эти поля —
+ * его проекция.
+ */
+export interface CompatibilityCollectionFields {
+  restaurantCollectedFromCustomerCents: number;
+  platformCollectedFromCustomerCents: number;
+  platformCommissionReceivableCents: number;
+  /** Compatibility-alias movement.restaurantNetCents (не своя формула). */
+  restaurantNetAfterPlatformCommissionCents: number;
+}
+
+/**
+ * Проекция канонического движения на старые поля снимка.
+ *
+ * Получатель клиентского платежа берётся ТОЛЬКО из
+ * movement.customerMoneyRecipient: повторно выводить его из deliveryMode,
+ * deliveryProvider, financialCollectionMode или paymentMethod запрещено —
+ * именно такое дублирование и приводило к снимку, противоречащему движению.
+ *
+ * platformCommissionReceivableCents по названию означает ЧИСТУЮ комиссию
+ * Direct и не должна содержать стоимость доставки, финансирование выплаты
+ * водителю или полное перечисление ресторана: полное обязательство живёт
+ * только в movement.restaurantOwesDirectCents. Поэтому поле равно комиссии,
+ * когда деньги клиента получил ресторан, и нулю, когда их получил Direct
+ * (тогда Direct должен ресторану выплату, а не наоборот).
+ *
+ * movement === null — это самовывоз до фактической оплаты: клиент ещё не
+ * заплатил, поэтому обе собранные суммы равны нулю, а чистая сумма остаётся
+ * предварительной оценкой и окончательным расчётом не является.
+ */
+export function buildCompatibilityCollectionFields(input: {
+  movement: OrderMoneyMovement | null;
+  customerTotalCents: number;
+  restaurantCommissionCents: number;
+  pendingRestaurantNetCents: number;
+}): CompatibilityCollectionFields {
+  if (!input.movement) {
+    return {
+      restaurantCollectedFromCustomerCents: 0,
+      platformCollectedFromCustomerCents: 0,
+      platformCommissionReceivableCents: input.restaurantCommissionCents,
+      restaurantNetAfterPlatformCommissionCents: input.pendingRestaurantNetCents,
+    };
+  }
+  const restaurantCollected =
+    input.movement.customerMoneyRecipient === "RESTAURANT";
+  return {
+    restaurantCollectedFromCustomerCents: restaurantCollected
+      ? input.customerTotalCents
+      : 0,
+    platformCollectedFromCustomerCents: restaurantCollected
+      ? 0
+      : input.customerTotalCents,
+    platformCommissionReceivableCents: restaurantCollected
+      ? input.restaurantCommissionCents
+      : 0,
+    restaurantNetAfterPlatformCommissionCents:
+      input.movement.restaurantNetCents,
+  };
+}
+
 /** Результат построения движения при СОЗДАНИИ заказа. */
 export type CreationMoneyMovementResult =
   | {

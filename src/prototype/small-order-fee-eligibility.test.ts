@@ -149,7 +149,9 @@ test("createOrderFromCart PICKUP: снимок без доплаты, итог =
     f.restaurantCommissionCents,
     "задолженность Direct = только комиссия",
   );
-  assert.equal(f.restaurantCollectedFromCustomerCents, f.customerTotalCents);
+  // v13: самовывоз до фактической оплаты ещё не собран ни одной стороной.
+  assert.equal(f.restaurantCollectedFromCustomerCents, 0);
+  assert.equal(f.platformCollectedFromCustomerCents, 0);
 });
 
 // 9 --------------------------------------------------------------------------

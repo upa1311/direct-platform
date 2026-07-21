@@ -99,10 +99,23 @@ test("COMBINED-выдача: оба события несут роль COMBINED,
   const { state, orderId, code } = makeReadyPickup();
   // v10: выдача дополняет снимок каноническим движением денег (фиксация
   // фактического канала) — рассчитанные суммы сравниваем без этих полей.
+  // v13: выдача ещё и приводит compatibility-поля в соответствие с финальным
+  // движением (до оплаты клиент ничего не заплатил) — они сравниваются
+  // отдельно, ниже.
   const stripMovement = (f: Order["financials"]) => {
-    const { moneyMovement, moneyMovementStatus, ...rest } = f;
+    const {
+      moneyMovement,
+      moneyMovementStatus,
+      restaurantCollectedFromCustomerCents,
+      platformCollectedFromCustomerCents,
+      restaurantNetAfterPlatformCommissionCents,
+      ...rest
+    } = f;
     void moneyMovement;
     void moneyMovementStatus;
+    void restaurantCollectedFromCustomerCents;
+    void platformCollectedFromCustomerCents;
+    void restaurantNetAfterPlatformCommissionCents;
     return JSON.stringify(rest);
   };
   const finBefore = stripMovement(getOrder(state, orderId).financials);
@@ -121,6 +134,16 @@ test("COMBINED-выдача: оба события несут роль COMBINED,
   assert.equal(
     order.financials.moneyMovement?.paymentChannel,
     "CASH_AT_RESTAURANT",
+  );
+  // Compatibility-поля после выдачи объясняют заказ так же, как движение.
+  assert.equal(
+    order.financials.restaurantCollectedFromCustomerCents,
+    order.financials.customerTotalCents,
+  );
+  assert.equal(order.financials.platformCollectedFromCustomerCents, 0);
+  assert.equal(
+    order.financials.restaurantNetAfterPlatformCommissionCents,
+    order.financials.moneyMovement?.restaurantNetCents,
   );
   assert.equal(order.financials.deliveryFeeCents, 0);
   // Один Order остаётся одним Order; ревизия выросла ровно на один.

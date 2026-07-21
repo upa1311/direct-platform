@@ -9,7 +9,10 @@ import {
 } from "./actions.ts";
 import { createDefaultState } from "./default-state.ts";
 import { computeCompletedOrderAccounting } from "./restaurant-accounting.ts";
-import { finalizePickupMoneyMovement } from "./money-movement-snapshot.ts";
+import {
+  buildCompatibilityCollectionFields,
+  finalizePickupMoneyMovement,
+} from "./money-movement-snapshot.ts";
 import type { FinancialSnapshot, Order, PrototypeState } from "./models.ts";
 
 /** Создаёт валидный новый заказ штатным путём и возвращает его снимок. */
@@ -33,6 +36,29 @@ function makeOrder(
   return { state: created.state, order };
 }
 
+/**
+ * Снимок заказа с ЗАФИКСИРОВАННЫМ каналом оплаты. Самовывоз до выдачи ещё не
+ * оплачен: collected-поля v13 равны нулю по факту, а не по прежней догадке,
+ * поэтому collector-инварианты проверяются на финализированном движении.
+ */
+function settledFinancials(order: Order): FinancialSnapshot {
+  if (order.deliveryMode !== "PICKUP") return order.financials;
+  const finalized = finalizePickupMoneyMovement(order.financials, "CASH");
+  assert.ok(finalized.ok);
+  return {
+    ...order.financials,
+    ...buildCompatibilityCollectionFields({
+      movement: finalized.moneyMovement,
+      customerTotalCents: order.financials.customerTotalCents,
+      restaurantCommissionCents: order.financials.restaurantCommissionCents,
+      pendingRestaurantNetCents:
+        order.financials.restaurantNetAfterPlatformCommissionCents,
+    }),
+    moneyMovementStatus: finalized.moneyMovementStatus,
+    moneyMovement: finalized.moneyMovement,
+  };
+}
+
 /** Три штатных collector-сценария: PICKUP, RESTAURANT_DELIVERY, PLATFORM_DRIVER. */
 const SCENARIOS = [
   { label: "PICKUP", itemId: "restaurant-1-item-1", fulfillment: "PICKUP" as const, deliveryMode: "PICKUP", collector: "RESTAURANT" },
@@ -45,7 +71,7 @@ const SCENARIOS = [
 test("сумма collected равна customerTotal для каждого штатного режима", () => {
   for (const sc of SCENARIOS) {
     const { order } = makeOrder(sc.itemId, sc.fulfillment);
-    const f = order.financials;
+    const f = settledFinancials(order);
     assert.equal(order.deliveryMode, sc.deliveryMode, sc.label);
     assert.equal(
       f.restaurantCollectedFromCustomerCents +
@@ -61,7 +87,7 @@ test("сумма collected равна customerTotal для каждого шта
 test("штатный builder не создаёт MIXED: ровно одно collected-поле > 0", () => {
   for (const sc of SCENARIOS) {
     const { order } = makeOrder(sc.itemId, sc.fulfillment);
-    const f = order.financials;
+    const f = settledFinancials(order);
     const restaurantPositive = f.restaurantCollectedFromCustomerCents > 0;
     const platformPositive = f.platformCollectedFromCustomerCents > 0;
     // Ровно один собиратель (customerTotal > 0 в этих сценариях).

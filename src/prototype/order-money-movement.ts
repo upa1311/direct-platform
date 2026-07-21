@@ -1,4 +1,9 @@
-import { allocateBankFee } from "./bank-fee";
+import {
+  addChecked,
+  allocateBankFee,
+  isSafeCents,
+  subtractChecked,
+} from "./bank-fee";
 import type {
   BankFeeMoneyCollector,
   BankFeePaymentInstrument,
@@ -98,18 +103,12 @@ function fail(error: string): OrderMoneyMovementResult {
   return { ok: false, error };
 }
 
-/** Сложение с проверкой безопасного целочисленного диапазона. */
-function addChecked(a: number | null, b: number): number | null {
-  if (a === null) return null;
-  const sum = a + b;
-  return Number.isSafeInteger(sum) ? sum : null;
-}
-
-/** Целые неотрицательные конечные центы. */
+/**
+ * Денежные validator и checked-арифметика — единые для всего финансового
+ * контура (объявлены в bank-fee, чтобы обе функции считали по одним правилам).
+ */
 function isValidCents(value: number): boolean {
-  return (
-    typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0
-  );
+  return isSafeCents(value);
 }
 
 const KNOWN_DELIVERY_MODES: readonly DeliveryMode[] = [
@@ -281,14 +280,22 @@ export function computeOrderMoneyMovement(
 
   // Согласованность уже рассчитанных сумм текущей модели: расхождение — это
   // повреждённые данные, а не повод молча выдать правдоподобный результат.
+  // Сложение проверенное: выход за безопасный диапазон — отдельная доменная
+  // ошибка, а не «суммы не сошлись».
   const expectedTotal =
     input.deliveryMode === "PICKUP"
       ? input.foodSubtotalCents
       : input.deliveryMode === "RESTAURANT_DELIVERY"
-        ? input.foodSubtotalCents + input.deliveryFeeCents
-        : input.foodSubtotalCents + input.deliveryFeeCents + input.smallOrderFeeCents;
+        ? addChecked(input.foodSubtotalCents, input.deliveryFeeCents)
+        : addChecked(
+            addChecked(input.foodSubtotalCents, input.deliveryFeeCents),
+            input.smallOrderFeeCents,
+          );
   if (input.deliveryMode === "PICKUP" && input.deliveryFeeCents !== 0) {
     return fail("У самовывоза не бывает стоимости доставки.");
+  }
+  if (expectedTotal === null) {
+    return fail("Суммы заказа выходят за безопасный диапазон.");
   }
   if (expectedTotal !== input.customerTotalCents) {
     return fail("Суммы заказа не сходятся с суммой клиента.");
@@ -311,10 +318,12 @@ export function computeOrderMoneyMovement(
   const { totalBankFeeCents, restaurantBankFeeCents, directBankFeeCents } =
     bank.fee;
 
-  let restaurantOwesDirectCents: number;
-  let directOwesRestaurantCents: number;
-  let restaurantNetCents: number;
-  let directNetRevenueCents: number;
+  // Все итоги считаются checked-арифметикой: null означает выход за
+  // безопасный диапазон ИЛИ отрицательный промежуточный результат.
+  let restaurantOwesDirectCents: number | null;
+  let directOwesRestaurantCents: number | null;
+  let restaurantNetCents: number | null;
+  let directNetRevenueCents: number | null;
 
   if (
     input.deliveryMode === "PLATFORM_DRIVER" &&
@@ -333,27 +342,29 @@ export function computeOrderMoneyMovement(
       input.restaurantCommissionCents,
       input.smallOrderFeeCents,
     );
-    if (remittance === null || revenue === null) {
-      return fail("Суммы заказа выходят за безопасный диапазон.");
-    }
     restaurantOwesDirectCents = remittance;
     directOwesRestaurantCents = 0;
-    restaurantNetCents =
-      input.customerTotalCents - remittance - restaurantBankFeeCents;
-    directNetRevenueCents = revenue - directBankFeeCents;
+    restaurantNetCents = subtractChecked(
+      subtractChecked(input.customerTotalCents, remittance),
+      restaurantBankFeeCents,
+    );
+    directNetRevenueCents = subtractChecked(revenue, directBankFeeCents);
   } else if (input.deliveryMode === "PLATFORM_DRIVER") {
     // Деньги у Direct: он должен ресторану еду за вычетом комиссии и
     // банковской части ресторана; доставка предназначена водителю.
     restaurantOwesDirectCents = 0;
-    directOwesRestaurantCents =
-      input.foodSubtotalCents -
-      input.restaurantCommissionCents -
-      restaurantBankFeeCents;
+    directOwesRestaurantCents = subtractChecked(
+      subtractChecked(
+        input.foodSubtotalCents,
+        input.restaurantCommissionCents,
+      ),
+      restaurantBankFeeCents,
+    );
     restaurantNetCents = directOwesRestaurantCents;
-    directNetRevenueCents =
-      input.restaurantCommissionCents +
-      input.smallOrderFeeCents -
-      directBankFeeCents;
+    directNetRevenueCents = subtractChecked(
+      addChecked(input.restaurantCommissionCents, input.smallOrderFeeCents),
+      directBankFeeCents,
+    );
   } else {
     // Деньги у ресторана (самовывоз или собственный курьер): он должен Direct
     // комиссию; банковская комиссия карты уменьшает ЕГО чистый доход и долг
@@ -361,26 +372,34 @@ export function computeOrderMoneyMovement(
     // ресторану (оплата его курьера — вне Direct).
     restaurantOwesDirectCents = input.restaurantCommissionCents;
     directOwesRestaurantCents = 0;
-    restaurantNetCents =
-      input.customerTotalCents -
-      input.restaurantCommissionCents -
-      restaurantBankFeeCents;
+    restaurantNetCents = subtractChecked(
+      subtractChecked(
+        input.customerTotalCents,
+        input.restaurantCommissionCents,
+      ),
+      restaurantBankFeeCents,
+    );
     directNetRevenueCents = input.restaurantCommissionCents;
   }
 
-  const results: readonly [string, number][] = [
+  const results: readonly [string, number | null][] = [
     ["restaurantOwesDirectCents", restaurantOwesDirectCents],
     ["directOwesRestaurantCents", directOwesRestaurantCents],
     ["restaurantNetCents", restaurantNetCents],
     ["directNetRevenueCents", directNetRevenueCents],
   ];
   for (const [label, value] of results) {
-    if (!isValidCents(value)) {
+    if (value === null || !isValidCents(value)) {
       return fail(`Невозможный отрицательный или нецелый результат (${label}).`);
     }
   }
+  // После проверки выше каждое значение — безопасные неотрицательные центы.
+  const owes = restaurantOwesDirectCents as number;
+  const owed = directOwesRestaurantCents as number;
+  const restaurantNet = restaurantNetCents as number;
+  const directRevenue = directNetRevenueCents as number;
   // Взаимные обязательства одного обычного заказа не бывают встречными.
-  if (restaurantOwesDirectCents > 0 && directOwesRestaurantCents > 0) {
+  if (owes > 0 && owed > 0) {
     return fail("Встречные обязательства по одному заказу невозможны.");
   }
 
@@ -392,10 +411,10 @@ export function computeOrderMoneyMovement(
       totalBankFeeCents,
       restaurantBankFeeCents,
       directBankFeeCents,
-      restaurantOwesDirectCents,
-      directOwesRestaurantCents,
-      restaurantNetCents,
-      directNetRevenueCents,
+      restaurantOwesDirectCents: owes,
+      directOwesRestaurantCents: owed,
+      restaurantNetCents: restaurantNet,
+      directNetRevenueCents: directRevenue,
     },
   };
 }

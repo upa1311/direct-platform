@@ -6,6 +6,7 @@ import type {
   SettlementStatus,
   SettlementType,
 } from "./models";
+import type { OrderPaymentChannel } from "./order-money-movement";
 import {
   getLocalDateParts,
   localMidnightToUtcMs,
@@ -35,6 +36,14 @@ export type RestaurantSettlementPeriod =
 /** Кто фактически собрал деньги клиента (по FinancialSnapshot). */
 export type SettlementCollector = "RESTAURANT" | "DIRECT" | "MIXED";
 
+/**
+ * Источник цифр строки. COMPLETE — канонический moneyMovement заказа;
+ * LEGACY — настоящий старый заказ без движения (только тогда допустим
+ * fallback на compatibility-поля); REVIEW_REQUIRED — данные требуют разбора и
+ * в достоверные итоги не входят.
+ */
+export type SettlementRowDataStatus = "COMPLETE" | "LEGACY" | "REVIEW_REQUIRED";
+
 /** Существующее начисление комиссии по ledger, привязанное к заказу. */
 export interface RestaurantSettlementLedgerEntry {
   type: SettlementType;
@@ -54,8 +63,22 @@ export interface RestaurantSettlementRow {
   collector: SettlementCollector;
   restaurantCollectedFromCustomerCents: number;
   platformCollectedFromCustomerCents: number;
+  /** ЧИСТАЯ комиссия Direct, а не полное перечисление ресторана. */
   platformCommissionReceivableCents: number;
+  /** Compatibility-alias restaurantNetCents для существующего UI. */
   restaurantNetAfterPlatformCommissionCents: number;
+  /** Комиссия Direct из снимка заказа (показывается отдельно от долга). */
+  restaurantCommissionCents: number;
+  /** Канал оплаты канонического движения; null у legacy-строки. */
+  paymentChannel: OrderPaymentChannel | null;
+  /** Источник цифр строки. */
+  dataStatus: SettlementRowDataStatus;
+  /** Полное обязательство ресторана перед Direct (движение), null у legacy. */
+  restaurantOwesDirectCents: number | null;
+  /** Обязательство Direct перед рестораном (движение), null у legacy. */
+  directOwesRestaurantCents: number | null;
+  /** Чистая сумма ресторана из движения; null у legacy. */
+  restaurantNetCents: number | null;
   /** Существующее начисление ledger либо null («Начисления нет»). */
   ledger: RestaurantSettlementLedgerEntry | null;
 }
@@ -71,6 +94,8 @@ export interface RestaurantSettlementSummary {
   platformCommissionReceivableCents: number;
   /** Фактический PENDING по существующему ledger — отдельно от snapshot. */
   pendingLedgerCents: number;
+  /** Строки, требующие разбора: в суммы выше они НЕ входят. */
+  reviewRequiredOrderCount: number;
 }
 
 /** Оплаченный отменённый заказ — требует ручного решения по возврату. */
@@ -114,6 +139,7 @@ const EMPTY_SUMMARY: RestaurantSettlementSummary = {
   platformCollectedFromCustomerCents: 0,
   platformCommissionReceivableCents: 0,
   pendingLedgerCents: 0,
+  reviewRequiredOrderCount: 0,
 };
 
 /**
@@ -164,6 +190,94 @@ function collectorOf(
   if (restaurantCents > 0 && platformCents > 0) return "MIXED";
   if (platformCents > 0) return "DIRECT";
   return "RESTAURANT";
+}
+
+/** Денежная часть строки, зависящая от источника данных. */
+type SettlementRowMoneyFields = Pick<
+  RestaurantSettlementRow,
+  | "collector"
+  | "restaurantCollectedFromCustomerCents"
+  | "platformCollectedFromCustomerCents"
+  | "platformCommissionReceivableCents"
+  | "restaurantNetAfterPlatformCommissionCents"
+  | "paymentChannel"
+  | "dataStatus"
+  | "restaurantOwesDirectCents"
+  | "directOwesRestaurantCents"
+  | "restaurantNetCents"
+>;
+
+/**
+ * Порядок источников для строки отчёта.
+ *
+ * 1) COMPLETE с движением — цифры берутся ТОЛЬКО из moneyMovement заказа:
+ *    получатель денег, чистая сумма ресторана и обе стороны обязательств уже
+ *    посчитаны каноническим расчётом и здесь не пересчитываются. Повреждённые
+ *    compatibility-поля на такую строку не влияют.
+ * 2) REVIEW_REQUIRED — данные требуют ручного разбора: правдоподобные старые
+ *    суммы не показываются и в итоги не попадают.
+ * 3) Настоящий legacy-заказ без движения — единственный случай, когда
+ *    допустим fallback на compatibility-поля; строка помечается LEGACY.
+ */
+function buildRowMoneyFields(
+  fin: Order["financials"],
+): SettlementRowMoneyFields {
+  const movement = fin.moneyMovement;
+  if (fin.moneyMovementStatus === "COMPLETE" && movement) {
+    const restaurantCollected =
+      movement.customerMoneyRecipient === "RESTAURANT";
+    return {
+      collector: restaurantCollected ? "RESTAURANT" : "DIRECT",
+      restaurantCollectedFromCustomerCents: restaurantCollected
+        ? fin.customerTotalCents
+        : 0,
+      platformCollectedFromCustomerCents: restaurantCollected
+        ? 0
+        : fin.customerTotalCents,
+      // Чистая комиссия Direct, а не полное перечисление ресторана: полная
+      // сумма обязательства остаётся в restaurantOwesDirectCents.
+      platformCommissionReceivableCents: restaurantCollected
+        ? fin.restaurantCommissionCents
+        : 0,
+      restaurantNetAfterPlatformCommissionCents: movement.restaurantNetCents,
+      paymentChannel: movement.paymentChannel,
+      dataStatus: "COMPLETE",
+      restaurantOwesDirectCents: movement.restaurantOwesDirectCents,
+      directOwesRestaurantCents: movement.directOwesRestaurantCents,
+      restaurantNetCents: movement.restaurantNetCents,
+    };
+  }
+  if (fin.moneyMovementStatus === "REVIEW_REQUIRED") {
+    return {
+      collector: "RESTAURANT",
+      restaurantCollectedFromCustomerCents: 0,
+      platformCollectedFromCustomerCents: 0,
+      platformCommissionReceivableCents: 0,
+      restaurantNetAfterPlatformCommissionCents: 0,
+      paymentChannel: null,
+      dataStatus: "REVIEW_REQUIRED",
+      restaurantOwesDirectCents: null,
+      directOwesRestaurantCents: null,
+      restaurantNetCents: null,
+    };
+  }
+  return {
+    collector: collectorOf(
+      fin.restaurantCollectedFromCustomerCents,
+      fin.platformCollectedFromCustomerCents,
+    ),
+    restaurantCollectedFromCustomerCents:
+      fin.restaurantCollectedFromCustomerCents,
+    platformCollectedFromCustomerCents: fin.platformCollectedFromCustomerCents,
+    platformCommissionReceivableCents: fin.platformCommissionReceivableCents,
+    restaurantNetAfterPlatformCommissionCents:
+      fin.restaurantNetAfterPlatformCommissionCents,
+    paymentChannel: null,
+    dataStatus: "LEGACY",
+    restaurantOwesDirectCents: null,
+    directOwesRestaurantCents: null,
+    restaurantNetCents: null,
+  };
 }
 
 // --- Границы периода в часовом поясе ресторана ------------------------------
@@ -284,15 +398,8 @@ export function buildRestaurantSettlementOverview(
       completionStatus: order.status === "DELIVERED" ? "DELIVERED" : "PICKED_UP",
       customerTotalCents: fin.customerTotalCents,
       foodSubtotalCents: fin.foodSubtotalCents,
-      collector: collectorOf(
-        fin.restaurantCollectedFromCustomerCents,
-        fin.platformCollectedFromCustomerCents,
-      ),
-      restaurantCollectedFromCustomerCents: fin.restaurantCollectedFromCustomerCents,
-      platformCollectedFromCustomerCents: fin.platformCollectedFromCustomerCents,
-      platformCommissionReceivableCents: fin.platformCommissionReceivableCents,
-      restaurantNetAfterPlatformCommissionCents:
-        fin.restaurantNetAfterPlatformCommissionCents,
+      restaurantCommissionCents: fin.restaurantCommissionCents,
+      ...buildRowMoneyFields(fin),
       ledger: ledgerByOrderId.get(order.id) ?? null,
     });
   }
@@ -306,6 +413,12 @@ export function buildRestaurantSettlementOverview(
   const summary: RestaurantSettlementSummary = { ...EMPTY_SUMMARY };
   summary.completedOrderCount = rows.length;
   for (const row of rows) {
+    // Строка, требующая разбора, считается отдельно: правдоподобные суммы в
+    // достоверные итоги не добавляются.
+    if (row.dataStatus === "REVIEW_REQUIRED") {
+      summary.reviewRequiredOrderCount += 1;
+      continue;
+    }
     summary.customerTotalCents += row.customerTotalCents;
     summary.foodSubtotalCents += row.foodSubtotalCents;
     summary.restaurantNetCents += row.restaurantNetAfterPlatformCommissionCents;
@@ -343,6 +456,8 @@ export interface RestaurantDailySettlementRow {
   platformCollectedFromCustomerCents: number;
   platformCommissionReceivableCents: number;
   pendingLedgerCents: number;
+  /** Заказы дня, требующие разбора: в суммы дня они не входят. */
+  reviewRequiredOrderCount: number;
   paidCanceledCount: number;
   /** Завершённые заказы дня (новые сверху) — для раскрытия строки. */
   orders: RestaurantSettlementRow[];
@@ -407,6 +522,7 @@ export function buildRestaurantDailySettlement(
         platformCollectedFromCustomerCents: 0,
         platformCommissionReceivableCents: 0,
         pendingLedgerCents: 0,
+        reviewRequiredOrderCount: 0,
         paidCanceledCount: 0,
         orders: [],
       };
@@ -420,6 +536,12 @@ export function buildRestaurantDailySettlement(
   for (const row of overview.rows) {
     const day = ensureDay(formatLocalDate(Date.parse(row.completedAt), zone));
     day.completedOrderCount += 1;
+    if (row.dataStatus === "REVIEW_REQUIRED") {
+      // Тот же принцип, что в общей summary: суммы дня остаются достоверными.
+      day.reviewRequiredOrderCount += 1;
+      day.orders.push(row);
+      continue;
+    }
     day.customerTotalCents += row.customerTotalCents;
     day.foodSubtotalCents += row.foodSubtotalCents;
     day.restaurantNetCents += row.restaurantNetAfterPlatformCommissionCents;
@@ -455,6 +577,16 @@ export const RESTAURANT_SETTLEMENT_PERIOD_LABELS: Record<
 /** Порядок вкладок периода. */
 export const RESTAURANT_SETTLEMENT_PERIOD_ORDER: readonly RestaurantSettlementPeriod[] =
   ["TODAY", "LAST_7_DAYS", "LAST_30_DAYS", "ALL"];
+
+/** Русская подпись источника данных строки (сырой enum не показывается). */
+export const SETTLEMENT_ROW_DATA_STATUS_LABELS: Record<
+  SettlementRowDataStatus,
+  string
+> = {
+  COMPLETE: "Данные подтверждены",
+  LEGACY: "Архивные данные",
+  REVIEW_REQUIRED: "Требует проверки",
+};
 
 /** Русская подпись, кто собрал деньги клиента. */
 export const SETTLEMENT_COLLECTOR_LABELS: Record<SettlementCollector, string> = {

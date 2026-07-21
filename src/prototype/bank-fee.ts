@@ -71,9 +71,73 @@ export type BankFeeResult =
   | { ok: true; fee: BankFeeAllocation }
   | { ok: false; error: string };
 
-/** Комиссия по ПЕРЕДАННОЙ ставке (базисные пункты), с округлением до цента. */
-function bankFeeOfCents(amountCents: number, rateBps: number): number {
-  return Math.round((amountCents * rateBps) / 10_000);
+/**
+ * Единый validator денежной суммы для всего финансового контура: целые
+ * неотрицательные центы В БЕЗОПАСНОМ диапазоне. Number.MAX_SAFE_INTEGER + 1
+ * суммой НЕ является: за пределами safe range целочисленная арифметика
+ * перестаёт быть точной, и «почти правильный» результат хуже отказа.
+ */
+export function isSafeCents(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+  );
+}
+
+/**
+ * Проверенное сложение денежных сумм: null, если любой вход или результат
+ * выходит за безопасный диапазон. Для трёх и более компонентов вызывается
+ * последовательно — промежуточная сумма проверяется на каждом шаге.
+ */
+export function addChecked(
+  a: number | null,
+  b: number | null,
+): number | null {
+  if (a === null || b === null) return null;
+  if (!isSafeCents(a) || !isSafeCents(b)) return null;
+  const sum = a + b;
+  return isSafeCents(sum) ? sum : null;
+}
+
+/**
+ * Проверенное вычитание: null, если входы небезопасны, результат выходит за
+ * safe range ЛИБО результат отрицательный. Отрицательный промежуточный итог
+ * не доживает до финальной проверки — операция отклоняется сразу.
+ */
+export function subtractChecked(
+  a: number | null,
+  b: number | null,
+): number | null {
+  if (a === null || b === null) return null;
+  if (!isSafeCents(a) || !isSafeCents(b)) return null;
+  const diff = a - b;
+  return isSafeCents(diff) ? diff : null;
+}
+
+/**
+ * Комиссия по ПЕРЕДАННОЙ ставке (базисные пункты) с округлением до цента.
+ *
+ * Умножение выполняется в BigInt: amountCents * rateBps может выйти за
+ * безопасный диапазон Number даже тогда, когда сама комиссия в него
+ * помещается, и обычное умножение молча вернуло бы неточный результат.
+ * (numerator + 5000) / 10000 в BigInt — целочисленное округление «половина
+ * вверх», совпадающее с Math.round для неотрицательных значений. В Number
+ * результат переводится только после деления и проверки диапазона.
+ * BigInt-литералы (5_000n) не используются: target проекта — ES2017.
+ */
+const BIGINT_HALF = BigInt(5_000);
+const BIGINT_BPS_SCALE = BigInt(10_000);
+
+function bankFeeOfCents(amountCents: number, rateBps: number): number | null {
+  if (!isSafeCents(amountCents)) return null;
+  if (!isValidRateBps(rateBps)) return null;
+  const numerator = BigInt(amountCents) * BigInt(rateBps);
+  const rounded = (numerator + BIGINT_HALF) / BIGINT_BPS_SCALE;
+  if (rounded > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(rounded);
 }
 
 /** Ставка правила: целые положительные базисные пункты. */
@@ -87,11 +151,9 @@ function isValidRateBps(value: unknown): value is number {
   );
 }
 
-/** Целые неотрицательные конечные центы. */
+/** Целые неотрицательные центы в безопасном диапазоне. */
 function isValidCents(value: number): boolean {
-  return (
-    typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0
-  );
+  return isSafeCents(value);
 }
 
 function fail(error: string): BankFeeResult {
@@ -207,6 +269,9 @@ export function allocateBankFee(input: BankFeeInput): BankFeeResult {
     input.customerTotalCents,
     input.bankCardFeeRateBps,
   );
+  if (totalBankFeeCents === null) {
+    return fail("Некорректная или слишком большая банковская комиссия.");
+  }
 
   // Карточный платёж принимает ресторан — вся комиссия его: самовывоз на
   // точке, а также доставка водителем Direct в режиме RESTAURANT_COLLECTS_ALL
@@ -227,15 +292,28 @@ export function allocateBankFee(input: BankFeeInput): BankFeeResult {
 
   // Доставка водителем Direct + онлайн-карта: ресторан несёт банковскую часть
   // от еды, Direct — остаток. Разность (а не второй round) гарантирует
-  // инвариант суммы частей.
+  // инвариант суммы частей; вычитание проверенное — отрицательная доля Direct
+  // не доживает до результата.
   const restaurantBankFeeCents = bankFeeOfCents(
     input.foodSubtotalCents,
     input.bankCardFeeRateBps,
   );
-  const directBankFeeCents = totalBankFeeCents - restaurantBankFeeCents;
-  if (directBankFeeCents < 0) {
+  if (restaurantBankFeeCents === null) {
+    return fail("Некорректная или слишком большая банковская комиссия.");
+  }
+  const directBankFeeCents = subtractChecked(
+    totalBankFeeCents,
+    restaurantBankFeeCents,
+  );
+  if (directBankFeeCents === null) {
     // Возможно только при вырожденном округлении; fail-closed вместо
     // отрицательной доли Direct.
+    return fail("Распределение банковской комиссии некорректно.");
+  }
+  // Инвариант суммы частей проверяется тем же checked-сложением.
+  if (
+    addChecked(restaurantBankFeeCents, directBankFeeCents) !== totalBankFeeCents
+  ) {
     return fail("Распределение банковской комиссии некорректно.");
   }
   return {

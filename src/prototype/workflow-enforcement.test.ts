@@ -333,9 +333,21 @@ test("SPLIT: выдача оператором — оплата, один settle
   // v10: выдача легитимно дополняет снимок каноническим движением денег
   // (фиксация фактического канала) — рассчитанные суммы сравниваем без него.
   const stripMovement = (f: Order["financials"]) => {
-    const { moneyMovement, moneyMovementStatus, ...rest } = f;
+    const {
+      moneyMovement,
+      moneyMovementStatus,
+      // v13: выдача самовывоза приводит compatibility-поля в соответствие с
+      // финальным движением — они проверяются отдельно, а не как «нетронутые».
+      restaurantCollectedFromCustomerCents,
+      platformCollectedFromCustomerCents,
+      restaurantNetAfterPlatformCommissionCents,
+      ...rest
+    } = f;
     void moneyMovement;
     void moneyMovementStatus;
+    void restaurantCollectedFromCustomerCents;
+    void platformCollectedFromCustomerCents;
+    void restaurantNetAfterPlatformCommissionCents;
     return JSON.stringify(rest);
   };
   const finBefore = stripMovement(before.financials);
@@ -375,6 +387,15 @@ test("SPLIT: выдача оператором — оплата, один settle
   assert.equal(
     order.financials.moneyMovement?.paymentChannel,
     "CARD_AT_RESTAURANT",
+  );
+  // Compatibility-поля выдачи совпадают с финальным движением.
+  assert.equal(
+    order.financials.restaurantCollectedFromCustomerCents,
+    order.financials.customerTotalCents,
+  );
+  assert.equal(
+    order.financials.restaurantNetAfterPlatformCommissionCents,
+    order.financials.moneyMovement?.restaurantNetCents,
   );
   assert.equal(order.financials.deliveryFeeCents, 0);
   // Ровно один settlement PICKUP_COMMISSION из исторического снимка.

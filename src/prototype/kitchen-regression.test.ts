@@ -92,9 +92,21 @@ function getOrder(state: PrototypeState, orderId: string): Order {
  * самовывоза (фиксация фактического канала оплаты) — его сравниваем отдельно.
  */
 function financialsWithoutMovement(o: Order): string {
-  const { moneyMovement, moneyMovementStatus, ...rest } = o.financials;
+  const {
+    moneyMovement,
+    moneyMovementStatus,
+    // v13: выдача самовывоза приводит compatibility-поля в соответствие с
+    // финальным движением — они проверяются отдельно, а не как «нетронутые».
+    restaurantCollectedFromCustomerCents,
+    platformCollectedFromCustomerCents,
+    restaurantNetAfterPlatformCommissionCents,
+    ...rest
+  } = o.financials;
   void moneyMovement;
   void moneyMovementStatus;
+  void restaurantCollectedFromCustomerCents;
+  void platformCollectedFromCustomerCents;
+  void restaurantNetAfterPlatformCommissionCents;
   return JSON.stringify(rest);
 }
 
