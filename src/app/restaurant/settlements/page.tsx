@@ -23,6 +23,7 @@ import {
   SETTLEMENT_COLLECTOR_LABELS,
   SETTLEMENT_ROW_DATA_STATUS_LABELS,
   type RestaurantDailySettlementRow,
+  type RestaurantSettlementOverview,
   type RestaurantSettlementPeriod,
   type RestaurantSettlementRow,
 } from "@/prototype/restaurant-settlements";
@@ -148,7 +149,7 @@ export default function RestaurantSettlementsPage() {
 
   // Старый отчёт по заказам/дням — только для подробных режимов ORDERS/DAILY;
   // канонический OVERVIEW от него (и от nowMs) не зависит.
-  const overview = useMemo(() => {
+  const overviewResult = useMemo(() => {
     if (
       (view !== "ORDERS" && view !== "DAILY") ||
       !isHydrated ||
@@ -166,7 +167,7 @@ export default function RestaurantSettlementsPage() {
     );
   }, [view, isHydrated, nowMs, restaurant, state, selectedRestaurantId, period, timeZone]);
 
-  const daily = useMemo(() => {
+  const dailyResult = useMemo(() => {
     if (view !== "DAILY" || !isHydrated || nowMs === 0 || !restaurant) return null;
     return buildRestaurantDailySettlement(
       state,
@@ -176,6 +177,19 @@ export default function RestaurantSettlementsPage() {
       timeZone,
     );
   }, [view, isHydrated, nowMs, restaurant, state, selectedRestaurantId, period, timeZone]);
+
+  // Fail-closed контракт билдеров: при денежном переполнении отчёт не
+  // возвращает частичные суммы. UI обязан показать предупреждение вместо цифр,
+  // иначе пустой отчёт выглядел бы как настоящий нулевой баланс.
+  const overview =
+    overviewResult && overviewResult.ok ? overviewResult.overview : null;
+  const daily = dailyResult && dailyResult.ok ? dailyResult.days : null;
+  const reportError =
+    overviewResult && !overviewResult.ok
+      ? overviewResult.error
+      : dailyResult && !dailyResult.ok
+        ? dailyResult.error
+        : null;
 
   // Открытая позиция двустороннего журнала — только для старого режима
   // «Обязательства»; канонический OVERVIEW эти helpers не использует.
@@ -287,7 +301,14 @@ export default function RestaurantSettlementsPage() {
           </div>
 
           {/* Период и сводка заказов — только в отчётах по заказам/дням. */}
-          {isPeriodReport && overview ? (
+          {reportError ? (
+            <div className={styles.info} role="alert">
+              <p>Не удалось безопасно сформировать финансовый отчёт.</p>
+              <p>{reportError}</p>
+            </div>
+          ) : null}
+
+          {isPeriodReport && !reportError && overview ? (
             <>
               {/* Переключатель периода */}
               <div className={styles.periods} role="group" aria-label="Период">
@@ -409,7 +430,7 @@ export default function RestaurantSettlementsPage() {
             </>
           ) : null}
 
-          {view === "DAILY" ? (
+          {view === "DAILY" && reportError ? null : view === "DAILY" ? (
             <DailyView days={daily ?? []} money={money} />
           ) : view === "OBLIGATIONS" ? (
             <ObligationsView rows={journal ?? []} money={money} timeZone={timeZone} />
@@ -591,7 +612,8 @@ function OrdersView({
   money,
   timeZone,
 }: {
-  overview: NonNullable<ReturnType<typeof buildRestaurantSettlementOverview>>;
+  // Только успешный обзор: ошибку страница показывает предупреждением выше.
+  overview: RestaurantSettlementOverview;
   money: (cents: number) => string;
   timeZone: string;
 }) {

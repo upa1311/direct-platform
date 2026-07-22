@@ -6,6 +6,8 @@ import {
   buildRestaurantSettlementOverview,
   getOrderCanceledAt,
   getOrderCompletedAt,
+  type RestaurantDailySettlementRow,
+  type RestaurantSettlementOverview,
   type RestaurantSettlementPeriod,
 } from "./restaurant-settlements.ts";
 import { createDefaultState } from "./default-state.ts";
@@ -25,6 +27,26 @@ import type {
   SettlementEntry,
 } from "./models.ts";
 
+/**
+ * Билдеры отчёта fail-closed и возвращают result: в тестах успешный результат
+ * разворачивается, а неожиданная ошибка немедленно валит тест.
+ */
+function overviewOrThrow(
+  ...args: Parameters<typeof buildRestaurantSettlementOverview>
+): RestaurantSettlementOverview {
+  const result = buildRestaurantSettlementOverview(...args);
+  assert.ok(result.ok, result.ok ? "" : result.error);
+  return result.overview;
+}
+
+function dailyOrThrow(
+  ...args: Parameters<typeof buildRestaurantDailySettlement>
+): RestaurantDailySettlementRow[] {
+  const result = buildRestaurantDailySettlement(...args);
+  assert.ok(result.ok, result.ok ? "" : result.error);
+  return result.days;
+}
+
 const RESTAURANT_ID = "restaurant-1";
 const TZ = "Europe/Chisinau";
 
@@ -40,7 +62,29 @@ function templateFinancials(): FinancialSnapshot {
   return order.financials;
 }
 
-const BASE_FIN = templateFinancials();
+/**
+ * Фикстуры этого файла проверяют периоды, группировку и агрегаты, а не
+ * классификацию источника данных. Поэтому базовый снимок делается доказуемо
+ * АРХИВНЫМ (без движения, снимка правила и снимка финансового режима): такие
+ * строки законно читают старые compatibility-поля. Современный заказ с
+ * несогласованным статусом отдельно проверяется в
+ * settlement-report-fail-closed.test.ts.
+ */
+const BASE_FIN: FinancialSnapshot = (() => {
+  const {
+    moneyMovement,
+    financialRule,
+    financialCollectionMode,
+    ...legacy
+  } = templateFinancials();
+  void moneyMovement;
+  void financialRule;
+  void financialCollectionMode;
+  return {
+    ...legacy,
+    moneyMovementStatus: "REVIEW_REQUIRED",
+  } as FinancialSnapshot;
+})();
 const TEMPLATE_ORDER = (() => {
   let s = createDefaultState();
   s = setCartFulfillmentChoice(s, "PICKUP");
@@ -147,7 +191,7 @@ test("в итоги входят только DELIVERED и PICKED_UP", () => {
       fin: { customerTotalCents: 8888 },
     }),
   ];
-  const ov = buildRestaurantSettlementOverview(
+  const ov = overviewOrThrow(
     stateWith(orders),
     RESTAURANT_ID,
     "ALL",
@@ -188,7 +232,7 @@ test("активные и CANCELED не входят в основные сум�
       fin: { customerTotalCents: 7000 },
     }),
   ];
-  const ov = buildRestaurantSettlementOverview(
+  const ov = overviewOrThrow(
     stateWith(orders),
     RESTAURANT_ID,
     "ALL",
@@ -285,7 +329,7 @@ test("смешанные типы дают точные суммы из свои
       },
     }),
   ];
-  const ov = buildRestaurantSettlementOverview(
+  const ov = overviewOrThrow(
     stateWith(orders),
     RESTAURANT_ID,
     "ALL",
@@ -320,7 +364,7 @@ test("snapshot invariant: изменение меню/комиссии/тари�
     }),
   ];
   const base = stateWith(orders);
-  const before = buildRestaurantSettlementOverview(base, RESTAURANT_ID, "ALL", NOW, TZ);
+  const before = overviewOrThrow(base, RESTAURANT_ID, "ALL", NOW, TZ);
 
   const mutated: PrototypeState = {
     ...base,
@@ -330,7 +374,7 @@ test("snapshot invariant: изменение меню/комиссии/тари�
     ),
     platformSettings: { ...base.platformSettings },
   };
-  const after = buildRestaurantSettlementOverview(mutated, RESTAURANT_ID, "ALL", NOW, TZ);
+  const after = overviewOrThrow(mutated, RESTAURANT_ID, "ALL", NOW, TZ);
 
   assert.deepEqual(after.summary, before.summary);
   assert.equal(after.summary.customerTotalCents, 5000);
@@ -362,7 +406,7 @@ test("PENDING ledger из state.settlements; PAID/NETTED/WAIVED не входя�
     { id: "s1", orderId: "o1", restaurantId: RESTAURANT_ID, type: "PICKUP_COMMISSION", amountCents: 300, status: "PENDING", createdAt: NOW },
     { id: "s2", orderId: "o2", restaurantId: RESTAURANT_ID, type: "RESTAURANT_DELIVERY_COMMISSION", amountCents: 500, status: "PAID", createdAt: NOW },
   ];
-  const ov = buildRestaurantSettlementOverview(
+  const ov = overviewOrThrow(
     stateWith(orders, settlements),
     RESTAURANT_ID,
     "ALL",
@@ -397,7 +441,7 @@ test("строка заказа связывает SettlementEntry по orderId"
   const settlements: SettlementEntry[] = [
     { id: "s1", orderId: "o1", restaurantId: RESTAURANT_ID, type: "PICKUP_COMMISSION", amountCents: 250, status: "PENDING", createdAt: NOW },
   ];
-  const ov = buildRestaurantSettlementOverview(
+  const ov = overviewOrThrow(
     stateWith(orders, settlements),
     RESTAURANT_ID,
     "ALL",
@@ -435,7 +479,7 @@ test("paid canceled: в «Требуют внимания», не в completed t
       fin: { customerTotalCents: 4000 },
     }),
   ];
-  const ov = buildRestaurantSettlementOverview(
+  const ov = overviewOrThrow(
     stateWith(orders),
     RESTAURANT_ID,
     "ALL",
@@ -483,7 +527,7 @@ test("периоды в часовом поясе ресторана, грани
   ];
   const st = stateWith(orders);
   const run = (period: RestaurantSettlementPeriod) =>
-    buildRestaurantSettlementOverview(st, RESTAURANT_ID, period, now, TZ);
+    overviewOrThrow(st, RESTAURANT_ID, period, now, TZ);
 
   const today = run("TODAY");
   assert.equal(today.summary.completedOrderCount, 1);
@@ -494,7 +538,7 @@ test("периоды в часовом поясе ресторана, грани
   }
 
   // Невалидный nowIso — fail-safe пустой обзор.
-  const bad = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "TODAY", "не-дата", TZ);
+  const bad = overviewOrThrow(st, RESTAURANT_ID, "TODAY", "не-дата", TZ);
   assert.equal(bad.summary.completedOrderCount, 0);
   assert.equal(bad.rows.length, 0);
   assert.equal(bad.paidCanceled.length, 0);
@@ -526,7 +570,7 @@ test("сортировка completedAt по убыванию (новые све�
       history: [statusEvent("READY_FOR_PICKUP", "PICKED_UP", "2026-07-17T10:00:00.000Z")],
     }),
   ];
-  const ov = buildRestaurantSettlementOverview(
+  const ov = overviewOrThrow(
     stateWith(orders),
     RESTAURANT_ID,
     "ALL",
@@ -560,8 +604,8 @@ test("read-only: построение не меняет state/orders/settlements
   const settlementsRef = st.settlements;
   const revBefore = st.revision;
 
-  buildRestaurantSettlementOverview(st, RESTAURANT_ID, "ALL", NOW, TZ);
-  buildRestaurantSettlementOverview(st, RESTAURANT_ID, "TODAY", NOW, TZ);
+  overviewOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  overviewOrThrow(st, RESTAURANT_ID, "TODAY", NOW, TZ);
 
   assert.equal(JSON.stringify(st), snapshot, "state не изменился");
   assert.equal(st.orders, ordersRef, "orders — тот же массив");
@@ -602,7 +646,7 @@ test("spring DST Chisinau: LAST_7_DAYS = ровно 24–30 марта, гран
     deliveredAt("edge-out", excludeBoundary),
   ]);
 
-  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "LAST_7_DAYS", now, TZ);
+  const ov = overviewOrThrow(st, RESTAURANT_ID, "LAST_7_DAYS", now, TZ);
   const ids = new Set(ov.rows.map((r) => r.orderId));
 
   // Ровно 7 календарных дат 24–30 марта.
@@ -625,7 +669,7 @@ test("TODAY около перехода DST: начало текущего ло�
     deliveredAt("in", "2026-03-28T22:00:00.000Z"), // 29 марта 00:00 local
     deliveredAt("out", "2026-03-28T21:59:00.000Z"), // 28 марта 23:59 local
   ]);
-  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "TODAY", now, TZ);
+  const ov = overviewOrThrow(st, RESTAURANT_ID, "TODAY", now, TZ);
   const ids = new Set(ov.rows.map((r) => r.orderId));
   assert.ok(ids.has("in"), "29 марта 00:00 входит в TODAY");
   assert.ok(!ids.has("out"), "28 марта 23:59 не входит в TODAY");
@@ -640,7 +684,7 @@ test("LAST_30_DAYS через DST: первый допустимый день в
     deliveredAt("in", "2026-02-28T22:00:00.000Z"), // 1 марта 00:00 local
     deliveredAt("out", "2026-02-28T21:59:00.000Z"), // 28 февраля 23:59 local
   ]);
-  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "LAST_30_DAYS", now, TZ);
+  const ov = overviewOrThrow(st, RESTAURANT_ID, "LAST_30_DAYS", now, TZ);
   const ids = new Set(ov.rows.map((r) => r.orderId));
   assert.ok(ids.has("in"), "1 марта 00:00 включён в 30 дней");
   assert.ok(!ids.has("out"), "28 февраля 23:59 исключён");
@@ -655,7 +699,7 @@ test("будущий completed заказ исключён из всех пер�
     deliveredAt("past", "2026-07-17T09:00:00.000Z"),
   ]);
   for (const p of ["TODAY", "LAST_7_DAYS", "LAST_30_DAYS", "ALL"] as const) {
-    const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, p, NOW, TZ);
+    const ov = overviewOrThrow(st, RESTAURANT_ID, p, NOW, TZ);
     const ids = new Set(ov.rows.map((r) => r.orderId));
     assert.ok(!ids.has("future"), `future не в ${p}`);
     assert.ok(ids.has("past"), `past в ${p}`);
@@ -687,7 +731,7 @@ test("будущий paid-canceled исключён из «Требуют вни
     }),
   ]);
   for (const p of ["TODAY", "LAST_7_DAYS", "LAST_30_DAYS", "ALL"] as const) {
-    const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, p, NOW, TZ);
+    const ov = overviewOrThrow(st, RESTAURANT_ID, p, NOW, TZ);
     const ids = new Set(ov.paidCanceled.map((r) => r.orderId));
     assert.ok(!ids.has("cfuture"), `cfuture не в ${p}`);
     assert.ok(ids.has("cpast"), `cpast в ${p}`);
@@ -717,7 +761,7 @@ test("невалидный completedAt/canceledAt не попадает даже
       fin: { customerTotalCents: 2000 },
     }),
   ]);
-  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const ov = overviewOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
   assert.equal(ov.rows.length, 0);
   assert.equal(ov.paidCanceled.length, 0);
   assert.equal(ov.summary.completedOrderCount, 0);
@@ -755,7 +799,7 @@ test("дневная сверка группирует заказы по лок�
     completed("b", "2026-07-15T18:00:00.000Z", { customerTotalCents: 2000 }),
     completed("c", "2026-07-16T09:00:00.000Z", { customerTotalCents: 3000 }),
   ]);
-  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const days = dailyOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
 
   assert.deepEqual(days.map((d) => d.localDate), ["2026-07-16", "2026-07-15"]);
   const d15 = days.find((d) => d.localDate === "2026-07-15")!;
@@ -771,7 +815,7 @@ test("заказ у UTC-полуночи попадает в правильны�
   const st = stateWith([
     completed("late", "2026-07-16T22:00:00.000Z", { customerTotalCents: 500 }),
   ]);
-  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const days = dailyOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
   assert.equal(days.length, 1);
   assert.equal(days[0].localDate, "2026-07-17");
 });
@@ -786,7 +830,7 @@ test("группировка по дням корректна через пер�
     // 30 марта (EEST+3): 12:00Z = 15:00 местного 30-го.
     completed("mar30", "2026-03-30T12:00:00.000Z", { customerTotalCents: 2000 }),
   ]);
-  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", now, TZ);
+  const days = dailyOrThrow(st, RESTAURANT_ID, "ALL", now, TZ);
   const byDate = new Map(days.map((d) => [d.localDate, d]));
   assert.ok(byDate.has("2026-03-28"));
   assert.ok(byDate.has("2026-03-30"));
@@ -823,8 +867,8 @@ test("сумма всех дней равна общей summary за тот ж�
       platformCommissionReceivableCents: 30,
     }),
   ]);
-  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
-  const ov = buildRestaurantSettlementOverview(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const days = dailyOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const ov = overviewOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
 
   const sum = (pick: (d: (typeof days)[number]) => number) =>
     days.reduce((acc, d) => acc + pick(d), 0);
@@ -878,7 +922,7 @@ test("PENDING журнала агрегируется отдельно от snap
       },
     ],
   );
-  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const days = dailyOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
   assert.equal(days.length, 1);
   // Snapshot-комиссия и фактический PENDING — разные величины, не смешиваются.
   assert.equal(days[0].platformCommissionReceivableCents, 500);
@@ -900,7 +944,7 @@ test("paid-canceled увеличивает только paidCanceledCount дня
       fin: { customerTotalCents: 9999 },
     }),
   ]);
-  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const days = dailyOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
   const d16 = days.find((d) => d.localDate === "2026-07-16")!;
   assert.equal(d16.paidCanceledCount, 1);
   assert.equal(d16.completedOrderCount, 1);
@@ -924,7 +968,7 @@ test("будущие и невалидные события не создают 
     }),
     completed("ok", "2026-07-17T09:00:00.000Z", { customerTotalCents: 300 }),
   ]);
-  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const days = dailyOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
   assert.equal(days.length, 1);
   assert.equal(days[0].localDate, "2026-07-17");
   assert.equal(days[0].completedOrderCount, 1);
@@ -940,7 +984,7 @@ test("изменение меню/тарифа/комиссии не меняе�
       restaurantNetAfterPlatformCommissionCents: 1000,
     }),
   ];
-  const before = buildRestaurantDailySettlement(
+  const before = dailyOrThrow(
     stateWith(orders),
     RESTAURANT_ID,
     "ALL",
@@ -957,7 +1001,7 @@ test("изменение меню/тарифа/комиссии не меняе�
       r.id === RESTAURANT_ID ? { ...r, commissionRateBps: 5000 } : r,
     ),
   };
-  const after = buildRestaurantDailySettlement(
+  const after = dailyOrThrow(
     withChanges,
     RESTAURANT_ID,
     "ALL",
@@ -977,7 +1021,7 @@ test("сортировка: дни и заказы внутри дня — по 
     completed("d15", "2026-07-15T12:00:00.000Z", { customerTotalCents: 3 }),
     completed("d17", "2026-07-17T09:00:00.000Z", { customerTotalCents: 4 }),
   ]);
-  const days = buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  const days = dailyOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
   assert.deepEqual(
     days.map((d) => d.localDate),
     ["2026-07-17", "2026-07-16", "2026-07-15"],
@@ -1012,8 +1056,8 @@ test("read-only: дневная сверка не меняет state/orders/sett
   const settlementsRef = st.settlements;
   const revBefore = st.revision;
 
-  buildRestaurantDailySettlement(st, RESTAURANT_ID, "ALL", NOW, TZ);
-  buildRestaurantDailySettlement(st, RESTAURANT_ID, "TODAY", NOW, TZ);
+  dailyOrThrow(st, RESTAURANT_ID, "ALL", NOW, TZ);
+  dailyOrThrow(st, RESTAURANT_ID, "TODAY", NOW, TZ);
 
   assert.equal(JSON.stringify(st), snapshot);
   assert.equal(st.orders, ordersRef);

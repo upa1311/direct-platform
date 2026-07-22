@@ -7,6 +7,7 @@ import type {
   SettlementType,
 } from "./models";
 import type { OrderPaymentChannel } from "./order-money-movement";
+import { addChecked, isSafeCents } from "./bank-fee";
 import {
   getLocalDateParts,
   localMidnightToUtcMs,
@@ -117,6 +118,19 @@ export interface RestaurantSettlementOverview {
   paidCanceled: RestaurantPaidCanceledRow[];
 }
 
+/**
+ * Fail-closed результат обзора: при денежном переполнении отчёт НЕ возвращает
+ * частичные, насыщенные или обнулённые суммы — только ошибку.
+ */
+export type RestaurantSettlementOverviewResult =
+  | { ok: true; overview: RestaurantSettlementOverview }
+  | { ok: false; error: string };
+
+/** Fail-closed результат дневной сверки (тот же принцип). */
+export type RestaurantDailySettlementResult =
+  | { ok: true; days: RestaurantDailySettlementRow[] }
+  | { ok: false; error: string };
+
 /** Завершённые статусы, попадающие в основные финансовые итоги. */
 const COMPLETED_STATUSES: ReadonlySet<Order["status"]> = new Set([
   "DELIVERED",
@@ -207,23 +221,67 @@ type SettlementRowMoneyFields = Pick<
   | "restaurantNetCents"
 >;
 
+/** Строка, требующая ручного разбора: сумм у неё нет вообще. */
+const REVIEW_REQUIRED_ROW: SettlementRowMoneyFields = {
+  collector: "RESTAURANT",
+  restaurantCollectedFromCustomerCents: 0,
+  platformCollectedFromCustomerCents: 0,
+  platformCommissionReceivableCents: 0,
+  restaurantNetAfterPlatformCommissionCents: 0,
+  paymentChannel: null,
+  dataStatus: "REVIEW_REQUIRED",
+  restaurantOwesDirectCents: null,
+  directOwesRestaurantCents: null,
+  restaurantNetCents: null,
+};
+
 /**
- * Порядок источников для строки отчёта.
+ * НАСТОЯЩИЙ исторический снимок — заказ, оформленный до появления
+ * канонического движения денег и его provenance (v12/v13). Доказуемый признак:
+ * нет ни движения, ни снимка правила, ни снимка финансового режима. Отсутствие
+ * одного лишь moneyMovement признаком legacy НЕ является: у современного
+ * заказа это повреждение, а не история.
  *
- * 1) COMPLETE с движением — цифры берутся ТОЛЬКО из moneyMovement заказа:
+ * Критерий сознательно не смотрит ни на текущий Restaurant, ни на
+ * schemaVersion всего состояния: после миграции старые и новые заказы лежат
+ * в одном состоянии, и общий schemaVersion о конкретном заказе ничего не
+ * говорит.
+ */
+export function isTrueLegacyFinancialSnapshot(
+  financials: Order["financials"],
+): boolean {
+  return (
+    financials.moneyMovement === undefined &&
+    financials.financialRule === undefined &&
+    financials.financialCollectionMode === undefined
+  );
+}
+
+/**
+ * Классификация строки отчёта. Порядок источников:
+ *
+ * 1) COMPLETE С движением — цифры берутся ТОЛЬКО из moneyMovement заказа:
  *    получатель денег, чистая сумма ресторана и обе стороны обязательств уже
  *    посчитаны каноническим расчётом и здесь не пересчитываются. Повреждённые
  *    compatibility-поля на такую строку не влияют.
- * 2) REVIEW_REQUIRED — данные требуют ручного разбора: правдоподобные старые
- *    суммы не показываются и в итоги не попадают.
- * 3) Настоящий legacy-заказ без движения — единственный случай, когда
- *    допустим fallback на compatibility-поля; строка помечается LEGACY.
+ * 2) REVIEW_REQUIRED — любое несогласованное состояние современного заказа:
+ *    явный REVIEW_REQUIRED; COMPLETE без движения; PENDING_PAYMENT_CHANNEL у
+ *    уже завершённого заказа (канал обязан был зафиксироваться при выдаче);
+ *    движение при статусе, отличном от COMPLETE; неизвестный статус. Ни одна
+ *    из этих строк не читает compatibility-поля и не попадает в итоги —
+ *    правдоподобная старая сумма хуже честного «требует проверки».
+ * 3) LEGACY — только доказуемо исторический заказ (см.
+ *    isTrueLegacyFinancialSnapshot): единственный случай, когда fallback на
+ *    compatibility-поля разрешён.
  */
-function buildRowMoneyFields(
-  fin: Order["financials"],
-): SettlementRowMoneyFields {
+function buildRowMoneyFields(order: Order): SettlementRowMoneyFields {
+  const fin = order.financials;
   const movement = fin.moneyMovement;
-  if (fin.moneyMovementStatus === "COMPLETE" && movement) {
+  const status = fin.moneyMovementStatus;
+  const completed =
+    order.status === "DELIVERED" || order.status === "PICKED_UP";
+
+  if (status === "COMPLETE" && movement) {
     const restaurantCollected =
       movement.customerMoneyRecipient === "RESTAURANT";
     return {
@@ -247,19 +305,26 @@ function buildRowMoneyFields(
       restaurantNetCents: movement.restaurantNetCents,
     };
   }
-  if (fin.moneyMovementStatus === "REVIEW_REQUIRED") {
-    return {
-      collector: "RESTAURANT",
-      restaurantCollectedFromCustomerCents: 0,
-      platformCollectedFromCustomerCents: 0,
-      platformCommissionReceivableCents: 0,
-      restaurantNetAfterPlatformCommissionCents: 0,
-      paymentChannel: null,
-      dataStatus: "REVIEW_REQUIRED",
-      restaurantOwesDirectCents: null,
-      directOwesRestaurantCents: null,
-      restaurantNetCents: null,
-    };
+  // Движение при статусе, отличном от COMPLETE, — несогласованный снимок.
+  if (movement !== undefined) {
+    return REVIEW_REQUIRED_ROW;
+  }
+  // COMPLETE без движения — повреждение: заказ объявлен рассчитанным, но
+  // расчёта нет. Compatibility-поля такого заказа не читаются.
+  if (status === "COMPLETE") {
+    return REVIEW_REQUIRED_ROW;
+  }
+  // PENDING_PAYMENT_CHANNEL законен только у НЕзавершённого самовывоза: у
+  // завершённого заказа канал обязан был зафиксироваться при выдаче. Это
+  // несогласованность независимо от происхождения снимка.
+  if (status === "PENDING_PAYMENT_CHANNEL" && completed) {
+    return REVIEW_REQUIRED_ROW;
+  }
+  // Доказуемо исторический заказ (до v12/v13) — единственный законный
+  // fallback на compatibility-поля. Современный заказ с REVIEW_REQUIRED или
+  // неизвестным статусом сюда не проходит.
+  if (!isTrueLegacyFinancialSnapshot(fin)) {
+    return REVIEW_REQUIRED_ROW;
   }
   return {
     collector: collectorOf(
@@ -278,6 +343,66 @@ function buildRowMoneyFields(
     directOwesRestaurantCents: null,
     restaurantNetCents: null,
   };
+}
+
+/** Денежные поля, накапливаемые в итогах обзора и дня. */
+const MONEY_AGGREGATE_KEYS = [
+  "customerTotalCents",
+  "foodSubtotalCents",
+  "restaurantNetCents",
+  "restaurantCollectedFromCustomerCents",
+  "platformCollectedFromCustomerCents",
+  "platformCommissionReceivableCents",
+  "pendingLedgerCents",
+] as const;
+
+type MoneyAggregateKey = (typeof MONEY_AGGREGATE_KEYS)[number];
+type MoneyAggregate = Record<MoneyAggregateKey, number>;
+
+/**
+ * Fail-closed накопление денежного итога поверх общего addChecked (второй
+ * реализации проверенного сложения в проекте нет). Мутирует переданный
+ * аккумулятор ТОЛЬКО при успехе всех слагаемых; при переполнении возвращает
+ * null, и вызывающий обязан отказаться от всего отчёта.
+ */
+function accumulateMoney(
+  target: MoneyAggregate,
+  amounts: MoneyAggregate,
+): MoneyAggregate | null {
+  const next = {} as MoneyAggregate;
+  for (const key of MONEY_AGGREGATE_KEYS) {
+    const sum = addChecked(target[key], amounts[key]);
+    if (sum === null) return null;
+    next[key] = sum;
+  }
+  for (const key of MONEY_AGGREGATE_KEYS) {
+    target[key] = next[key];
+  }
+  return target;
+}
+
+/**
+ * Все денежные поля строки — безопасные центы. Отчёт обязан защищаться от
+ * повреждённого импортированного состояния даже для COMPLETE-строк, суммы
+ * которых должны были прийти из канонического расчёта.
+ */
+function hasSafeRowMoney(
+  fin: Order["financials"],
+  money: SettlementRowMoneyFields,
+): boolean {
+  const values: readonly (number | null)[] = [
+    fin.customerTotalCents,
+    fin.foodSubtotalCents,
+    fin.restaurantCommissionCents,
+    money.restaurantCollectedFromCustomerCents,
+    money.platformCollectedFromCustomerCents,
+    money.platformCommissionReceivableCents,
+    money.restaurantNetAfterPlatformCommissionCents,
+    money.restaurantOwesDirectCents,
+    money.directOwesRestaurantCents,
+    money.restaurantNetCents,
+  ];
+  return values.every((value) => value === null || isSafeCents(value));
 }
 
 // --- Границы периода в часовом поясе ресторана ------------------------------
@@ -303,10 +428,18 @@ function periodStartMs(
 
 // --- Основная сборка --------------------------------------------------------
 
+/** Единый текст отказа: неточный денежный итог не показывается. */
+export const SETTLEMENT_OVERFLOW_ERROR =
+  "Суммы отчёта выходят за безопасный диапазон.";
+
 /**
  * Строит read-only обзор расчётов ресторана за период. Чистая функция: state не
  * мутируется. Невалидный nowIso обрабатывается fail-safe — пустой безопасный
  * обзор без падения. Период считается по completedAt, не по createdAt.
+ *
+ * Денежные итоги накапливаются ТОЛЬКО проверенным сложением: несколько
+ * по отдельности безопасных заказов вместе могут выйти за безопасный диапазон,
+ * и тогда возвращается ошибка — без частичных, насыщенных или обнулённых сумм.
  */
 export function buildRestaurantSettlementOverview(
   state: PrototypeState,
@@ -314,17 +447,20 @@ export function buildRestaurantSettlementOverview(
   period: RestaurantSettlementPeriod,
   nowIso: string,
   timeZone: string,
-): RestaurantSettlementOverview {
+): RestaurantSettlementOverviewResult {
   const zone = timeZone || "Europe/Chisinau";
   const nowMs = Date.parse(nowIso);
   if (typeof nowIso !== "string" || Number.isNaN(nowMs)) {
     return {
-      restaurantId,
-      period,
-      currencyCode: "USD",
-      summary: { ...EMPTY_SUMMARY },
-      rows: [],
-      paidCanceled: [],
+      ok: true,
+      overview: {
+        restaurantId,
+        period,
+        currencyCode: "USD",
+        summary: { ...EMPTY_SUMMARY },
+        rows: [],
+        paidCanceled: [],
+      },
     };
   }
 
@@ -357,10 +493,15 @@ export function buildRestaurantSettlementOverview(
       });
     }
     if (entry.status === "PENDING") {
-      pendingByOrderId.set(
-        entry.orderId,
-        (pendingByOrderId.get(entry.orderId) ?? 0) + entry.amountCents,
+      // Накопление по одному заказу — тоже деньги: обычный + запрещён.
+      const accumulated = addChecked(
+        pendingByOrderId.get(entry.orderId) ?? 0,
+        entry.amountCents,
       );
+      if (accumulated === null) {
+        return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };
+      }
+      pendingByOrderId.set(entry.orderId, accumulated);
     }
   }
 
@@ -374,6 +515,11 @@ export function buildRestaurantSettlementOverview(
       if (!isPaidOrder(order)) continue;
       const canceledAt = getOrderCanceledAt(order);
       if (!inPeriod(canceledAt)) continue;
+      // Оплаченная отмена в суммы не входит, но её сумма ПОКАЗЫВАЕТСЯ:
+      // повреждённое значение не выдаётся за достоверное.
+      if (!isSafeCents(fin.customerTotalCents)) {
+        return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };
+      }
       paidCanceled.push({
         orderId: order.id,
         publicNumber: order.publicNumber,
@@ -390,16 +536,27 @@ export function buildRestaurantSettlementOverview(
     if (!inPeriod(completedAt)) continue;
 
     currencyCode = fin.currencyCode;
+    const money = buildRowMoneyFields(order);
+    // Импортированное состояние может быть повреждено: строка, чьи денежные
+    // поля не являются безопасными центами, классифицируется как требующая
+    // разбора — её суммы не участвуют ни в отображении, ни в итогах.
+    const safeMoney = hasSafeRowMoney(fin, money) ? money : REVIEW_REQUIRED_ROW;
     rows.push({
       orderId: order.id,
       publicNumber: order.publicNumber,
       completedAt,
       deliveryMode: order.deliveryMode,
       completionStatus: order.status === "DELIVERED" ? "DELIVERED" : "PICKED_UP",
-      customerTotalCents: fin.customerTotalCents,
-      foodSubtotalCents: fin.foodSubtotalCents,
-      restaurantCommissionCents: fin.restaurantCommissionCents,
-      ...buildRowMoneyFields(fin),
+      customerTotalCents: isSafeCents(fin.customerTotalCents)
+        ? fin.customerTotalCents
+        : 0,
+      foodSubtotalCents: isSafeCents(fin.foodSubtotalCents)
+        ? fin.foodSubtotalCents
+        : 0,
+      restaurantCommissionCents: isSafeCents(fin.restaurantCommissionCents)
+        ? fin.restaurantCommissionCents
+        : 0,
+      ...safeMoney,
       ledger: ledgerByOrderId.get(order.id) ?? null,
     });
   }
@@ -419,26 +576,35 @@ export function buildRestaurantSettlementOverview(
       summary.reviewRequiredOrderCount += 1;
       continue;
     }
-    summary.customerTotalCents += row.customerTotalCents;
-    summary.foodSubtotalCents += row.foodSubtotalCents;
-    summary.restaurantNetCents += row.restaurantNetAfterPlatformCommissionCents;
-    summary.restaurantCollectedFromCustomerCents +=
-      row.restaurantCollectedFromCustomerCents;
-    summary.platformCollectedFromCustomerCents +=
-      row.platformCollectedFromCustomerCents;
-    summary.platformCommissionReceivableCents +=
-      row.platformCommissionReceivableCents;
-    // PENDING берётся из фактического ledger по этому заказу, НЕ из snapshot.
-    summary.pendingLedgerCents += pendingByOrderId.get(row.orderId) ?? 0;
+    // Каждое слагаемое проверяется: отдельно безопасные заказы вместе могут
+    // выйти за безопасный диапазон, и тогда отчёт отказывается целиком.
+    const accumulated = accumulateMoney(summary, {
+      customerTotalCents: row.customerTotalCents,
+      foodSubtotalCents: row.foodSubtotalCents,
+      restaurantNetCents: row.restaurantNetAfterPlatformCommissionCents,
+      restaurantCollectedFromCustomerCents:
+        row.restaurantCollectedFromCustomerCents,
+      platformCollectedFromCustomerCents:
+        row.platformCollectedFromCustomerCents,
+      platformCommissionReceivableCents: row.platformCommissionReceivableCents,
+      // PENDING берётся из фактического ledger по этому заказу, НЕ из snapshot.
+      pendingLedgerCents: pendingByOrderId.get(row.orderId) ?? 0,
+    });
+    if (accumulated === null) {
+      return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };
+    }
   }
 
   return {
-    restaurantId,
-    period,
-    currencyCode,
-    summary,
-    rows,
-    paidCanceled,
+    ok: true,
+    overview: {
+      restaurantId,
+      period,
+      currencyCode,
+      summary,
+      rows,
+      paidCanceled,
+    },
   };
 }
 
@@ -486,15 +652,20 @@ export function buildRestaurantDailySettlement(
   period: RestaurantSettlementPeriod,
   nowIso: string,
   timeZone: string,
-): RestaurantDailySettlementRow[] {
+): RestaurantDailySettlementResult {
   const zone = timeZone || "Europe/Chisinau";
-  const overview = buildRestaurantSettlementOverview(
+  const overviewResult = buildRestaurantSettlementOverview(
     state,
     restaurantId,
     period,
     nowIso,
     zone,
   );
+  // Ошибка обзора передаётся как есть: частичных дней не бывает.
+  if (!overviewResult.ok) {
+    return { ok: false, error: overviewResult.error };
+  }
+  const overview = overviewResult.overview;
 
   // Фактический PENDING по существующему журналу комиссий, по заказам. Тот же
   // источник (state.settlements), что и в overview — не пересчёт snapshot.
@@ -502,10 +673,14 @@ export function buildRestaurantDailySettlement(
   for (const entry of state.settlements) {
     if (entry.restaurantId !== restaurantId) continue;
     if (entry.status !== "PENDING") continue;
-    pendingByOrderId.set(
-      entry.orderId,
-      (pendingByOrderId.get(entry.orderId) ?? 0) + entry.amountCents,
+    const accumulated = addChecked(
+      pendingByOrderId.get(entry.orderId) ?? 0,
+      entry.amountCents,
     );
+    if (accumulated === null) {
+      return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };
+    }
+    pendingByOrderId.set(entry.orderId, accumulated);
   }
 
   const dayMap = new Map<string, RestaurantDailySettlementRow>();
@@ -542,15 +717,22 @@ export function buildRestaurantDailySettlement(
       day.orders.push(row);
       continue;
     }
-    day.customerTotalCents += row.customerTotalCents;
-    day.foodSubtotalCents += row.foodSubtotalCents;
-    day.restaurantNetCents += row.restaurantNetAfterPlatformCommissionCents;
-    day.restaurantCollectedFromCustomerCents +=
-      row.restaurantCollectedFromCustomerCents;
-    day.platformCollectedFromCustomerCents +=
-      row.platformCollectedFromCustomerCents;
-    day.platformCommissionReceivableCents += row.platformCommissionReceivableCents;
-    day.pendingLedgerCents += pendingByOrderId.get(row.orderId) ?? 0;
+    // Тот же checked-накопитель, что и в общей summary: переполнение внутри
+    // дня или между строками дня обрывает построение целиком.
+    const accumulated = accumulateMoney(day, {
+      customerTotalCents: row.customerTotalCents,
+      foodSubtotalCents: row.foodSubtotalCents,
+      restaurantNetCents: row.restaurantNetAfterPlatformCommissionCents,
+      restaurantCollectedFromCustomerCents:
+        row.restaurantCollectedFromCustomerCents,
+      platformCollectedFromCustomerCents:
+        row.platformCollectedFromCustomerCents,
+      platformCommissionReceivableCents: row.platformCommissionReceivableCents,
+      pendingLedgerCents: pendingByOrderId.get(row.orderId) ?? 0,
+    });
+    if (accumulated === null) {
+      return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };
+    }
     day.orders.push(row);
   }
 
@@ -560,7 +742,12 @@ export function buildRestaurantDailySettlement(
   }
 
   // Новые даты сверху; YYYY-MM-DD сравнивается лексикографически = хронологически.
-  return [...dayMap.values()].sort((a, b) => b.localDate.localeCompare(a.localDate));
+  return {
+    ok: true,
+    days: [...dayMap.values()].sort((a, b) =>
+      b.localDate.localeCompare(a.localDate),
+    ),
+  };
 }
 
 /** Русские подписи периодов для переключателя. */
