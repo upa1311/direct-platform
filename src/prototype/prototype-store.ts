@@ -4,6 +4,8 @@ import {
   type Cart,
   type DaySchedule,
   type DeliveryMode,
+  type DriverOffer,
+  type DriverOfferStatus,
   type DriverStatus,
   type FinancialSnapshot,
   type MenuItemSubmission,
@@ -100,12 +102,12 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * финансового правила заказа, v13 — финансовый режим получения платежей,
  * v14 — детали исполнения закрытого расчёта, v15 — область расчёта: полная
  * позиция или выбранные записи, v16 — оперативные статусы и подтверждаемая
- * вручную зона водителя), поэтому состояние прежней версии безопасно
- * принимается и доводится нормализацией до текущей без потери данных. Ключ
- * хранилища не меняется.
+ * вручную зона водителя, v17 — предложения заказов водителям по зоне),
+ * поэтому состояние прежней версии безопасно принимается и доводится
+ * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -840,6 +842,63 @@ function normalizeDrivers(
     .map(normalizeDriver);
 }
 
+const DRIVER_OFFER_STATUSES: ReadonlySet<string> = new Set<DriverOfferStatus>([
+  "OPEN",
+  "ACCEPTED",
+  "DECLINED",
+  "EXPIRED",
+  "CANCELED",
+]);
+
+/** Валиден ли ISO-момент (не NaN после разбора). */
+function isValidIso(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+/**
+ * Нормализация предложений заказов водителям (v17). Состояние до v17 поля не
+ * имеет — безопасный пустой список. Выдуманные предложения из старых заказов НЕ
+ * восстанавливаются и во время миграции НЕ создаются: это делает доменный
+ * reconciliation уже после загрузки. Сохраняем только структурно целую запись,
+ * ссылающуюся на существующие заказ и водителя, с валидным окном времени.
+ */
+function normalizeDriverOffers(
+  value: unknown,
+  orderIds: ReadonlySet<string>,
+  driverIds: ReadonlySet<string>,
+): DriverOffer[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seenIds = new Set<string>();
+  const result: DriverOffer[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    const { id, orderId, driverId, status, offeredAt, expiresAt, resolvedAt } =
+      raw;
+    if (typeof id !== "string" || seenIds.has(id)) continue;
+    if (typeof orderId !== "string" || !orderIds.has(orderId)) continue;
+    if (typeof driverId !== "string" || !driverIds.has(driverId)) continue;
+    if (typeof status !== "string" || !DRIVER_OFFER_STATUSES.has(status)) {
+      continue;
+    }
+    if (!isValidIso(offeredAt) || !isValidIso(expiresAt)) continue;
+    if (Date.parse(expiresAt) <= Date.parse(offeredAt)) continue;
+    if (resolvedAt !== null && !isValidIso(resolvedAt)) continue;
+    seenIds.add(id);
+    result.push({
+      id,
+      orderId,
+      driverId,
+      status: status as DriverOfferStatus,
+      offeredAt,
+      expiresAt,
+      resolvedAt: resolvedAt === null ? null : (resolvedAt as string),
+    });
+  }
+  return result;
+}
+
 function normalizeSettlements(value: unknown): PrototypeState["settlements"] {
   if (!Array.isArray(value)) {
     return [];
@@ -1061,6 +1120,10 @@ export function normalizePrototypeState(
     ? state.restaurants.map(normalizeRestaurantV5)
     : defaults.restaurants;
   const normalizedSettlements = normalizeSettlements(state.settlements);
+  const normalizedDrivers = normalizeDrivers(state.drivers, defaults.drivers);
+  const normalizedOrders = Array.isArray(state.orders)
+    ? state.orders.map((order) => normalizeOrder(order, restaurants))
+    : [];
   return {
     ...state,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
@@ -1084,11 +1147,17 @@ export function normalizePrototypeState(
       ? state.promotions.map(normalizeSeedPromotion)
       : defaults.promotions,
     customer: normalizeCustomer(state.customer, defaults.customer),
-    drivers: normalizeDrivers(state.drivers, defaults.drivers),
+    drivers: normalizedDrivers,
+    // Предложения нормализуем после заказов и водителей: запись без
+    // существующего заказа или водителя не сохраняется. Состояние до v17
+    // получает пустой список.
+    driverOffers: normalizeDriverOffers(
+      state.driverOffers,
+      new Set(normalizedOrders.map((order) => order.id)),
+      new Set(normalizedDrivers.map((driver) => driver.id)),
+    ),
     cart: normalizeCart(state.cart, defaults.cart),
-    orders: Array.isArray(state.orders)
-      ? state.orders.map((order) => normalizeOrder(order, restaurants))
-      : [],
+    orders: normalizedOrders,
     settlements: normalizedSettlements,
     // Двусторонний журнал: сохраняем валидные записи и идемпотентно мигрируем
     // существующие комиссионные settlements (без дублей по legacySettlementId).

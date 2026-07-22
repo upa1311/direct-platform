@@ -6,7 +6,14 @@ import { useEffect, useMemo, useState } from "react";
 import kds from "@/components/kitchen/kitchen.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import { driverStatusLabels, getDriverActiveOrder } from "@/prototype/selectors";
+import { getOpenDriverOffersForDriver } from "@/prototype/driver-offers";
+import { useNowMs } from "@/components/util/use-now";
 import type { DriverProfile, ZoneId } from "@/prototype/models";
+import {
+  useSelectedDriverId,
+  writeSelectedDriverId,
+} from "@/components/driver/driver-session";
+import { DriverOfferSoundButton } from "@/components/driver/driver-offer-sound";
 import styles from "./driver.module.css";
 
 /**
@@ -16,39 +23,13 @@ import styles from "./driver.module.css";
  * Зона НИКОГДА не определяется автоматически — ни по адресу, ни по последнему
  * заказу. Система может лишь предложить зону завершённого заказа; подтверждает
  * её водитель. Всё состояние меняется доменными действиями через provider.
+ *
+ * Выбор демо-водителя — общий для всех экранов кабинета (driver-session).
  */
-
-/** Ключ UI-предпочтения: какой демо-водитель открыт в этом браузере. */
-const SELECTED_DRIVER_KEY = "direct-selected-driver-id";
-
-function readSelectedDriverId(): string | null {
-  try {
-    return window.localStorage.getItem(SELECTED_DRIVER_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function writeSelectedDriverId(driverId: string | null): void {
-  try {
-    if (driverId === null) {
-      window.localStorage.removeItem(SELECTED_DRIVER_KEY);
-    } else {
-      window.localStorage.setItem(SELECTED_DRIVER_KEY, driverId);
-    }
-  } catch {
-    // Отсутствие localStorage не должно ломать рабочий экран.
-  }
-}
-
 export default function DriverPage() {
   const { state, isHydrated } = usePrototype();
   // Первый вход — водитель не выбран: Пётр автоматически не подставляется.
-  // Предпочтение читается лениво и только в браузере; до isHydrated экран
-  // одинаков на сервере и клиенте, поэтому расхождения гидратации нет.
-  const [selectedDriverId, setSelectedDriverId] = useState<string | null>(() =>
-    typeof window === "undefined" ? null : readSelectedDriverId(),
-  );
+  const selectedDriverId = useSelectedDriverId();
 
   const driver = useMemo(
     () => state.drivers.find((d) => d.id === selectedDriverId) ?? null,
@@ -56,8 +37,8 @@ export default function DriverPage() {
   );
 
   // Сохранённого водителя больше нет — устаревшее предпочтение стирается.
-  // Эффект только синхронизирует внешнее хранилище: состояние React здесь не
-  // меняется, а экран и так показывает выбор водителя (driver === null).
+  // Эффект только синхронизирует внешнее хранилище (writeSelectedDriverId сам
+  // уведомляет подписчиков), поэтому setState в эффекте здесь нет.
   useEffect(() => {
     if (isHydrated && selectedDriverId !== null && driver === null) {
       writeSelectedDriverId(null);
@@ -66,12 +47,10 @@ export default function DriverPage() {
 
   const selectDriver = (driverId: string) => {
     writeSelectedDriverId(driverId);
-    setSelectedDriverId(driverId);
   };
 
   const clearDriver = () => {
     writeSelectedDriverId(null);
-    setSelectedDriverId(null);
   };
 
   return (
@@ -149,6 +128,7 @@ function DriverWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
+  const nowMs = useNowMs();
   const zones = state.zones;
   const zoneName = (zoneId: ZoneId | null): string =>
     zones.find((z) => z.id === zoneId)?.name ?? "—";
@@ -156,6 +136,12 @@ function DriverWorkspace({
   // Активный заказ берётся из order.assignedDriverId — отдельного поля у
   // водителя нет, поэтому рассинхронизации быть не может.
   const activeOrder = getDriverActiveOrder(state, driver.id);
+
+  // Компактное уведомление о новых предложениях: только когда есть открытые.
+  const hasOpenOffers =
+    driver.status === "AVAILABLE" &&
+    nowMs > 0 &&
+    getOpenDriverOffersForDriver(state, driver.id, nowMs).length > 0;
 
   // Черновик выбора зоны: для подтверждения предзаполняется предложенной зоной,
   // но авторитетной она становится только после явного подтверждения водителем.
@@ -182,6 +168,29 @@ function DriverWorkspace({
       <button type="button" className={styles.linkButton} onClick={onChangeDriver}>
         ← Сменить водителя
       </button>
+
+      {/* Компактная строка о новом предложении + управление звуком. Большой
+          постоянной карточки навигации здесь нет — блок появляется только при
+          наличии открытых предложений. */}
+      {status === "AVAILABLE" ? (
+        <div className={styles.offerBanner}>
+          {hasOpenOffers ? (
+            <>
+              <span className={styles.offerBannerText}>
+                Новое предложение на доставку
+              </span>
+              <Link className={styles.orderLink} href="/driver/offers">
+                Открыть предложения
+              </Link>
+            </>
+          ) : (
+            <span className={styles.statusHint}>
+              При новом предложении прозвучит сигнал.
+            </span>
+          )}
+          <DriverOfferSoundButton />
+        </div>
+      ) : null}
 
       <section className={styles.statusCard} aria-label="Состояние водителя">
         <span className={styles.driverName}>{driver.name}</span>

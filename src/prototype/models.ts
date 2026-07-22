@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 16 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 17 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -577,6 +577,43 @@ export interface DriverProfile {
   suggestedZoneId: ZoneId | null;
 }
 
+/**
+ * Жизненный цикл предложения заказа водителю (v17).
+ *
+ * OPEN     — предложение активно и ждёт ответа до expiresAt.
+ * ACCEPTED — водитель принял; заказ назначен именно ему.
+ * DECLINED — водитель отказался (без причины).
+ * EXPIRED  — истёк срок в 30 секунд без ответа.
+ * CANCELED — снято системой: заказ назначен другому/отменён/стал непригоден,
+ *            либо водитель сменил доступность или зону.
+ */
+export type DriverOfferStatus =
+  | "OPEN"
+  | "ACCEPTED"
+  | "DECLINED"
+  | "EXPIRED"
+  | "CANCELED";
+
+/**
+ * Предложение конкретного заказа конкретному водителю. Хранит ТОЛЬКО связь и
+ * жизненный цикл: сумма выплаты, адрес, имя ресторана, телефон клиента и любые
+ * финансовые расчёты берутся из неизменяемого снимка заказа, а не дублируются
+ * здесь. Одно сочетание orderId+driverId существует за весь lifecycle заказа
+ * не более одного раза.
+ */
+export interface DriverOffer {
+  id: string;
+  orderId: string;
+  driverId: string;
+  status: DriverOfferStatus;
+  /** Единый момент создания предложения для всех водителей этого распределения. */
+  offeredAt: string;
+  /** Ровно offeredAt + 30 секунд. */
+  expiresAt: string;
+  /** Момент принятия, отказа, истечения либо отмены; у OPEN — null. */
+  resolvedAt: string | null;
+}
+
 export interface CartItem {
   menuItemId: string;
   variantId: string | null;
@@ -904,6 +941,8 @@ export interface PrototypeState {
   promotions: Promotion[];
   customer: CustomerProfile;
   drivers: DriverProfile[];
+  /** Активные и исторические предложения заказов водителям (v17). */
+  driverOffers: DriverOffer[];
   cart: Cart;
   orders: Order[];
   settlements: SettlementEntry[];

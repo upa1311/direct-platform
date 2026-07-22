@@ -225,3 +225,163 @@
   text-decoration: none;
   white-space: nowrap;
 }
+
+/* --- Предложения заказов --------------------------------------------------- */
+
+/* Компактная строка-уведомление о новом предложении на «Обзоре». */
+.offerBanner {
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-left: 4px solid currentColor;
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.offerBannerText {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* Управление звуком — компактное, в стиле кабинета. */
+.soundControl {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.soundButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.soundButton[aria-pressed="true"] {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.soundHint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--kds-danger, #a8322d);
+}
+
+/* Список предложений. */
+.offerList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.offerCard {
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.offerHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.offerNumber {
+  font-size: 15px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.offerPayout {
+  font-size: 18px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.offerSection {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.offerSectionLabel {
+  font-size: 12px;
+  color: var(--kds-muted, #66706a);
+}
+
+.offerSectionValue {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.offerMetaRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: 13px;
+}
+
+.offerCountdown {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.offerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* --- Read-only текущий заказ ----------------------------------------------- */
+
+.detailCard {
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.detailRowLabel {
+  font-size: 12px;
+  color: var(--kds-muted, #66706a);
+}
+
+.detailRowValue {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.phoneLink {
+  color: inherit;
+  font-weight: 600;
+}

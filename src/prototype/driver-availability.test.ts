@@ -128,22 +128,22 @@ function online(
 
 // --- 1–2: схема ---------------------------------------------------------------
 
-test("1: схема прототипа поднята до 16", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 16);
+test("1: схема прототипа поднята до 17", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 17);
 });
 
-test("2: нормализатор принимает схемы 7–16", () => {
+test("2: нормализатор принимает схемы 7–17", () => {
   const base = createDefaultState();
-  for (let version = 7; version <= 16; version += 1) {
+  for (let version = 7; version <= 17; version += 1) {
     const parsed = parseStoredState(
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version} должна парситься`);
-    assert.equal(parsed.schemaVersion, 16, `схема ${version} → 16`);
+    assert.equal(parsed.schemaVersion, 17, `схема ${version} → 17`);
   }
   // Неизвестная будущая версия по-прежнему не принимается.
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 17 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 18 })),
     null,
   );
 });
@@ -589,8 +589,10 @@ test("33: главная водителя не дублирует навигац
   assert.ok(DRIVER_PAGE.includes("Выйти онлайн"));
   assert.ok(DRIVER_PAGE.includes("Подтвердить зону и искать заказы"));
   assert.ok(DRIVER_PAGE.includes("Подтвердить зону и остаться на паузе"));
-  // Выбор водителя — UI-предпочтение, а не доменное состояние.
-  assert.ok(DRIVER_PAGE.includes("direct-selected-driver-id"));
+  // Выбор водителя — общее UI-предпочтение из driver-session, а не доменное
+  // состояние (ключ теперь живёт в общем модуле, а не в самой странице).
+  assert.ok(DRIVER_PAGE.includes("useSelectedDriverId"));
+  assert.ok(DRIVER_PAGE.includes("@/components/driver/driver-session"));
 });
 
 test("34: раздел «Расчёты» водителя существует отдельным маршрутом", () => {

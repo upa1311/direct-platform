@@ -577,6 +577,8 @@ export function createDefaultState(): PrototypeState {
         phone: "+373 777 40003",
       },
     ],
+    // Предложения создаёт доменный reconciliation после загрузки, а не seed.
+    driverOffers: [],
     cart: createEmptyCart(),
     orders: [],
     settlements: [],

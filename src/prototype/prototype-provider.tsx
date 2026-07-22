@@ -101,6 +101,13 @@ import {
   type UpdateRestaurantResult,
 } from "./actions";
 import {
+  acceptDriverOffer,
+  declineDriverOffer,
+  reconcileDriverOffers,
+  type DriverOfferActionResult,
+  type ReconcileDriverOffersResult,
+} from "./driver-offers";
+import {
   resolveRestaurantAccountingEntry,
   type RestaurantAccountingOutcome,
   type RestaurantAccountingResolutionResult,
@@ -430,6 +437,20 @@ export interface PrototypeContextValue {
     zoneId: ZoneId,
     nextAvailability: "AVAILABLE" | "PAUSED",
   ) => Promise<DriverActionResult>;
+  /**
+   * Актуализация предложений (v17): истёкшие закрываются, невалидные
+   * отменяются, подходящим водителям создаются новые. Момент времени берётся
+   * внутри мутации; UI сам driverOffers не меняет.
+   */
+  refreshDriverOffers: () => Promise<ReconcileDriverOffersResult>;
+  driverAcceptOffer: (
+    driverId: string,
+    offerId: string,
+  ) => Promise<DriverOfferActionResult>;
+  driverDeclineOffer: (
+    driverId: string,
+    offerId: string,
+  ) => Promise<DriverOfferActionResult>;
   createRestaurantEntry: (
     input: RestaurantFormInput,
   ) => Promise<CreateRestaurantResult>;
@@ -1705,6 +1726,47 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  // --- Кабинет водителя: предложения заказов (v17) ----------------------------
+  // Момент времени создаётся ВНУТРИ сериализованной мутации над свежим state, а
+  // не передаётся из UI: только так гонка двух водителей и срок предложения
+  // считаются от актуального состояния под общим Web Lock.
+
+  const refreshDriverOffers = useCallback(
+    () =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          reconcileDriverOffers(baseState, new Date().toISOString()),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          createdCount: 0,
+          expiredCount: 0,
+          canceledCount: 0,
+        }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const driverAcceptOffer = useCallback(
+    (driverId: string, offerId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          acceptDriverOffer(baseState, driverId, offerId, new Date().toISOString()),
+        infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const driverDeclineOffer = useCallback(
+    (driverId: string, offerId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          declineDriverOffer(baseState, driverId, offerId, new Date().toISOString()),
+        infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
+      }),
+    [runSerializedActionMutation],
+  );
+
   const createRestaurantEntry = useCallback(
     (input: RestaurantFormInput) =>
       runSerializedActionMutation({
@@ -1820,6 +1882,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       driverGoOffline,
       driverChangeZone,
       driverConfirmZone,
+      refreshDriverOffers,
+      driverAcceptOffer,
+      driverDeclineOffer,
       createRestaurantEntry,
       updateRestaurantEntry,
       setMenuItemVariants,
@@ -1889,6 +1954,9 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       driverGoOffline,
       driverChangeZone,
       driverConfirmZone,
+      refreshDriverOffers,
+      driverAcceptOffer,
+      driverDeclineOffer,
       createRestaurantEntry,
       updateRestaurantEntry,
       setMenuItemVariants,

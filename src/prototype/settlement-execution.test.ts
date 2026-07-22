@@ -155,7 +155,7 @@ function withExecution(
 // --- 1–5: типы и схема --------------------------------------------------------
 
 test("1: схема поднята до текущей версии", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 16);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 17);
 });
 
 test("2: состояния прежних схем по-прежнему парсятся", () => {
@@ -164,7 +164,7 @@ test("2: состояния прежних схем по-прежнему пар
     legacy.schemaVersion = version;
     const parsed = parseStoredState(JSON.stringify(legacy));
     assert.ok(parsed, String(version));
-    assert.equal(parsed.schemaVersion, 16, String(version));
+    assert.equal(parsed.schemaVersion, 17, String(version));
   }
 });
 
@@ -1308,5 +1308,5 @@ test("97: нормальный расчёт по-прежнему создаёт
 });
 
 test("98: версия схемы актуальна", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 16);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 17);
 });
