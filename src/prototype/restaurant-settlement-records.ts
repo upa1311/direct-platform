@@ -172,7 +172,9 @@ export function buildRestaurantSettlementPreview(
   let restaurantOwesDirectCents = 0;
   let directOwesRestaurantCents = 0;
   let currencyCode: CurrencyCode | null = null;
-  const seenOrderIds = new Set<string>();
+  // Заказы выбранных обязательств: одному заказу соответствует не более одного
+  // обязательства — и внутри расчёта, и на границе с остатком (см. ниже).
+  const selectedOrderIds = new Set<string>();
 
   for (const entryId of accountingEntryIds) {
     const entry = entriesById.get(entryId);
@@ -222,10 +224,10 @@ export function buildRestaurantSettlementPreview(
     } else if (entry.currencyCode !== currencyCode) {
       return previewFail("В расчёт нельзя включать разные валюты.");
     }
-    if (seenOrderIds.has(entry.orderId)) {
+    if (selectedOrderIds.has(entry.orderId)) {
       return previewFail("У заказа выбрано несколько обязательств.");
     }
-    seenOrderIds.add(entry.orderId);
+    selectedOrderIds.add(entry.orderId);
 
     if (entry.direction === "RESTAURANT_OWES_DIRECT") {
       const next = addChecked(restaurantOwesDirectCents, entry.amountCents);
@@ -263,6 +265,7 @@ export function buildRestaurantSettlementPreview(
     restaurantId,
     currencyCode,
     selectedIds,
+    selectedOrderIds,
     resolvedEntryIds,
     alreadySettledIds,
   );
@@ -318,6 +321,7 @@ function computeRemainingOpenPosition(
   restaurantId: string,
   currencyCode: CurrencyCode,
   selectedIds: ReadonlySet<string>,
+  selectedOrderIds: ReadonlySet<string>,
   resolvedEntryIds: ReadonlySet<string>,
   alreadySettledIds: ReadonlySet<string>,
 ): RemainingOpenPosition {
@@ -360,6 +364,14 @@ function computeRemainingOpenPosition(
     }
     if (entry.currencyCode !== currencyCode) {
       return fail("В открытой позиции ресторана разные валюты.");
+    }
+    // Инвариант шире, чем «дубли внутри остатка»: один заказ не может дать
+    // одно обязательство в текущий расчёт и второе — в остаток. Иначе сумма
+    // заказа учлась бы дважды: один раз закрытой, второй раз открытой.
+    if (selectedOrderIds.has(entry.orderId)) {
+      return fail(
+        "У заказа обнаружено несколько обязательств между выбранным расчётом и остатком.",
+      );
     }
     if (seenOrderIds.has(entry.orderId)) {
       return fail("У заказа обнаружено несколько открытых обязательств.");

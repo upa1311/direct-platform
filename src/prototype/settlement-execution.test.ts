@@ -997,3 +997,313 @@ test("72: подтверждение не мутирует исходные ко
   assert.equal(entriesRef[0].status, "OPEN");
   assert.equal(recordsRef.length, 0);
 });
+
+// --- 73–98: integrity-регрессия (миграция execution и границы orderId) --------
+
+/**
+ * Состояние прежней схемы с одной записью расчёта и произвольным (в том числе
+ * недостоверным) execution внутри неё.
+ */
+function storedStateWithExecution(version: number, execution: unknown): string {
+  const stored: Record<string, unknown> = { ...record() };
+  if (execution === undefined) {
+    delete stored.execution;
+  } else {
+    stored.execution = execution;
+  }
+  const state = {
+    ...createDefaultState(),
+    schemaVersion: version,
+    restaurantSettlementRecords: [stored],
+    restaurantAccountingEntries: [
+      entry("c1", "RESTAURANT_OWES_DIRECT", 800, {
+        status: "SETTLED",
+        settledAt: NOW,
+      }),
+    ],
+  } as unknown as Record<string, unknown>;
+  return JSON.stringify(state);
+}
+
+function storedRecord(json: string): RestaurantSettlementRecord | undefined {
+  const parsed = parseStoredState(json);
+  assert.ok(parsed);
+  return parsed.restaurantSettlementRecords[0];
+}
+
+/** Структурно валидный, но исторически невозможный execution старой схемы. */
+const FOREIGN_EXECUTION = {
+  dataStatus: "COMPLETE",
+  method: "CASH",
+  transferredAmountCents: 800,
+  remainingOpenEntryCount: 3,
+  remainingRestaurantOwesDirectCents: 0,
+  remainingDirectOwesRestaurantCents: 0,
+  remainingNetDirection: "BALANCED",
+  remainingNetAmountCents: 0,
+};
+
+test("73: запись схемы 13 без execution становится архивной", () => {
+  const stored = storedRecord(storedStateWithExecution(13, undefined));
+  assert.ok(stored);
+  assert.deepEqual(stored.execution, { dataStatus: "LEGACY_UNKNOWN" });
+});
+
+test("74: валидный COMPLETE в схеме 13 всё равно становится архивным", () => {
+  // В схемах 11–13 деталей исполнения не существовало: найденное значение
+  // недостоверно, даже если структурно валидно.
+  const stored = storedRecord(storedStateWithExecution(13, FOREIGN_EXECUTION));
+  assert.ok(stored);
+  assert.deepEqual(stored.execution, { dataStatus: "LEGACY_UNKNOWN" });
+});
+
+test("75: неизвестный dataStatus в схеме 13 становится архивным", () => {
+  const stored = storedRecord(
+    storedStateWithExecution(13, { dataStatus: "GUESSED", method: "CASH" }),
+  );
+  assert.ok(stored);
+  assert.deepEqual(stored.execution, { dataStatus: "LEGACY_UNKNOWN" });
+});
+
+test("76: частичный execution в схеме 13 становится архивным", () => {
+  const stored = storedRecord(
+    storedStateWithExecution(13, {
+      dataStatus: "COMPLETE",
+      method: "BANK_TRANSFER",
+    }),
+  );
+  assert.ok(stored);
+  assert.deepEqual(stored.execution, { dataStatus: "LEGACY_UNKNOWN" });
+});
+
+test("77: при замене execution канонические поля записи сохраняются", () => {
+  const stored = storedRecord(storedStateWithExecution(12, FOREIGN_EXECUTION));
+  assert.ok(stored);
+  assert.equal(stored.id, "settlement-record-1");
+  assert.equal(stored.restaurantId, RID);
+  assert.equal(stored.currencyCode, "USD");
+  assert.deepEqual(stored.accountingEntryIds, ["c1"]);
+  assert.equal(stored.restaurantOwesDirectCents, 800);
+  assert.equal(stored.directOwesRestaurantCents, 0);
+  assert.equal(stored.netDirection, "RESTAURANT_OWES_DIRECT");
+  assert.equal(stored.netAmountCents, 800);
+  assert.equal(stored.settledAt, NOW);
+  assert.equal(stored.actor, "ADMIN");
+  assert.equal(stored.note, "Оплата");
+  assert.equal(stored.externalReference, "ref-1");
+});
+
+test("78: вложенные поля execution старой схемы не переносятся", () => {
+  const stored = storedRecord(storedStateWithExecution(11, FOREIGN_EXECUTION));
+  assert.ok(stored);
+  assert.deepEqual(Object.keys(stored.execution), ["dataStatus"]);
+  for (const key of [
+    "method",
+    "transferredAmountCents",
+    "remainingOpenEntryCount",
+    "remainingRestaurantOwesDirectCents",
+    "remainingDirectOwesRestaurantCents",
+    "remainingNetDirection",
+    "remainingNetAmountCents",
+  ]) {
+    assert.ok(!(key in stored.execution), key);
+  }
+});
+
+test("79: схема 14 сохраняет валидный COMPLETE без изменений", () => {
+  const stored = storedRecord(storedStateWithExecution(14, record().execution));
+  assert.ok(stored);
+  assert.deepEqual(stored.execution, record().execution);
+});
+
+test("80: схема 14 без execution отклоняется", () => {
+  const parsed = parseStoredState(storedStateWithExecution(14, undefined));
+  assert.ok(parsed);
+  assert.deepEqual(parsed.restaurantSettlementRecords, []);
+});
+
+test("81: схема 14 с повреждённым execution отклоняется", () => {
+  for (const execution of [
+    { dataStatus: "GUESSED" },
+    { dataStatus: "COMPLETE", method: "BANK_TRANSFER" },
+    { dataStatus: "LEGACY_UNKNOWN", method: "CASH" },
+    { ...record().execution, method: "UNKNOWN_METHOD" },
+    { ...record().execution, transferredAmountCents: 700 },
+  ]) {
+    const parsed = parseStoredState(storedStateWithExecution(14, execution));
+    assert.ok(parsed);
+    assert.deepEqual(
+      parsed.restaurantSettlementRecords,
+      [],
+      JSON.stringify(execution),
+    );
+  }
+});
+
+test("82: схема 14 принимает уже мигрированную архивную запись", () => {
+  const stored = storedRecord(
+    storedStateWithExecution(14, { dataStatus: "LEGACY_UNKNOWN" }),
+  );
+  assert.ok(stored);
+  assert.deepEqual(stored.execution, { dataStatus: "LEGACY_UNKNOWN" });
+});
+
+test("83: повторная нормализация мигрированной записи идемпотентна", () => {
+  const parsed = parseStoredState(
+    storedStateWithExecution(13, FOREIGN_EXECUTION),
+  );
+  assert.ok(parsed);
+  const twice = normalizePrototypeState(parsed);
+  assert.deepEqual(
+    twice.restaurantSettlementRecords,
+    parsed.restaurantSettlementRecords,
+  );
+  const thrice = parseStoredState(JSON.stringify(twice));
+  assert.ok(thrice);
+  assert.deepEqual(
+    thrice.restaurantSettlementRecords,
+    parsed.restaurantSettlementRecords,
+  );
+});
+
+/** Ledger, где один заказ дал и выбранное, и оставшееся обязательство. */
+function crossBoundaryDuplicate(
+  remainingOverrides: Partial<RestaurantAccountingEntry> = {},
+): PrototypeState {
+  return stateWith([
+    entry("c1", "RESTAURANT_OWES_DIRECT", 800, { orderId: "order-1" }),
+    entry("c2", "RESTAURANT_OWES_DIRECT", 500, {
+      orderId: "order-1",
+      ...remainingOverrides,
+    }),
+  ]);
+}
+
+test("84: один заказ в выбранном расчёте и в остатке ломает preview", () => {
+  const result = previewOf(crossBoundaryDuplicate(), ["c1"]);
+  assert.equal(result.ok, false);
+  assert.ok(
+    !result.ok && result.error.includes("между выбранным расчётом и остатком"),
+  );
+});
+
+test("85: тип и направление оставшегося дубликата ledger не спасают", () => {
+  const asPayout = crossBoundaryDuplicate({
+    direction: "DIRECT_OWES_RESTAURANT",
+    type: "RESTAURANT_PAYOUT",
+  });
+  assert.equal(previewOf(asPayout, ["c1"]).ok, false);
+
+  const asRemittance = crossBoundaryDuplicate({ type: "RESTAURANT_REMITTANCE" });
+  assert.equal(previewOf(asRemittance, ["c1"]).ok, false);
+});
+
+test("86: дубликат не попадает в суммы остатка", () => {
+  // Тот же ledger без дубликата даёт нормальный остаток — сравнение показывает,
+  // что при дубликате preview именно отклоняется, а не считает как-то иначе.
+  const ok = okPreview(
+    stateWith([
+      entry("c1", "RESTAURANT_OWES_DIRECT", 800, { orderId: "order-1" }),
+      entry("c2", "RESTAURANT_OWES_DIRECT", 500, { orderId: "order-2" }),
+    ]),
+    ["c1"],
+  );
+  assert.equal(ok.remainingRestaurantOwesDirectCents, 500);
+  const broken = previewOf(crossBoundaryDuplicate(), ["c1"]);
+  assert.equal(broken.ok, false);
+  assert.ok(!broken.ok && !("preview" in broken));
+});
+
+test("87: дубликат не попадает в счётчик остатка", () => {
+  const broken = previewOf(crossBoundaryDuplicate(), ["c1"]);
+  assert.equal(broken.ok, false);
+});
+
+test("88: confirm при таком ledger возвращает отказ", () => {
+  const state = crossBoundaryDuplicate();
+  const res = confirmRestaurantSettlement(state, confirmInput());
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.settlementRecordId, null);
+});
+
+test("89: confirm возвращает исходный state тем же объектом", () => {
+  const state = crossBoundaryDuplicate();
+  const res = confirmRestaurantSettlement(state, confirmInput());
+  assert.equal(res.state, state);
+});
+
+test("90: обязательства остаются открытыми", () => {
+  const state = crossBoundaryDuplicate();
+  const res = confirmRestaurantSettlement(state, confirmInput());
+  assert.equal(res.result.ok, false);
+  for (const stored of res.state.restaurantAccountingEntries) {
+    assert.equal(stored.status, "OPEN");
+    assert.equal(stored.settledAt, null);
+  }
+});
+
+test("91: запись расчёта не создаётся", () => {
+  const state = crossBoundaryDuplicate();
+  const res = confirmRestaurantSettlement(state, confirmInput());
+  assert.deepEqual(res.state.restaurantSettlementRecords, []);
+});
+
+test("92: audit-события не создаются", () => {
+  const state = crossBoundaryDuplicate();
+  const res = confirmRestaurantSettlement(state, confirmInput());
+  assert.deepEqual(res.state.restaurantAccountingResolutionEvents, []);
+});
+
+test("93: ревизия не растёт", () => {
+  const state = crossBoundaryDuplicate();
+  const res = confirmRestaurantSettlement(state, confirmInput());
+  assert.equal(res.state.revision, state.revision);
+  assert.equal(res.state.updatedAt, state.updatedAt);
+});
+
+test("94: разные заказы в выборе и остатке проходят", () => {
+  const preview = okPreview(
+    stateWith([
+      entry("c1", "RESTAURANT_OWES_DIRECT", 800, { orderId: "order-1" }),
+      entry("c2", "RESTAURANT_OWES_DIRECT", 500, { orderId: "order-2" }),
+    ]),
+    ["c1"],
+  );
+  assert.equal(preview.remainingOpenEntryCount, 1);
+  assert.equal(preview.remainingRestaurantOwesDirectCents, 500);
+});
+
+test("95: дубли заказа внутри выбора по-прежнему отклоняются", () => {
+  const state = stateWith([
+    entry("c1", "RESTAURANT_OWES_DIRECT", 800, { orderId: "order-1" }),
+    entry("c2", "RESTAURANT_OWES_DIRECT", 500, { orderId: "order-1" }),
+  ]);
+  const result = previewOf(state, ["c1", "c2"]);
+  assert.equal(result.ok, false);
+  assert.ok(!result.ok && result.error.includes("выбрано несколько"));
+});
+
+test("96: дубли заказа внутри остатка по-прежнему отклоняются", () => {
+  const state = stateWith([
+    entry("c0", "RESTAURANT_OWES_DIRECT", 800, { orderId: "order-0" }),
+    entry("c1", "RESTAURANT_OWES_DIRECT", 500, { orderId: "order-1" }),
+    entry("c2", "RESTAURANT_OWES_DIRECT", 300, { orderId: "order-1" }),
+  ]);
+  const result = previewOf(state, ["c0"]);
+  assert.equal(result.ok, false);
+  assert.ok(
+    !result.ok && result.error.includes("несколько открытых обязательств"),
+  );
+});
+
+test("97: нормальный расчёт по-прежнему создаёт COMPLETE execution", () => {
+  const res = confirmRestaurantSettlement(debtState(), confirmInput());
+  assert.equal(res.result.error, null);
+  const stored = res.state.restaurantSettlementRecords[0];
+  assert.ok(stored);
+  assert.equal(stored.execution.dataStatus, "COMPLETE");
+});
+
+test("98: версия схемы остаётся 14", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 14);
+});

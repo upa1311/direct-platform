@@ -897,22 +897,29 @@ function normalizeRestaurantSettlementRecords(
   if (!Array.isArray(value)) {
     return [];
   }
-  // v14: детали исполнения появились только в схеме 14. Запись прежней схемы
-  // помечается LEGACY_UNKNOWN — восстановить её способ, фактическую сумму и
-  // исторический остаток невозможно, и подставлять текущие данные запрещено.
-  // Для состояния схемы 14 отсутствующий execution — повреждение, а не
-  // история: маскировать его архивным маркером нельзя.
+  // v14: детали исполнения появились только в схеме 14. У записи ЛЮБОЙ прежней
+  // схемы execution достоверным не является — его там исторически не было,
+  // поэтому найденное значение могло быть дописано вручную, импортировано или
+  // повреждено. Такое поле не «дополняется», а безусловно заменяется архивным
+  // маркером: восстановить способ, фактическую сумму и исторический остаток
+  // невозможно, а подставлять текущие данные запрещено.
+  //
+  // Для состояния схемы 14 автоматического ремонта нет вообще: отсутствующий,
+  // неизвестный или неполный execution — повреждение, и маскировать его
+  // архивным маркером нельзя.
   const migrateExecution = sourceSchemaVersion < 14;
   const kept: PrototypeState["restaurantSettlementRecords"] = [];
   const seenRecordIds = new Set<string>();
   const claimedEntryIds = new Set<string>();
   for (const candidate of value) {
     const prepared =
-      migrateExecution &&
-      isRecord(candidate) &&
-      candidate.execution === undefined
-        ? { ...candidate, execution: { dataStatus: "LEGACY_UNKNOWN" } }
+      migrateExecution && isRecord(candidate)
+        ? // Вложенные execution-поля старой схемы не переносятся: spread идёт
+          // ПЕРЕД полем execution, поэтому любое исходное значение затирается.
+          { ...candidate, execution: { dataStatus: "LEGACY_UNKNOWN" } }
         : candidate;
+    // Остальные канонические поля записи (id, суммы, момент, основание,
+    // ссылка) по-прежнему проходят полную intrinsic-валидацию без послаблений.
     const validated = validateRestaurantSettlementRecord(prepared);
     if (!validated.ok) continue;
     const record = validated.record;
