@@ -197,6 +197,14 @@ function DriverAssignment({ order }: { order: Order }) {
               ))
             )}
           </select>
+          {/* Пустой список — не поломка: водитель сам выходит онлайн и
+              подтверждает зону, автоматически его доступным никто не делает. */}
+          {available.length === 0 ? (
+            <span className={flowStyles.fieldHint}>
+              Водитель становится свободным, когда выходит онлайн и подтверждает
+              текущую зону в своём кабинете.
+            </span>
+          ) : null}
         </label>
         {assignedDriver ? (
           <>

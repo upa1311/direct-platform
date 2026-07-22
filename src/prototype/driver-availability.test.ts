@@ -18,7 +18,11 @@ import {
 import { createDefaultState } from "./default-state.ts";
 import { PROTOTYPE_SCHEMA_VERSION } from "./models.ts";
 import { parseStoredState } from "./prototype-store.ts";
-import { driverStatusLabels, getDriverActiveOrder } from "./selectors.ts";
+import {
+  driverStatusLabels,
+  getAvailableDrivers,
+  getDriverActiveOrder,
+} from "./selectors.ts";
 import type {
   DriverProfile,
   DriverStatus,
@@ -432,6 +436,35 @@ test("25: PAUSED-водитель не назначается", () => {
     const s = stateWith([order("A")], { [D1]: { status, currentZoneId: Z1 } });
     assert.equal(assignDriverToOrder(s, "A", D1).result.ok, false, status);
   }
+});
+
+test("25a: список свободных водителей совпадает с условиями назначения", () => {
+  // Пустой список на свежем состоянии — не поломка: все стартуют не в сети.
+  assert.deepEqual(getAvailableDrivers(createDefaultState()), []);
+
+  const state = online(createDefaultState(), D1, Z1);
+  assert.deepEqual(
+    getAvailableDrivers(state).map((d) => d.id),
+    [D1],
+  );
+
+  // AVAILABLE без подтверждённой зоны свободным не считается: иначе админу
+  // предлагали бы водителя, которого домен откажется назначить.
+  const zoneless = stateWith([], {
+    [D1]: { status: "AVAILABLE", currentZoneId: null },
+  });
+  assert.deepEqual(getAvailableDrivers(zoneless), []);
+  assert.equal(
+    assignDriverToOrder(
+      { ...zoneless, orders: [order("A")] },
+      "A",
+      D1,
+    ).result.ok,
+    false,
+  );
+
+  // Пауза и занятость свободными тоже не считаются.
+  assert.deepEqual(getAvailableDrivers(pauseDriver(state, D1).state), []);
 });
 
 test("26: водитель без подтверждённой зоны не назначается", () => {

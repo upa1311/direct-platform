@@ -1979,8 +1979,15 @@ export function getPickupStats(
 
 // --- Водители и операционные показатели админки -----------------------------
 
+/**
+ * Водители, которых администратор реально может назначить. Условие совпадает с
+ * проверками assignDriverToOrder: онлайн И с подтверждённой зоной. Иначе список
+ * предлагал бы водителя, которого домен затем отказался бы назначить.
+ */
 export function getAvailableDrivers(state: PrototypeState): DriverProfile[] {
-  return state.drivers.filter((driver) => driver.status === "AVAILABLE");
+  return state.drivers.filter(
+    (driver) => driver.status === "AVAILABLE" && driver.currentZoneId !== null,
+  );
 }
 
 export function getDriverById(
