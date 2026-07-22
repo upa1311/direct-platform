@@ -20,6 +20,7 @@ import type {
   RestaurantFinancialCollectionMode,
 } from "./models.ts";
 import {
+  buildRestaurantDailySettlement,
   buildRestaurantSettlementOverview,
   type RestaurantSettlementOverview,
 } from "./restaurant-settlements.ts";
@@ -241,7 +242,7 @@ test("7: REVIEW_REQUIRED не входит в банковские итоги", 
   assert.equal(summary.reviewRequiredOrderCount, 1);
 });
 
-test("8: архивная строка не считается нулевой банковской комиссией", () => {
+test("8: архивная строка даёт неизвестные данные, а не нулевую комиссию", () => {
   const { state, orderId } = driverCompleted(MIXED);
   // Доказуемо исторический снимок: нет движения, правила и режима.
   const legacy = withOrder(state, orderId, (o) => {
@@ -270,7 +271,14 @@ test("8: архивная строка не считается нулевой б
   assert.equal(row.totalBankFeeCents, null);
   assert.equal(row.restaurantBankFeeCents, null);
   assert.equal(row.directBankFeeCents, null);
-  assert.equal(overview.summary.totalBankFeeCents, 0);
+  // Отсутствие данных не выдаётся за подтверждённый ноль: заказ попадает в
+  // отдельный счётчик, а не в банковские суммы.
+  assert.equal(overview.summary.bankFeeUnknownOrderCount, 1);
+  assert.equal(
+    overview.summary.completedOrderCount,
+    overview.summary.bankFeeUnknownOrderCount +
+      overview.summary.reviewRequiredOrderCount,
+  );
 });
 
 // --- 9–13: презентация -------------------------------------------------------
@@ -334,7 +342,140 @@ test("13: банковская комиссия не увеличивает до
   assert.ok(!PAGE.includes("банк удержал у Direct"));
 });
 
-test("14: групповой расчёт и записи расчётов не затронуты", () => {
+// --- 15–21: подтверждённый ноль против отсутствия данных ----------------------
+
+/** Тот же заказ, приведённый к доказуемо архивному снимку. */
+function toTrueLegacy(state: PrototypeState, orderId: string): PrototypeState {
+  return withOrder(state, orderId, (o) => {
+    const {
+      moneyMovement,
+      financialRule,
+      financialCollectionMode,
+      ...rest
+    } = o.financials;
+    void moneyMovement;
+    void financialRule;
+    void financialCollectionMode;
+    return {
+      ...o,
+      financials: {
+        ...rest,
+        moneyMovementStatus: "REVIEW_REQUIRED",
+      } as FinancialSnapshot,
+    };
+  });
+}
+
+test("15: только подтверждённые наличные дают доказанный ноль", () => {
+  const { state } = pickupCompleted("CASH");
+  const summary = okOverview(state).summary;
+  assert.equal(summary.totalBankFeeCents, 0);
+  assert.equal(summary.restaurantBankFeeCents, 0);
+  assert.equal(summary.directBankFeeCents, 0);
+  // Данные есть — это настоящий ноль, а не отсутствие информации.
+  assert.equal(summary.bankFeeUnknownOrderCount, 0);
+});
+
+test("16: только архивные заказы не дают нулевую сумму", () => {
+  const { state, orderId } = driverCompleted(MIXED);
+  const legacy = toTrueLegacy(state, orderId);
+  const summary = okOverview(legacy).summary;
+  assert.equal(summary.bankFeeUnknownOrderCount, 1);
+  assert.equal(summary.completedOrderCount, 1);
+  // Ни одна известная строка в суммы не вошла.
+  assert.equal(summary.totalBankFeeCents, 0);
+  assert.equal(
+    summary.completedOrderCount,
+    summary.bankFeeUnknownOrderCount + summary.reviewRequiredOrderCount,
+  );
+});
+
+test("17: COMPLETE и архивный вместе — известная сумма плюс счётчик", () => {
+  const first = driverCompleted(MIXED);
+  let s = setCartFulfillmentChoice(first.state, "PICKUP");
+  s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
+  const created = createOrderFromCart(s);
+  assert.equal(created.result.error, null);
+  const pickupId = created.result.orderId as string;
+  let next = acceptRestaurantOrder(created.state, pickupId, 20);
+  next = markOrderReady(next, pickupId);
+  const done = completePickupAtRestaurant(next, pickupId, "CARD");
+  assert.equal(done.result.error, null);
+  // Первый заказ превращаем в архивный, второй остаётся подтверждённым.
+  const mixed = toTrueLegacy(done.state, first.orderId);
+
+  const summary = okOverview(mixed).summary;
+  assert.equal(summary.bankFeeUnknownOrderCount, 1);
+  assert.equal(summary.completedOrderCount, 2);
+  assert.ok(summary.totalBankFeeCents > 0);
+  assert.equal(
+    summary.restaurantBankFeeCents + summary.directBankFeeCents,
+    summary.totalBankFeeCents,
+  );
+});
+
+test("18: REVIEW_REQUIRED остаётся своим счётчиком, а не архивным", () => {
+  const { state, orderId } = driverCompleted(MIXED);
+  const broken = withOrder(state, orderId, (o) => ({
+    ...o,
+    financials: {
+      ...o.financials,
+      moneyMovementStatus: "REVIEW_REQUIRED",
+      moneyMovement: undefined,
+    },
+  }));
+  const summary = okOverview(broken).summary;
+  assert.equal(summary.reviewRequiredOrderCount, 1);
+  assert.equal(summary.totalBankFeeCents, 0);
+  // Строка, требующая разбора, не входит ни в денежные итоги, ни в счётчик
+  // архивных банковских данных — у неё свой счётчик, двойного учёта нет.
+  assert.equal(summary.bankFeeUnknownOrderCount, 0);
+});
+
+test("19: дневная сверка показывает разбивку и счётчик неизвестных", () => {
+  const { state, orderId } = driverCompleted(MIXED);
+  const daily = buildRestaurantDailySettlement(
+    state,
+    RID,
+    "ALL",
+    new Date().toISOString(),
+    TZ,
+  );
+  assert.ok(daily.ok);
+  const day = daily.days[0];
+  assert.ok(day);
+  assert.ok(day.totalBankFeeCents > 0);
+  assert.equal(
+    day.restaurantBankFeeCents + day.directBankFeeCents,
+    day.totalBankFeeCents,
+  );
+  assert.equal(day.bankFeeUnknownOrderCount, 0);
+
+  const legacy = toTrueLegacy(state, orderId);
+  const legacyDaily = buildRestaurantDailySettlement(
+    legacy,
+    RID,
+    "ALL",
+    new Date().toISOString(),
+    TZ,
+  );
+  assert.ok(legacyDaily.ok);
+  assert.equal(legacyDaily.days[0].bankFeeUnknownOrderCount, 1);
+  assert.equal(legacyDaily.days[0].totalBankFeeCents, 0);
+});
+
+test("20: интерфейс различает доказанный ноль и отсутствие данных", () => {
+  const flat = PAGE.replace(/\s+/g, " ");
+  assert.ok(flat.includes('value="Нет достоверных данных"'));
+  assert.ok(flat.includes("Архивных заказов без банковской разбивки:"));
+  assert.ok(flat.includes("Не учтено архивных заказов:"));
+  assert.ok(flat.includes("summary.bankFeeUnknownOrderCount"));
+  // Дневная карточка — компактной строкой, а не тремя карточками.
+  assert.ok(flat.includes("Комиссия банка: {money(day.totalBankFeeCents)}"));
+  assert.ok(flat.includes("day.bankFeeUnknownOrderCount"));
+});
+
+test("21: групповой расчёт и записи расчётов не затронуты", () => {
   const { state } = driverCompleted(MIXED);
   // Банковские суммы живут только в движении заказа и презентации.
   assert.deepEqual(state.restaurantSettlementRecords, []);

@@ -365,16 +365,33 @@ export default function RestaurantSettlementsPage() {
                     />
                     {/* Банк — отдельная сторона: его комиссия уменьшает чистый
                         результат стороны, принявшей платёж, и не является
-                        обязательством между рестораном и Direct. */}
-                    <SummaryCard
-                      label="Комиссия банка"
-                      value={money(overview.summary.totalBankFeeCents)}
-                      hint={`За счёт ресторана: ${money(
-                        overview.summary.restaurantBankFeeCents,
-                      )} · За счёт Direct: ${money(
-                        overview.summary.directBankFeeCents,
-                      )}`}
-                    />
+                        обязательством между рестораном и Direct.
+                        Подтверждённый ноль (наличные) и ОТСУТСТВИЕ архивных
+                        данных — разные вещи и показываются по-разному. */}
+                    {overview.summary.bankFeeUnknownOrderCount > 0 &&
+                    overview.summary.completedOrderCount ===
+                      overview.summary.bankFeeUnknownOrderCount +
+                        overview.summary.reviewRequiredOrderCount ? (
+                      <SummaryCard
+                        label="Комиссия банка"
+                        value="Нет достоверных данных"
+                        hint={`Архивных заказов без банковской разбивки: ${overview.summary.bankFeeUnknownOrderCount}`}
+                      />
+                    ) : (
+                      <SummaryCard
+                        label="Комиссия банка"
+                        value={money(overview.summary.totalBankFeeCents)}
+                        hint={`За счёт ресторана: ${money(
+                          overview.summary.restaurantBankFeeCents,
+                        )} · За счёт Direct: ${money(
+                          overview.summary.directBankFeeCents,
+                        )}${
+                          overview.summary.bankFeeUnknownOrderCount > 0
+                            ? ` · Не учтено архивных заказов: ${overview.summary.bankFeeUnknownOrderCount}`
+                            : ""
+                        }`}
+                      />
+                    )}
                   </div>
 
                   {/* Объяснение финансовых снимков */}
@@ -965,6 +982,34 @@ function DayCard({
               />
               <SummaryCard label="Требуют внимания" value={String(day.paidCanceledCount)} />
             </div>
+            {/* Банковская комиссия дня — компактной строкой, а не тремя
+                отдельными карточками. Неизвестные архивные данные нулём не
+                показываются. */}
+            <p className={styles.dayBankFee}>
+              {day.bankFeeUnknownOrderCount > 0 &&
+              day.completedOrderCount ===
+                day.bankFeeUnknownOrderCount + day.reviewRequiredOrderCount ? (
+                <>
+                  Комиссия банка: нет достоверных данных
+                  <br />
+                  Архивных заказов без банковской разбивки:{" "}
+                  {day.bankFeeUnknownOrderCount}
+                </>
+              ) : (
+                <>
+                  Комиссия банка: {money(day.totalBankFeeCents)}
+                  <br />
+                  Ресторан: {money(day.restaurantBankFeeCents)} · Direct:{" "}
+                  {money(day.directBankFeeCents)}
+                  {day.bankFeeUnknownOrderCount > 0 ? (
+                    <>
+                      <br />
+                      Не учтено архивных заказов: {day.bankFeeUnknownOrderCount}
+                    </>
+                  ) : null}
+                </>
+              )}
+            </p>
           </div>
         </details>
       </div>

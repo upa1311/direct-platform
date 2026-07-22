@@ -113,6 +113,13 @@ export interface RestaurantSettlementSummary {
   totalBankFeeCents: number;
   restaurantBankFeeCents: number;
   directBankFeeCents: number;
+  /**
+   * Завершённые строки без достоверной банковской разбивки (архивные и любые
+   * иные, где сумм нет). Отсутствие данных — НЕ подтверждённый ноль: такие
+   * заказы в банковские суммы не входят и считаются отдельно, иначе сводка
+   * выдавала бы «$0.00» там, где банковская комиссия просто неизвестна.
+   */
+  bankFeeUnknownOrderCount: number;
   /** Строки, требующие разбора: в суммы выше они НЕ входят. */
   reviewRequiredOrderCount: number;
 }
@@ -174,6 +181,7 @@ const EMPTY_SUMMARY: RestaurantSettlementSummary = {
   totalBankFeeCents: 0,
   restaurantBankFeeCents: 0,
   directBankFeeCents: 0,
+  bankFeeUnknownOrderCount: 0,
   reviewRequiredOrderCount: 0,
 };
 
@@ -380,6 +388,37 @@ function buildRowMoneyFields(order: Order): SettlementRowMoneyFields {
     restaurantBankFeeCents: null,
     directBankFeeCents: null,
   };
+}
+
+/**
+ * Есть ли у строки ДОКАЗАННАЯ банковская разбивка. Все три суммы приходят
+ * вместе из канонического движения: частичное их наличие — не данные.
+ */
+function hasKnownBankFee(row: RestaurantSettlementRow): boolean {
+  return (
+    row.totalBankFeeCents !== null &&
+    row.restaurantBankFeeCents !== null &&
+    row.directBankFeeCents !== null
+  );
+}
+
+/**
+ * Банковский вклад строки в итог: у строки без разбивки вклад отсутствует.
+ * Ноль здесь означал бы «банк точно ничего не удержал», что для архивного
+ * заказа неизвестно.
+ */
+function bankFeeAmountsOf(row: RestaurantSettlementRow): {
+  totalBankFeeCents: number;
+  restaurantBankFeeCents: number;
+  directBankFeeCents: number;
+} {
+  return hasKnownBankFee(row)
+    ? {
+        totalBankFeeCents: row.totalBankFeeCents as number,
+        restaurantBankFeeCents: row.restaurantBankFeeCents as number,
+        directBankFeeCents: row.directBankFeeCents as number,
+      }
+    : { totalBankFeeCents: 0, restaurantBankFeeCents: 0, directBankFeeCents: 0 };
 }
 
 /** Денежные поля, накапливаемые в итогах обзора и дня. */
@@ -632,14 +671,16 @@ export function buildRestaurantSettlementOverview(
       platformCommissionReceivableCents: row.platformCommissionReceivableCents,
       // PENDING берётся из фактического ledger по этому заказу, НЕ из snapshot.
       pendingLedgerCents: pendingByOrderId.get(row.orderId) ?? 0,
-      // Банковские суммы копятся только по подтверждённым строкам: у архивной
-      // строки их нет, и подставлять ноль нельзя — это была бы выдумка.
-      totalBankFeeCents: row.totalBankFeeCents ?? 0,
-      restaurantBankFeeCents: row.restaurantBankFeeCents ?? 0,
-      directBankFeeCents: row.directBankFeeCents ?? 0,
+      // Банковские суммы копятся ТОЛЬКО по строкам с доказанной разбивкой:
+      // у архивной строки их нет, и ноль здесь был бы выдумкой. Такие заказы
+      // считаются отдельным счётчиком ниже.
+      ...bankFeeAmountsOf(row),
     });
     if (accumulated === null) {
       return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };
+    }
+    if (!hasKnownBankFee(row)) {
+      summary.bankFeeUnknownOrderCount += 1;
     }
   }
 
@@ -685,6 +726,8 @@ export interface RestaurantDailySettlementRow {
   totalBankFeeCents: number;
   restaurantBankFeeCents: number;
   directBankFeeCents: number;
+  /** Заказы дня без достоверной банковской разбивки (не ноль, а неизвестно). */
+  bankFeeUnknownOrderCount: number;
   /** Заказы дня, требующие разбора: в суммы дня они не входят. */
   reviewRequiredOrderCount: number;
   paidCanceledCount: number;
@@ -763,6 +806,7 @@ export function buildRestaurantDailySettlement(
         totalBankFeeCents: 0,
         restaurantBankFeeCents: 0,
         directBankFeeCents: 0,
+        bankFeeUnknownOrderCount: 0,
         reviewRequiredOrderCount: 0,
         paidCanceledCount: 0,
         orders: [],
@@ -795,12 +839,13 @@ export function buildRestaurantDailySettlement(
         row.platformCollectedFromCustomerCents,
       platformCommissionReceivableCents: row.platformCommissionReceivableCents,
       pendingLedgerCents: pendingByOrderId.get(row.orderId) ?? 0,
-      totalBankFeeCents: row.totalBankFeeCents ?? 0,
-      restaurantBankFeeCents: row.restaurantBankFeeCents ?? 0,
-      directBankFeeCents: row.directBankFeeCents ?? 0,
+      ...bankFeeAmountsOf(row),
     });
     if (accumulated === null) {
       return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };
+    }
+    if (!hasKnownBankFee(row)) {
+      day.bankFeeUnknownOrderCount += 1;
     }
     day.orders.push(row);
   }
