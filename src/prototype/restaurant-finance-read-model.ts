@@ -2,6 +2,8 @@ import type {
   Order,
   PrototypeState,
   RestaurantAccountingEntry,
+  RestaurantAccountingType,
+  RestaurantFinancialCollectionMode,
 } from "./models";
 import type { OrderPaymentChannel } from "./order-money-movement";
 
@@ -33,6 +35,12 @@ export interface RestaurantFinanceOrderRow {
   customerTotalCents: number | null;
   foodSubtotalCents: number | null;
   restaurantCommissionCents: number | null;
+  /** Основание обязательства из бухгалтерской записи (для расшифровки). */
+  accountingType: RestaurantAccountingType;
+  /** Компоненты заказа из его снимка; null у архивной строки. */
+  deliveryFeeCents: number | null;
+  smallOrderFeeCents: number | null;
+  financialCollectionMode: RestaurantFinancialCollectionMode | null;
   totalBankFeeCents: number | null;
   restaurantBankFeeCents: number | null;
   directBankFeeCents: number | null;
@@ -255,6 +263,7 @@ function buildRow(
     deliveryMode: order.deliveryMode,
     direction: entry.direction,
     amountCents: entry.amountCents,
+    accountingType: entry.type,
   } as const;
 
   if (entry.source === "ORDER_FINANCIAL_SNAPSHOT") {
@@ -266,6 +275,12 @@ function buildRow(
       customerTotalCents: order.financials.customerTotalCents,
       foodSubtotalCents: order.financials.foodSubtotalCents,
       restaurantCommissionCents: order.financials.restaurantCommissionCents,
+      // Компоненты берутся из неизменяемого снимка заказа: ни текущие тарифы,
+      // ни текущие настройки ресторана к историческим суммам не применяются.
+      deliveryFeeCents: order.financials.deliveryFeeCents,
+      smallOrderFeeCents: order.financials.smallOrderFeeCents,
+      financialCollectionMode:
+        order.financials.financialCollectionMode ?? null,
       totalBankFeeCents: movement.totalBankFeeCents,
       restaurantBankFeeCents: movement.restaurantBankFeeCents,
       directBankFeeCents: movement.directBankFeeCents,
@@ -284,6 +299,10 @@ function buildRow(
     customerTotalCents: null,
     foodSubtotalCents: null,
     restaurantCommissionCents: null,
+    // Архивные детали не додумываются.
+    deliveryFeeCents: null,
+    smallOrderFeeCents: null,
+    financialCollectionMode: null,
     totalBankFeeCents: null,
     restaurantBankFeeCents: null,
     directBankFeeCents: null,

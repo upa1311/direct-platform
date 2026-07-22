@@ -69,12 +69,21 @@ import styles from "./settlements.module.css";
 import "./statement-print.css";
 
 import { getLatestFullRestaurantSettlement } from "@/prototype/restaurant-settlement-records";
+import {
+  buildRestaurantOpenBalanceBreakdown,
+  describeRestaurantSettlementModel,
+} from "@/prototype/restaurant-balance-breakdown";
+import { RestaurantBalanceBreakdownView } from "@/components/settlements/restaurant-balance-breakdown";
 import { RESTAURANT_SETTLEMENT_METHOD_LABELS } from "@/app/admin/settlements/settlement-selection";
 
 import type {
   PrototypeState,
   RestaurantSettlementRecord,
 } from "@/prototype/models";
+import type {
+  RestaurantBalanceBreakdownResult,
+  RestaurantSettlementModelPresentation,
+} from "@/prototype/restaurant-balance-breakdown";
 
 /** Вид раздела: главный обзор, по заказам, по дням, журнал или выписка. */
 type SettlementView = "OVERVIEW" | "ORDERS" | "DAILY" | "OBLIGATIONS" | "STATEMENT";
@@ -214,6 +223,13 @@ export default function RestaurantSettlementsPage() {
     return buildRestaurantAccountingJournal(state, selectedRestaurantId);
   }, [view, isHydrated, restaurant, state, selectedRestaurantId]);
 
+  // Расшифровка текущей открытой позиции — тот же shared builder, что и в
+  // административном интерфейсе.
+  const breakdownResult = useMemo(() => {
+    if (!isHydrated || !restaurant) return null;
+    return buildRestaurantOpenBalanceBreakdown(state, selectedRestaurantId);
+  }, [isHydrated, restaurant, state, selectedRestaurantId]);
+
   // Последний ПОЛНЫЙ расчёт — read-only справка на главном экране.
   const lastFullSettlement = useMemo(() => {
     if (!isHydrated || !restaurant) return null;
@@ -260,6 +276,10 @@ export default function RestaurantSettlementsPage() {
             money={money}
             timeZone={timeZone}
             lastFull={lastFullSettlement}
+            breakdown={breakdownResult}
+            modelNotes={
+              restaurant ? describeRestaurantSettlementModel(restaurant) : null
+            }
             onShowOrders={() => setView("ORDERS")}
             onShowStatement={() => setView("STATEMENT")}
           />
@@ -516,6 +536,8 @@ function FinanceOverview({
   money,
   timeZone,
   lastFull,
+  breakdown,
+  modelNotes,
   onShowOrders,
   onShowStatement,
 }: {
@@ -524,6 +546,10 @@ function FinanceOverview({
   timeZone: string;
   /** Последний ПОЛНЫЙ расчёт ресторана либо null (read-only). */
   lastFull: RestaurantSettlementRecord | null;
+  /** Готовая расшифровка баланса либо ошибка доменного builder. */
+  breakdown: RestaurantBalanceBreakdownResult | null;
+  /** Объяснение схемы работы конкретного ресторана. */
+  modelNotes: RestaurantSettlementModelPresentation | null;
   onShowOrders: () => void;
   onShowStatement: () => void;
 }) {
@@ -582,6 +608,34 @@ function FinanceOverview({
           </div>
         </dl>
       </section>
+
+      {/* Расшифровка баланса: тот же shared builder и те же подписи, что у
+          администратора Direct. Финансовой арифметики здесь нет. */}
+      {breakdown === null ? null : breakdown.ok ? (
+        <RestaurantBalanceBreakdownView
+          breakdown={breakdown.breakdown}
+          money={money}
+          restaurantSideTitle="Вы должны Direct"
+          directSideTitle="Direct должен вам"
+        />
+      ) : (
+        <div className={styles.noticeCard} role="status">
+          {breakdown.error}
+        </div>
+      )}
+
+      {/* Как устроен расчёт именно этого ресторана: текст определяется его
+          конфигурацией, а не идентификатором. */}
+      {modelNotes ? (
+        <section className={styles.noticeCard} aria-label="Как работает ваша схема">
+          <strong>Как работает ваша схема · {modelNotes.title}</strong>
+          <ul className={styles.modelNotes}>
+            {modelNotes.notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       {/* Последний ПОЛНЫЙ расчёт: read-only, ресторан здесь ничего не
           подтверждает. Выборочный расчёт полным не считается. */}

@@ -47,6 +47,8 @@ import {
   type SettlementSuccess,
 } from "./settlement-selection";
 import type { RestaurantSettlementMethod } from "@/prototype/models";
+import { buildRestaurantOpenBalanceBreakdown } from "@/prototype/restaurant-balance-breakdown";
+import { RestaurantBalanceBreakdownView } from "@/components/settlements/restaurant-balance-breakdown";
 import styles from "./admin-settlements.module.css";
 
 type StatusFilter = "OPEN" | "CLOSED" | "ALL";
@@ -240,6 +242,12 @@ export default function AdminSettlementsPage() {
       setFullReference("");
     }
   };
+
+  // Та же расшифровка, что видит ресторан: общий builder, общие подписи.
+  const breakdownResult = useMemo(() => {
+    if (!activeRestaurantId) return null;
+    return buildRestaurantOpenBalanceBreakdown(state, activeRestaurantId);
+  }, [state, activeRestaurantId]);
 
   const settlementRecords = useMemo(
     () =>
@@ -448,6 +456,21 @@ export default function AdminSettlementsPage() {
                         {formatMoney(fullPreview.netAmountCents)}
                       </span>
                     </div>
+
+                    {/* Расшифровка read-only: администратор видит ровно те же
+                        категории и суммы, что и ресторан. */}
+                    {breakdownResult === null ? null : breakdownResult.ok ? (
+                      <RestaurantBalanceBreakdownView
+                        breakdown={breakdownResult.breakdown}
+                        money={formatMoney}
+                        restaurantSideTitle="Ресторан должен Direct"
+                        directSideTitle="Direct должен ресторану"
+                      />
+                    ) : (
+                      <p className={styles.settlementHint}>
+                        {breakdownResult.error}
+                      </p>
+                    )}
 
                     <div className={styles.settlementForm}>
                       {fullBalanced ? (
