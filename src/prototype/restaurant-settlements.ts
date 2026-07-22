@@ -80,6 +80,16 @@ export interface RestaurantSettlementRow {
   directOwesRestaurantCents: number | null;
   /** Чистая сумма ресторана из движения; null у legacy. */
   restaurantNetCents: number | null;
+  /**
+   * Банковская комиссия карточной транзакции КАК ОНА СОХРАНЕНА в движении
+   * заказа. Банк — отдельная сторона: эти суммы уменьшают чистый результат
+   * соответствующей стороны и НЕ являются обязательством ресторан ↔ Direct.
+   * null у legacy-строки: достоверных банковских данных там нет, и нулём это
+   * не считается.
+   */
+  totalBankFeeCents: number | null;
+  restaurantBankFeeCents: number | null;
+  directBankFeeCents: number | null;
   /** Существующее начисление ledger либо null («Начисления нет»). */
   ledger: RestaurantSettlementLedgerEntry | null;
 }
@@ -95,6 +105,14 @@ export interface RestaurantSettlementSummary {
   platformCommissionReceivableCents: number;
   /** Фактический PENDING по существующему ledger — отдельно от snapshot. */
   pendingLedgerCents: number;
+  /**
+   * Банковская комиссия периода по подтверждённым строкам. Считается ТОЛЬКО
+   * по COMPLETE-строкам: legacy без достоверных банковских данных нулём не
+   * считается и в эти суммы не входит, REVIEW_REQUIRED — тоже.
+   */
+  totalBankFeeCents: number;
+  restaurantBankFeeCents: number;
+  directBankFeeCents: number;
   /** Строки, требующие разбора: в суммы выше они НЕ входят. */
   reviewRequiredOrderCount: number;
 }
@@ -153,6 +171,9 @@ const EMPTY_SUMMARY: RestaurantSettlementSummary = {
   platformCollectedFromCustomerCents: 0,
   platformCommissionReceivableCents: 0,
   pendingLedgerCents: 0,
+  totalBankFeeCents: 0,
+  restaurantBankFeeCents: 0,
+  directBankFeeCents: 0,
   reviewRequiredOrderCount: 0,
 };
 
@@ -219,6 +240,9 @@ type SettlementRowMoneyFields = Pick<
   | "restaurantOwesDirectCents"
   | "directOwesRestaurantCents"
   | "restaurantNetCents"
+  | "totalBankFeeCents"
+  | "restaurantBankFeeCents"
+  | "directBankFeeCents"
 >;
 
 /** Строка, требующая ручного разбора: сумм у неё нет вообще. */
@@ -233,6 +257,9 @@ const REVIEW_REQUIRED_ROW: SettlementRowMoneyFields = {
   restaurantOwesDirectCents: null,
   directOwesRestaurantCents: null,
   restaurantNetCents: null,
+  totalBankFeeCents: null,
+  restaurantBankFeeCents: null,
+  directBankFeeCents: null,
 };
 
 /**
@@ -303,6 +330,11 @@ function buildRowMoneyFields(order: Order): SettlementRowMoneyFields {
       restaurantOwesDirectCents: movement.restaurantOwesDirectCents,
       directOwesRestaurantCents: movement.directOwesRestaurantCents,
       restaurantNetCents: movement.restaurantNetCents,
+      // Банковские суммы берутся из движения как есть: 1% и распределение
+      // считает канонический расчёт, здесь ничего не пересчитывается.
+      totalBankFeeCents: movement.totalBankFeeCents,
+      restaurantBankFeeCents: movement.restaurantBankFeeCents,
+      directBankFeeCents: movement.directBankFeeCents,
     };
   }
   // Движение при статусе, отличном от COMPLETE, — несогласованный снимок.
@@ -342,6 +374,11 @@ function buildRowMoneyFields(order: Order): SettlementRowMoneyFields {
     restaurantOwesDirectCents: null,
     directOwesRestaurantCents: null,
     restaurantNetCents: null,
+    // У архивного заказа достоверных банковских данных не было: ноль здесь
+    // был бы выдумкой, поэтому суммы отсутствуют.
+    totalBankFeeCents: null,
+    restaurantBankFeeCents: null,
+    directBankFeeCents: null,
   };
 }
 
@@ -354,6 +391,9 @@ const MONEY_AGGREGATE_KEYS = [
   "platformCollectedFromCustomerCents",
   "platformCommissionReceivableCents",
   "pendingLedgerCents",
+  "totalBankFeeCents",
+  "restaurantBankFeeCents",
+  "directBankFeeCents",
 ] as const;
 
 type MoneyAggregateKey = (typeof MONEY_AGGREGATE_KEYS)[number];
@@ -401,6 +441,9 @@ function hasSafeRowMoney(
     money.restaurantOwesDirectCents,
     money.directOwesRestaurantCents,
     money.restaurantNetCents,
+    money.totalBankFeeCents,
+    money.restaurantBankFeeCents,
+    money.directBankFeeCents,
   ];
   return values.every((value) => value === null || isSafeCents(value));
 }
@@ -589,10 +632,26 @@ export function buildRestaurantSettlementOverview(
       platformCommissionReceivableCents: row.platformCommissionReceivableCents,
       // PENDING берётся из фактического ledger по этому заказу, НЕ из snapshot.
       pendingLedgerCents: pendingByOrderId.get(row.orderId) ?? 0,
+      // Банковские суммы копятся только по подтверждённым строкам: у архивной
+      // строки их нет, и подставлять ноль нельзя — это была бы выдумка.
+      totalBankFeeCents: row.totalBankFeeCents ?? 0,
+      restaurantBankFeeCents: row.restaurantBankFeeCents ?? 0,
+      directBankFeeCents: row.directBankFeeCents ?? 0,
     });
     if (accumulated === null) {
       return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };
     }
+  }
+
+  // Инвариант банковских частей: сумма долей сторон равна общей комиссии.
+  // Расхождение означает повреждённые данные, а не редкий случай.
+  if (
+    addChecked(
+      summary.restaurantBankFeeCents,
+      summary.directBankFeeCents,
+    ) !== summary.totalBankFeeCents
+  ) {
+    return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };
   }
 
   return {
@@ -622,6 +681,10 @@ export interface RestaurantDailySettlementRow {
   platformCollectedFromCustomerCents: number;
   platformCommissionReceivableCents: number;
   pendingLedgerCents: number;
+  /** Банковская комиссия дня по подтверждённым строкам. */
+  totalBankFeeCents: number;
+  restaurantBankFeeCents: number;
+  directBankFeeCents: number;
   /** Заказы дня, требующие разбора: в суммы дня они не входят. */
   reviewRequiredOrderCount: number;
   paidCanceledCount: number;
@@ -697,6 +760,9 @@ export function buildRestaurantDailySettlement(
         platformCollectedFromCustomerCents: 0,
         platformCommissionReceivableCents: 0,
         pendingLedgerCents: 0,
+        totalBankFeeCents: 0,
+        restaurantBankFeeCents: 0,
+        directBankFeeCents: 0,
         reviewRequiredOrderCount: 0,
         paidCanceledCount: 0,
         orders: [],
@@ -729,6 +795,9 @@ export function buildRestaurantDailySettlement(
         row.platformCollectedFromCustomerCents,
       platformCommissionReceivableCents: row.platformCommissionReceivableCents,
       pendingLedgerCents: pendingByOrderId.get(row.orderId) ?? 0,
+      totalBankFeeCents: row.totalBankFeeCents ?? 0,
+      restaurantBankFeeCents: row.restaurantBankFeeCents ?? 0,
+      directBankFeeCents: row.directBankFeeCents ?? 0,
     });
     if (accumulated === null) {
       return { ok: false, error: SETTLEMENT_OVERFLOW_ERROR };

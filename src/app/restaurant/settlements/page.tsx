@@ -338,7 +338,11 @@ export default function RestaurantSettlementsPage() {
               <div className={styles.summaryGrid}>
                 <SummaryCard label="Заказов за период" value={String(overview.summary.completedOrderCount)} />
                 <SummaryCard label="Продажи блюд" value={money(overview.summary.foodSubtotalCents)} />
-                <SummaryCard label="Ресторану после комиссии" value={money(overview.summary.restaurantNetCents)} />
+                <SummaryCard
+                  label="Ресторану после комиссий"
+                  value={money(overview.summary.restaurantNetCents)}
+                  hint="Учтены комиссия Direct и доля банковской комиссии ресторана."
+                />
                 <SummaryCard label="Комиссия Direct" value={money(overview.summary.platformCommissionReceivableCents)} />
               </div>
 
@@ -358,6 +362,18 @@ export default function RestaurantSettlementsPage() {
                       label="Ожидает расчёта по журналу комиссий"
                       value={money(overview.summary.pendingLedgerCents)}
                       hint="Только начисления со статусом „Ожидает расчёта“ в журнале комиссий."
+                    />
+                    {/* Банк — отдельная сторона: его комиссия уменьшает чистый
+                        результат стороны, принявшей платёж, и не является
+                        обязательством между рестораном и Direct. */}
+                    <SummaryCard
+                      label="Комиссия банка"
+                      value={money(overview.summary.totalBankFeeCents)}
+                      hint={`За счёт ресторана: ${money(
+                        overview.summary.restaurantBankFeeCents,
+                      )} · За счёт Direct: ${money(
+                        overview.summary.directBankFeeCents,
+                      )}`}
                     />
                   </div>
 
@@ -628,6 +644,15 @@ function FinanceOverview({
               <div className={styles.financeRowTags}>
                 <span>{FINANCE_DELIVERY_LABELS[row.deliveryMode]}</span>
                 <span>{FINANCE_CHANNEL_LABELS[row.paymentChannel]}</span>
+                {/* Банковская доля ресторана видна сразу: она уменьшает его
+                    чистый результат и не является долгом перед Direct.
+                    Полная разбивка — в подробностях заказа и сверке. */}
+                {row.restaurantBankFeeCents !== null &&
+                row.restaurantBankFeeCents > 0 ? (
+                  <span>
+                    Банк: −{money(row.restaurantBankFeeCents)} с ресторана
+                  </span>
+                ) : null}
                 {row.dataStatus !== "COMPLETE" ? (
                   <span className={styles.financeRowStatus}>
                     {FINANCE_DATA_STATUS_LABELS[row.dataStatus]}
@@ -812,6 +837,30 @@ function OrderDetails({
             value={money(row.directOwesRestaurantCents)}
           />
         ) : null}
+        {/* Банковская комиссия заказа: три сохранённые суммы движения. Для
+            наличного заказа три нуля бессмысленны — одна спокойная строка. */}
+        {row.totalBankFeeCents !== null &&
+        row.restaurantBankFeeCents !== null &&
+        row.directBankFeeCents !== null ? (
+          row.totalBankFeeCents === 0 ? (
+            <OrderDetailRow label="Банковская комиссия" value="нет" />
+          ) : (
+            <>
+              <OrderDetailRow
+                label="Комиссия банка всего"
+                value={money(row.totalBankFeeCents)}
+              />
+              <OrderDetailRow
+                label="Доля ресторана"
+                value={money(row.restaurantBankFeeCents)}
+              />
+              <OrderDetailRow
+                label="Доля Direct"
+                value={money(row.directBankFeeCents)}
+              />
+            </>
+          )
+        ) : null}
         <OrderDetailRow
           label="Источник данных"
           value={SETTLEMENT_ROW_DATA_STATUS_LABELS[row.dataStatus]}
@@ -894,7 +943,11 @@ function DayCard({
         <div className={styles.summaryGrid}>
           <SummaryCard label="Заказов" value={String(day.completedOrderCount)} />
           <SummaryCard label="Продажи блюд" value={money(day.foodSubtotalCents)} />
-          <SummaryCard label="Ресторану после комиссии" value={money(day.restaurantNetCents)} />
+          <SummaryCard
+            label="Ресторану после комиссий"
+            value={money(day.restaurantNetCents)}
+            hint="Учтены комиссия Direct и доля банковской комиссии ресторана."
+          />
           <SummaryCard label="Комиссия Direct" value={money(day.platformCommissionReceivableCents)} />
         </div>
 
