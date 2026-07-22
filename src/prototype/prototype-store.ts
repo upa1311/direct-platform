@@ -95,12 +95,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * надмножество предыдущей (v8 добавил restaurantAccountingEntries, v9 —
  * restaurantAccountingResolutionEvents, v10 — каноническое движение денег в
  * FinancialSnapshot, v11 — restaurantSettlementRecords, v12 — снимок
- * финансового правила заказа, v13 — финансовый режим получения платежей),
- * поэтому состояние прежней версии безопасно принимается и доводится
- * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
+ * финансового правила заказа, v13 — финансовый режим получения платежей,
+ * v14 — детали исполнения закрытого расчёта), поэтому состояние прежней версии
+ * безопасно принимается и доводится нормализацией до текущей без потери
+ * данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13,
+  7, 8, 9, 10, 11, 12, 13, 14,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -891,15 +892,28 @@ function normalizeRestaurantAccountingResolutionEvents(
  */
 function normalizeRestaurantSettlementRecords(
   value: unknown,
+  sourceSchemaVersion: number,
 ): PrototypeState["restaurantSettlementRecords"] {
   if (!Array.isArray(value)) {
     return [];
   }
+  // v14: детали исполнения появились только в схеме 14. Запись прежней схемы
+  // помечается LEGACY_UNKNOWN — восстановить её способ, фактическую сумму и
+  // исторический остаток невозможно, и подставлять текущие данные запрещено.
+  // Для состояния схемы 14 отсутствующий execution — повреждение, а не
+  // история: маскировать его архивным маркером нельзя.
+  const migrateExecution = sourceSchemaVersion < 14;
   const kept: PrototypeState["restaurantSettlementRecords"] = [];
   const seenRecordIds = new Set<string>();
   const claimedEntryIds = new Set<string>();
   for (const candidate of value) {
-    const validated = validateRestaurantSettlementRecord(candidate);
+    const prepared =
+      migrateExecution &&
+      isRecord(candidate) &&
+      candidate.execution === undefined
+        ? { ...candidate, execution: { dataStatus: "LEGACY_UNKNOWN" } }
+        : candidate;
+    const validated = validateRestaurantSettlementRecord(prepared);
     if (!validated.ok) continue;
     const record = validated.record;
     if (seenRecordIds.has(record.id)) continue;
@@ -982,6 +996,14 @@ export function normalizePrototypeState(
   state: PrototypeState,
 ): PrototypeState {
   const defaults = createDefaultState();
+  // Исходная версия схемы состояния: отличает МИГРАЦИЮ старых данных от
+  // повреждения данных текущей версии. Неизвестное значение трактуется как
+  // текущая схема — «дочинить» повреждённую новую запись нельзя.
+  const sourceSchemaVersion =
+    typeof state.schemaVersion === "number" &&
+    Number.isInteger(state.schemaVersion)
+      ? state.schemaVersion
+      : PROTOTYPE_SCHEMA_VERSION;
   // §3: рестораны нормализуем до заказов, чтобы восстановить снимок способов
   // оплаты legacy PICKUP-заказов из актуального списка ресторана.
   const restaurants = Array.isArray(state.restaurants)
@@ -1029,6 +1051,7 @@ export function normalizePrototypeState(
       ),
     restaurantSettlementRecords: normalizeRestaurantSettlementRecords(
       state.restaurantSettlementRecords,
+      sourceSchemaVersion,
     ),
     cancellationRequests: normalizeCancellationRequests(
       state.cancellationRequests,

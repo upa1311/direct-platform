@@ -26,15 +26,20 @@ import {
   canConfirmSettlement,
   describeSettlementNet,
   formatSettlementSuccess,
+  LEGACY_EXECUTION_MESSAGE,
+  MANUAL_SETTLEMENT_METHODS,
   openEntryIds,
+  parseSettlementAmountToCents,
   pluralObligations,
   reconcileSelection,
+  RESTAURANT_SETTLEMENT_METHOD_LABELS,
   selectionCheckboxLabel,
   settlementConfirmLabel,
   settlementHistoryLabel,
   toSettlementHistoryRows,
   type SettlementSuccess,
 } from "./settlement-selection";
+import type { RestaurantSettlementMethod } from "@/prototype/models";
 import styles from "./admin-settlements.module.css";
 
 type StatusFilter = "OPEN" | "CLOSED" | "ALL";
@@ -62,6 +67,11 @@ export default function AdminSettlementsPage() {
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
   const [settlementNote, setSettlementNote] = useState("");
   const [settlementReference, setSettlementReference] = useState("");
+  // Способ и фактически переданная сумма (v14). Взаимозачёт выбирается доменом
+  // по нулевому итогу и вручную не назначается.
+  const [settlementMethod, setSettlementMethod] =
+    useState<RestaurantSettlementMethod>("BANK_TRANSFER");
+  const [settlementAmount, setSettlementAmount] = useState("");
   const [settlementSuccess, setSettlementSuccess] =
     useState<SettlementSuccess | null>(null);
   const {
@@ -83,6 +93,8 @@ export default function AdminSettlementsPage() {
     setSelectedEntryIds([]);
     setSettlementNote("");
     setSettlementReference("");
+    setSettlementMethod("BANK_TRANSFER");
+    setSettlementAmount("");
     setSettlementSuccess(null);
     clearSettlementError();
   };
@@ -143,10 +155,17 @@ export default function AdminSettlementsPage() {
   );
 
   const openIds = openEntryIds(allRows);
+  // Взаимозачёт — не ручной выбор: при нулевом итоге он единственно возможен.
+  const effectiveMethod: RestaurantSettlementMethod =
+    previewOk?.netDirection === "BALANCED" ? "NETTING" : settlementMethod;
+  const parsedAmount = parseSettlementAmountToCents(settlementAmount);
   const canSubmitSettlement = canConfirmSettlement({
     hasSelection: effectiveSelectedIds.length > 0,
     previewOk: previewOk !== null,
+    netDirection: previewOk?.netDirection ?? null,
     netAmountCents: previewOk?.netAmountCents ?? null,
+    method: effectiveMethod,
+    amountInput: settlementAmount,
     note: settlementNote,
     reference: settlementReference,
     pending: settlementPending,
@@ -165,13 +184,24 @@ export default function AdminSettlementsPage() {
   const submitSettlement = async () => {
     if (!canSubmitSettlement || !previewOk) return;
     const confirmed = previewOk;
+    // Взаимозачёт: фактически ничего не передаётся.
+    const transferredAmountCents =
+      confirmed.netDirection === "BALANCED"
+        ? 0
+        : parsedAmount.ok
+          ? parsedAmount.cents
+          : -1;
     const res = await runSettlement(async () => {
-      const r = await confirmSettlement(
-        activeRestaurantId,
-        effectiveSelectedIds,
-        settlementNote,
-        settlementReference.trim() ? settlementReference : null,
-      );
+      const r = await confirmSettlement({
+        restaurantId: activeRestaurantId,
+        accountingEntryIds: effectiveSelectedIds,
+        method: effectiveMethod,
+        transferredAmountCents,
+        note: settlementNote,
+        externalReference: settlementReference.trim()
+          ? settlementReference
+          : null,
+      });
       return { ok: r.ok, error: r.error, changed: r.ok };
     });
     // Успех показывается только после реального ok доменного действия.
@@ -180,10 +210,16 @@ export default function AdminSettlementsPage() {
         netDirection: confirmed.netDirection,
         netAmountCents: confirmed.netAmountCents,
         entryCount: confirmed.entryCount,
+        method: effectiveMethod,
+        transferredAmountCents,
+        remainingOpenEntryCount: confirmed.remainingOpenEntryCount,
+        remainingNetDirection: confirmed.remainingNetDirection,
+        remainingNetAmountCents: confirmed.remainingNetAmountCents,
       });
       setSelectedEntryIds([]);
       setSettlementNote("");
       setSettlementReference("");
+      setSettlementAmount("");
     }
   };
 
@@ -350,7 +386,99 @@ export default function AdminSettlementsPage() {
                   </div>
                   <p className={styles.confirmNote}>{previewNet.warning}</p>
 
+                  {/* Остаток открытой позиции берётся из доменного preview и
+                      в React не пересчитывается. */}
+                  <div className={styles.settlementRemaining}>
+                    <h3 className={styles.settlementRemainingTitle}>
+                      После этого расчёта
+                    </h3>
+                    {previewOk.remainingOpenEntryCount === 0 ? (
+                      <p className={styles.settlementHint}>
+                        Открытая позиция будет закрыта полностью.
+                      </p>
+                    ) : (
+                      <div className={styles.settlementPreview}>
+                        <PositionCard
+                          label="Останется обязательств"
+                          value={String(previewOk.remainingOpenEntryCount)}
+                        />
+                        <PositionCard
+                          label="Ресторан будет должен Direct"
+                          value={formatMoney(
+                            previewOk.remainingRestaurantOwesDirectCents,
+                          )}
+                        />
+                        <PositionCard
+                          label="Direct будет должен ресторану"
+                          value={formatMoney(
+                            previewOk.remainingDirectOwesRestaurantCents,
+                          )}
+                        />
+                        <PositionCard
+                          label={settlementHistoryLabel(
+                            previewOk.remainingNetDirection,
+                          )}
+                          value={formatMoney(previewOk.remainingNetAmountCents)}
+                        />
+                      </div>
+                    )}
+                  </div>
+
                   <div className={styles.settlementForm}>
+                    {previewOk.netDirection === "BALANCED" ? (
+                      <div className={styles.field}>
+                        <span>Способ расчёта</span>
+                        <p className={styles.settlementHint}>
+                          Способ:{" "}
+                          {RESTAURANT_SETTLEMENT_METHOD_LABELS.NETTING}
+                        </p>
+                        <p className={styles.settlementHint}>
+                          Фактически передано: {formatMoney(0)}
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        <label className={styles.field}>
+                          <span>Способ расчёта</span>
+                          <select
+                            className={styles.select}
+                            value={settlementMethod}
+                            disabled={settlementPending}
+                            onChange={(e) => {
+                              setSettlementMethod(
+                                e.target.value as RestaurantSettlementMethod,
+                              );
+                              clearSettlementError();
+                            }}
+                          >
+                            {MANUAL_SETTLEMENT_METHODS.map((method) => (
+                              <option value={method} key={method}>
+                                {RESTAURANT_SETTLEMENT_METHOD_LABELS[method]}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className={styles.field}>
+                          <span>Фактически переданная сумма</span>
+                          <input
+                            inputMode="decimal"
+                            value={settlementAmount}
+                            disabled={settlementPending}
+                            onChange={(e) => {
+                              setSettlementAmount(e.target.value);
+                              clearSettlementError();
+                            }}
+                            placeholder={(
+                              previewOk.netAmountCents / 100
+                            ).toFixed(2)}
+                          />
+                          <span className={styles.hint}>
+                            Для полного закрытия сумма должна совпадать с итогом
+                            расчёта. Частичные расчёты пока не поддерживаются.
+                          </span>
+                        </label>
+                      </>
+                    )}
                     <label className={styles.field}>
                       <span>Основание расчёта</span>
                       <textarea
@@ -366,7 +494,7 @@ export default function AdminSettlementsPage() {
                     </label>
                     <label className={styles.field}>
                       <span>
-                        Номер платежа или документа
+                        Номер операции или документа
                         {previewOk.netAmountCents > 0 ? "" : " (необязательно)"}
                       </span>
                       <input
@@ -417,7 +545,8 @@ export default function AdminSettlementsPage() {
                     Расчёт подтверждён.{" "}
                     {formatSettlementSuccess(
                       settlementSuccess,
-                      formatMoney(settlementSuccess.netAmountCents),
+                      formatMoney(settlementSuccess.transferredAmountCents),
+                      formatMoney(settlementSuccess.remainingNetAmountCents),
                     )}
                   </span>
                   <button
@@ -552,6 +681,68 @@ export default function AdminSettlementsPage() {
                       <p className={styles.subtle}>
                         Количество обязательств: {record.entryCount}
                       </p>
+                      {/* Детали исполнения показываются ТОЛЬКО как сохранены в
+                          записи: текущий баланс ресторана сюда не подставляется. */}
+                      {record.execution.dataStatus === "COMPLETE" ? (
+                        <dl className={styles.historyGross}>
+                          <div className={styles.historyGrossRow}>
+                            <dt>Способ расчёта</dt>
+                            <dd>
+                              {
+                                RESTAURANT_SETTLEMENT_METHOD_LABELS[
+                                  record.execution.method
+                                ]
+                              }
+                            </dd>
+                          </div>
+                          <div className={styles.historyGrossRow}>
+                            <dt>Фактически передано</dt>
+                            <dd>
+                              {formatMoney(
+                                record.execution.transferredAmountCents,
+                              )}
+                            </dd>
+                          </div>
+                          <div className={styles.historyGrossRow}>
+                            <dt>Осталось обязательств</dt>
+                            <dd>{record.execution.remainingOpenEntryCount}</dd>
+                          </div>
+                          <div className={styles.historyGrossRow}>
+                            <dt>Остаток: ресторан должен Direct</dt>
+                            <dd>
+                              {formatMoney(
+                                record.execution
+                                  .remainingRestaurantOwesDirectCents,
+                              )}
+                            </dd>
+                          </div>
+                          <div className={styles.historyGrossRow}>
+                            <dt>Остаток: Direct должен ресторану</dt>
+                            <dd>
+                              {formatMoney(
+                                record.execution
+                                  .remainingDirectOwesRestaurantCents,
+                              )}
+                            </dd>
+                          </div>
+                          <div className={styles.historyGrossRow}>
+                            <dt>
+                              {settlementHistoryLabel(
+                                record.execution.remainingNetDirection,
+                              )}
+                            </dt>
+                            <dd>
+                              {formatMoney(
+                                record.execution.remainingNetAmountCents,
+                              )}
+                            </dd>
+                          </div>
+                        </dl>
+                      ) : (
+                        <p className={styles.subtle}>
+                          {LEGACY_EXECUTION_MESSAGE}
+                        </p>
+                      )}
                     </details>
                   </article>
                 ))}

@@ -1,8 +1,13 @@
 import type { AdminAccountingRow } from "@/prototype/restaurant-accounting";
 import type {
+  RestaurantSettlementExecution,
+  RestaurantSettlementMethod,
   RestaurantSettlementNetDirection,
   RestaurantSettlementRecord,
 } from "@/prototype/models";
+// Относительный путь намеренно: этот модуль импортируется напрямую доменными
+// тестами (node --test), где alias `@/` не резолвится для value-импортов.
+import { isSafeCents } from "../../../prototype/bank-fee";
 
 /**
  * Чистая логика выбора обязательств и презентации группового расчёта для
@@ -96,22 +101,100 @@ export function pluralObligations(count: number): string {
   return "обязательств";
 }
 
-/** Можно ли подтверждать расчёт: чистая проверка формы (домен — окончательный). */
+/** Русские подписи способов расчёта (сырой enum наружу не выводится). */
+export const RESTAURANT_SETTLEMENT_METHOD_LABELS: Record<
+  RestaurantSettlementMethod,
+  string
+> = {
+  BANK_TRANSFER: "Банковский перевод",
+  CASH: "Наличные",
+  OTHER: "Другой способ",
+  NETTING: "Взаимозачёт",
+};
+
+/** Способы, доступные администратору вручную при ненулевом итоге расчёта. */
+export const MANUAL_SETTLEMENT_METHODS: readonly RestaurantSettlementMethod[] = [
+  "BANK_TRANSFER",
+  "CASH",
+  "OTHER",
+];
+
+export type SettlementAmountParseResult =
+  | { ok: true; cents: number }
+  | { ok: false; error: string };
+
+/**
+ * Строгий разбор фактически переданной суммы в центы.
+ *
+ * Финансовое подтверждение не имеет права молча превратить повреждённый ввод в
+ * ноль или неоднозначно округлить: принимается только неотрицательное
+ * десятичное число максимум с двумя знаками после разделителя, без экспоненты.
+ * Центы собираются целочисленно (целая часть × 100 + дробная), поэтому
+ * плавающей арифметики в результате нет; итог дополнительно проверяется на
+ * безопасный целый диапазон.
+ */
+export function parseSettlementAmountToCents(
+  value: string,
+): SettlementAmountParseResult {
+  const raw = (value ?? "").trim().replace(",", ".");
+  if (raw.length === 0) {
+    return { ok: false, error: "Укажите фактически переданную сумму." };
+  }
+  if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+    return {
+      ok: false,
+      error:
+        "Сумма указывается в долларах, максимум с двумя знаками после точки.",
+    };
+  }
+  const [whole, fraction = ""] = raw.split(".");
+  const wholeCents = Number(whole) * 100;
+  const cents = wholeCents + Number(fraction.padEnd(2, "0"));
+  if (!isSafeCents(wholeCents) || !isSafeCents(cents)) {
+    return { ok: false, error: "Сумма выходит за безопасный диапазон." };
+  }
+  return { ok: true, cents };
+}
+
+/** Допустим ли способ расчёта для готового направления итога. */
+export function isMethodAllowedForNet(
+  method: RestaurantSettlementMethod,
+  netDirection: RestaurantSettlementNetDirection,
+): boolean {
+  return netDirection === "BALANCED"
+    ? method === "NETTING"
+    : MANUAL_SETTLEMENT_METHODS.includes(method);
+}
+
+/**
+ * Можно ли подтверждать расчёт: чистая проверка формы. Домен остаётся
+ * окончательным guard — здесь только защита от заведомо неотправляемой формы.
+ */
 export function canConfirmSettlement(input: {
   hasSelection: boolean;
   previewOk: boolean;
+  netDirection: RestaurantSettlementNetDirection | null;
   netAmountCents: number | null;
+  method: RestaurantSettlementMethod;
+  amountInput: string;
   note: string;
   reference: string;
   pending: boolean;
 }): boolean {
   if (!input.hasSelection || !input.previewOk || input.pending) return false;
   if (input.note.trim().length === 0) return false;
+  if (input.netDirection === null) return false;
+  if (!isMethodAllowedForNet(input.method, input.netDirection)) return false;
+
+  // Взаимозачёт: внешнего платежа нет, ссылка и сумма не требуются.
+  if (input.netDirection === "BALANCED") return true;
+
   // Ненулевой итог означает внешний платёж — нужна ссылка на него.
-  if ((input.netAmountCents ?? 0) > 0 && input.reference.trim().length === 0) {
-    return false;
-  }
-  return true;
+  if (input.reference.trim().length === 0) return false;
+  const parsed = parseSettlementAmountToCents(input.amountInput);
+  if (!parsed.ok) return false;
+  // Частичные расчёты не поддерживаются: сумма обязана совпасть точно.
+  return parsed.cents === input.netAmountCents;
 }
 
 /** Данные успешного подтверждения для спокойного баннера. */
@@ -119,18 +202,34 @@ export interface SettlementSuccess {
   netDirection: RestaurantSettlementNetDirection;
   netAmountCents: number;
   entryCount: number;
+  method: RestaurantSettlementMethod;
+  transferredAmountCents: number;
+  remainingOpenEntryCount: number;
+  remainingNetDirection: RestaurantSettlementNetDirection;
+  remainingNetAmountCents: number;
 }
 
-/** Сообщение об успешном расчёте: направление, сумма и сколько закрыто. */
+/**
+ * Сообщение об успешном расчёте: кто кому выплатил, фактическая сумма, способ,
+ * сколько обязательств закрыто и какой остаток остался. Показывается только
+ * после реального доменного успеха.
+ */
 export function formatSettlementSuccess(
   success: SettlementSuccess,
-  amountText: string,
+  transferredText: string,
+  remainingText: string,
 ): string {
   const closed = `Закрыто ${success.entryCount} ${pluralObligations(success.entryCount)}.`;
-  if (success.netDirection === "BALANCED") {
-    return `Зафиксирован взаимозачёт равных обязательств. ${closed}`;
-  }
-  return `${settlementHistoryLabel(success.netDirection)}: ${amountText}. ${closed}`;
+  const method = `Способ: ${RESTAURANT_SETTLEMENT_METHOD_LABELS[success.method]}.`;
+  const remaining =
+    success.remainingOpenEntryCount === 0
+      ? "Открытая позиция закрыта полностью."
+      : `Остаток: ${settlementHistoryLabel(success.remainingNetDirection)} — ${remainingText}, осталось ${success.remainingOpenEntryCount} ${pluralObligations(success.remainingOpenEntryCount)}.`;
+  const head =
+    success.netDirection === "BALANCED"
+      ? "Зафиксирован взаимозачёт равных обязательств."
+      : `${settlementHistoryLabel(success.netDirection)}: ${transferredText}.`;
+  return `${head} ${method} ${closed} ${remaining}`;
 }
 
 /** Запись истории без внутренних идентификаторов обязательств. */
@@ -144,7 +243,13 @@ export interface SettlementHistoryRow {
   netAmountCents: number;
   note: string;
   externalReference: string | null;
+  /** v14: детали исполнения как они сохранены в записи (не пересчитываются). */
+  execution: RestaurantSettlementExecution;
 }
+
+/** Честное сообщение для архивной записи без деталей исполнения. */
+export const LEGACY_EXECUTION_MESSAGE =
+  "Архивная запись: способ, фактическая сумма и остаток после расчёта не были сохранены.";
 
 /**
  * История групповых расчётов для показа: внутренние accountingEntryIds наружу
@@ -164,5 +269,6 @@ export function toSettlementHistoryRows(
     netAmountCents: record.netAmountCents,
     note: record.note,
     externalReference: record.externalReference,
+    execution: record.execution,
   }));
 }

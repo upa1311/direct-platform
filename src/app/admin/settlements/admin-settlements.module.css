@@ -120,6 +120,19 @@
   line-height: 1.45;
 }
 
+/* Остаток открытой позиции после расчёта: тот же ритм, что и preview. */
+.settlementRemaining {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settlementRemainingTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 /* Preview: на узком экране одна колонка, без горизонтального overflow. */
 .settlementPreview {
   display: grid;

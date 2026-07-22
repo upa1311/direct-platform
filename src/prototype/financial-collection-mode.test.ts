@@ -215,13 +215,13 @@ test("3: legacy-ресторан без поля получает MIXED_COLLECTI
   }
 });
 
-test("4: схема мигрирует 12 → 13", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 13);
+test("4: схема мигрирует 12 → текущую", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 14);
   const legacy = createDefaultState() as unknown as Record<string, unknown>;
   legacy.schemaVersion = 12;
   const parsed = parseStoredState(JSON.stringify(legacy));
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 13);
+  assert.equal(parsed.schemaVersion, PROTOTYPE_SCHEMA_VERSION);
 });
 
 test("5: шаблон «с водителями Direct» по умолчанию MIXED_COLLECTION", () => {
@@ -747,14 +747,15 @@ test("38: групповой расчёт закрывает перечисле�
     (e) => e.orderId === orderId,
   );
   assert.ok(entry);
-  const res = confirmRestaurantSettlement(
-    state,
-    "restaurant-2",
-    [entry.id],
-    "Перечисление получено",
-    "ref-42",
-    NOW,
-  );
+  const res = confirmRestaurantSettlement(state, {
+    restaurantId: "restaurant-2",
+    accountingEntryIds: [entry.id],
+    method: "BANK_TRANSFER",
+    transferredAmountCents: entry.amountCents,
+    note: "Перечисление получено",
+    externalReference: "ref-42",
+    nowIso: NOW,
+  });
   assert.equal(res.result.error, null);
   assert.ok(res.result.settlementRecordId);
   const closed = res.state.restaurantAccountingEntries.find(
@@ -774,14 +775,15 @@ test("39: legacy SettlementEntry для перечисления не созда
     (e) => e.orderId === orderId,
   );
   assert.ok(entry);
-  const res = confirmRestaurantSettlement(
-    state,
-    "restaurant-2",
-    [entry.id],
-    "Перечисление получено",
-    "ref-43",
-    NOW,
-  );
+  const res = confirmRestaurantSettlement(state, {
+    restaurantId: "restaurant-2",
+    accountingEntryIds: [entry.id],
+    method: "BANK_TRANSFER",
+    transferredAmountCents: entry.amountCents,
+    note: "Перечисление получено",
+    externalReference: "ref-43",
+    nowIso: NOW,
+  });
   assert.equal(res.result.error, null);
   // Групповое закрытие перечисления не порождает старую запись комиссии.
   assert.deepEqual(

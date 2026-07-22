@@ -3,9 +3,11 @@ import type {
   PrototypeState,
   RestaurantAccountingEntry,
   RestaurantAccountingResolutionEvent,
+  RestaurantSettlementMethod,
   RestaurantSettlementNetDirection,
   RestaurantSettlementRecord,
 } from "./models";
+import { addChecked, isSafeCents, subtractChecked } from "./bank-fee";
 import { finalizeMutation } from "./prototype-store";
 import {
   ACCOUNTING_RESOLUTION_NOTE_MAX,
@@ -14,6 +16,7 @@ import {
 import {
   isAllowedDirectionTypePair,
   isCanonicalIsoTimestamp,
+  PARTIAL_SETTLEMENT_ERROR,
   SETTLEMENT_DIRECTION_TYPE_ERROR,
   validateRestaurantSettlementRecord,
 } from "./restaurant-settlement-integrity";
@@ -46,6 +49,16 @@ export interface RestaurantSettlementPreview {
   netDirection: RestaurantSettlementNetDirection;
   netAmountCents: number;
   entryCount: number;
+  /**
+   * Открытая позиция ресторана, которая ОСТАНЕТСЯ после подтверждения этого
+   * расчёта: все прочие OPEN-обязательства ресторана. Это не «недоплаченная
+   * часть» текущего расчёта — частичных расчётов не бывает.
+   */
+  remainingOpenEntryCount: number;
+  remainingRestaurantOwesDirectCents: number;
+  remainingDirectOwesRestaurantCents: number;
+  remainingNetDirection: RestaurantSettlementNetDirection;
+  remainingNetAmountCents: number;
 }
 
 export type RestaurantSettlementPreviewResult =
@@ -63,17 +76,40 @@ function previewFail(error: string): RestaurantSettlementPreviewResult {
   return { ok: false, error };
 }
 
-/** Положительные целые конечные центы (сумма обязательства). */
+/**
+ * Положительная сумма обязательства: безопасные центы строго больше нуля.
+ * Денежные helpers — общие (bank-fee), второй реализации в проекте нет.
+ */
 function isPositiveCents(value: unknown): value is number {
-  return (
-    typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0
-  );
+  return isSafeCents(value) && value > 0;
 }
 
-/** Сложение с проверкой безопасного целочисленного диапазона. */
-function addChecked(a: number, b: number): number | null {
-  const sum = a + b;
-  return Number.isSafeInteger(sum) ? sum : null;
+/** Направление итога по gross-сторонам. */
+function netDirectionOf(
+  restaurantOwesDirectCents: number,
+  directOwesRestaurantCents: number,
+): RestaurantSettlementNetDirection {
+  if (directOwesRestaurantCents > restaurantOwesDirectCents) {
+    return "DIRECT_OWES_RESTAURANT";
+  }
+  if (restaurantOwesDirectCents > directOwesRestaurantCents) {
+    return "RESTAURANT_OWES_DIRECT";
+  }
+  return "BALANCED";
+}
+
+/**
+ * Модуль разницы сторон checked-вычитанием: вычитается меньшее из большего,
+ * поэтому отрицательного промежуточного значения и Math.abs над небезопасным
+ * числом не возникает.
+ */
+function netAmountOf(
+  restaurantOwesDirectCents: number,
+  directOwesRestaurantCents: number,
+): number | null {
+  return directOwesRestaurantCents >= restaurantOwesDirectCents
+    ? subtractChecked(directOwesRestaurantCents, restaurantOwesDirectCents)
+    : subtractChecked(restaurantOwesDirectCents, directOwesRestaurantCents);
 }
 
 /**
@@ -113,8 +149,8 @@ export function buildRestaurantSettlementPreview(
   if (!Array.isArray(accountingEntryIds) || accountingEntryIds.length === 0) {
     return previewFail("Выберите обязательства для расчёта.");
   }
-  const uniqueIds = new Set(accountingEntryIds);
-  if (uniqueIds.size !== accountingEntryIds.length) {
+  const selectedIds = new Set(accountingEntryIds);
+  if (selectedIds.size !== accountingEntryIds.length) {
     return previewFail("Обязательство указано в расчёте несколько раз.");
   }
 
@@ -206,17 +242,32 @@ export function buildRestaurantSettlementPreview(
     return previewFail("Не удалось определить валюту расчёта.");
   }
 
-  const netDirection: RestaurantSettlementNetDirection =
-    directOwesRestaurantCents > restaurantOwesDirectCents
-      ? "DIRECT_OWES_RESTAURANT"
-      : restaurantOwesDirectCents > directOwesRestaurantCents
-        ? "RESTAURANT_OWES_DIRECT"
-        : "BALANCED";
-  const netAmountCents = Math.abs(
-    directOwesRestaurantCents - restaurantOwesDirectCents,
+  const netDirection = netDirectionOf(
+    restaurantOwesDirectCents,
+    directOwesRestaurantCents,
   );
-  if (!Number.isSafeInteger(netAmountCents)) {
+  const netAmountCents = netAmountOf(
+    restaurantOwesDirectCents,
+    directOwesRestaurantCents,
+  );
+  if (netAmountCents === null) {
     return previewFail("Сумма расчёта слишком велика.");
+  }
+
+  // Остаток открытой позиции ПОСЛЕ этого расчёта: все прочие OPEN-обязательства
+  // ресторана. Чтобы остаток можно было честно зафиксировать в записи, каждое
+  // из них проходит ту же проверку целостности — иначе снимок остатка был бы
+  // правдоподобным, но недостоверным.
+  const remaining = computeRemainingOpenPosition(
+    state,
+    restaurantId,
+    currencyCode,
+    selectedIds,
+    resolvedEntryIds,
+    alreadySettledIds,
+  );
+  if (!remaining.ok) {
+    return previewFail(remaining.error);
   }
 
   return {
@@ -230,8 +281,137 @@ export function buildRestaurantSettlementPreview(
       netDirection,
       netAmountCents,
       entryCount: accountingEntryIds.length,
+      remainingOpenEntryCount: remaining.openEntryCount,
+      remainingRestaurantOwesDirectCents: remaining.restaurantOwesDirectCents,
+      remainingDirectOwesRestaurantCents: remaining.directOwesRestaurantCents,
+      remainingNetDirection: remaining.netDirection,
+      remainingNetAmountCents: remaining.netAmountCents,
     },
   };
+}
+
+/** Открытая позиция, остающаяся после закрытия выбранных обязательств. */
+type RemainingOpenPosition =
+  | {
+      ok: true;
+      openEntryCount: number;
+      restaurantOwesDirectCents: number;
+      directOwesRestaurantCents: number;
+      netDirection: RestaurantSettlementNetDirection;
+      netAmountCents: number;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Остаток открытой позиции ресторана без выбранных обязательств.
+ *
+ * Учитываются ТОЛЬКО OPEN-обязательства этого ресторана, не входящие в текущий
+ * расчёт. SETTLED, WAIVED и обязательства других ресторанов не участвуют.
+ * Каждое оставшееся обязательство проверяется так же строго, как выбранное:
+ * известные direction/type, допустимая пара, положительная безопасная сумма,
+ * та же валюта, отсутствие второго обязательства того же заказа, отсутствие
+ * resolution event у OPEN-записи и отсутствие в уже закрытых расчётах.
+ * Повреждённая оставшаяся позиция — fail-closed, а не правдоподобный ноль.
+ */
+function computeRemainingOpenPosition(
+  state: PrototypeState,
+  restaurantId: string,
+  currencyCode: CurrencyCode,
+  selectedIds: ReadonlySet<string>,
+  resolvedEntryIds: ReadonlySet<string>,
+  alreadySettledIds: ReadonlySet<string>,
+): RemainingOpenPosition {
+  const fail = (error: string): RemainingOpenPosition => ({ ok: false, error });
+
+  let restaurantOwesDirectCents = 0;
+  let directOwesRestaurantCents = 0;
+  let openEntryCount = 0;
+  const seenOrderIds = new Set<string>();
+
+  for (const entry of state.restaurantAccountingEntries) {
+    if (entry.restaurantId !== restaurantId) continue;
+    if (entry.status !== "OPEN") continue;
+    if (selectedIds.has(entry.id)) continue;
+
+    if (resolvedEntryIds.has(entry.id)) {
+      return fail("По открытому обязательству уже есть решение администратора.");
+    }
+    if (alreadySettledIds.has(entry.id)) {
+      return fail("Открытое обязательство уже входит в закрытый расчёт.");
+    }
+    if (
+      entry.direction !== "RESTAURANT_OWES_DIRECT" &&
+      entry.direction !== "DIRECT_OWES_RESTAURANT"
+    ) {
+      return fail("Неизвестное направление обязательства.");
+    }
+    if (
+      entry.type !== "PLATFORM_COMMISSION" &&
+      entry.type !== "RESTAURANT_PAYOUT" &&
+      entry.type !== "RESTAURANT_REMITTANCE"
+    ) {
+      return fail("Неизвестный тип обязательства.");
+    }
+    if (!isAllowedDirectionTypePair(entry.direction, entry.type)) {
+      return fail(SETTLEMENT_DIRECTION_TYPE_ERROR);
+    }
+    if (!isPositiveCents(entry.amountCents)) {
+      return fail("Некорректная сумма обязательства.");
+    }
+    if (entry.currencyCode !== currencyCode) {
+      return fail("В открытой позиции ресторана разные валюты.");
+    }
+    if (seenOrderIds.has(entry.orderId)) {
+      return fail("У заказа обнаружено несколько открытых обязательств.");
+    }
+    seenOrderIds.add(entry.orderId);
+
+    if (entry.direction === "RESTAURANT_OWES_DIRECT") {
+      const next = addChecked(restaurantOwesDirectCents, entry.amountCents);
+      if (next === null) return fail("Остаток расчёта слишком велик.");
+      restaurantOwesDirectCents = next;
+    } else {
+      const next = addChecked(directOwesRestaurantCents, entry.amountCents);
+      if (next === null) return fail("Остаток расчёта слишком велик.");
+      directOwesRestaurantCents = next;
+    }
+    openEntryCount += 1;
+  }
+
+  const netAmountCents = netAmountOf(
+    restaurantOwesDirectCents,
+    directOwesRestaurantCents,
+  );
+  if (netAmountCents === null) {
+    return fail("Остаток расчёта слишком велик.");
+  }
+  return {
+    ok: true,
+    openEntryCount,
+    restaurantOwesDirectCents,
+    directOwesRestaurantCents,
+    netDirection: netDirectionOf(
+      restaurantOwesDirectCents,
+      directOwesRestaurantCents,
+    ),
+    netAmountCents,
+  };
+}
+
+/**
+ * Вход подтверждения расчёта: объект вместо длинного позиционного списка —
+ * добавление способа и фактической суммы не должно превращать вызов в набор
+ * безымянных аргументов.
+ */
+export interface ConfirmRestaurantSettlementInput {
+  restaurantId: string;
+  accountingEntryIds: readonly string[];
+  method: RestaurantSettlementMethod;
+  transferredAmountCents: number;
+  note: string;
+  externalReference: string | null;
+  /** Момент операции; по умолчанию — текущее время. */
+  nowIso?: string;
 }
 
 /**
@@ -250,12 +430,17 @@ export function buildRestaurantSettlementPreview(
  */
 export function confirmRestaurantSettlement(
   state: PrototypeState,
-  restaurantId: string,
-  accountingEntryIds: readonly string[],
-  note: string,
-  externalReference: string | null,
-  nowIso: string = new Date().toISOString(),
+  input: ConfirmRestaurantSettlementInput,
 ): { state: PrototypeState; result: RestaurantSettlementConfirmResult } {
+  const {
+    restaurantId,
+    accountingEntryIds,
+    method,
+    transferredAmountCents,
+    note,
+    externalReference,
+    nowIso = new Date().toISOString(),
+  } = input;
   const fail = (error: string) => ({
     state,
     result: { ok: false, error, settlementRecordId: null },
@@ -302,6 +487,28 @@ export function confirmRestaurantSettlement(
     return fail("Укажите внешнюю ссылку на платёж.");
   }
 
+  // v14: способ и фактически переданная сумма проверяются ДО любых изменений.
+  // Частичные расчёты не поддерживаются: при ненулевом итоге сумма обязана
+  // совпасть точно, иначе закрывать все обязательства как SETTLED нельзя.
+  if (!isSafeCents(transferredAmountCents)) {
+    return fail("Некорректная фактически переданная сумма.");
+  }
+  if (preview.netDirection === "BALANCED") {
+    if (method !== "NETTING") {
+      return fail("При нулевом итоге возможен только взаимозачёт.");
+    }
+    if (transferredAmountCents !== 0) {
+      return fail("При взаимозачёте фактически переданная сумма равна нулю.");
+    }
+  } else {
+    if (method !== "BANK_TRANSFER" && method !== "CASH" && method !== "OTHER") {
+      return fail("Выберите способ фактического расчёта.");
+    }
+    if (transferredAmountCents !== preview.netAmountCents) {
+      return fail(PARTIAL_SETTLEMENT_ERROR);
+    }
+  }
+
   const recordId = settlementRecordId(
     restaurantId,
     nowIso,
@@ -325,6 +532,20 @@ export function confirmRestaurantSettlement(
     actor: "ADMIN",
     note: normalizedNote,
     externalReference: normalizedReference,
+    // Остаток берётся ТОЛЬКО из свежего preview: переданным из UI значениям
+    // gross/net/remaining доверия нет, они всегда строятся заново из state.
+    execution: {
+      dataStatus: "COMPLETE",
+      method,
+      transferredAmountCents,
+      remainingOpenEntryCount: preview.remainingOpenEntryCount,
+      remainingRestaurantOwesDirectCents:
+        preview.remainingRestaurantOwesDirectCents,
+      remainingDirectOwesRestaurantCents:
+        preview.remainingDirectOwesRestaurantCents,
+      remainingNetDirection: preview.remainingNetDirection,
+      remainingNetAmountCents: preview.remainingNetAmountCents,
+    },
   };
   // Defensive invariant: создаваемая запись проходит тот же канонический
   // validator, что и сохранённые. Неожиданно невалидная запись не должна

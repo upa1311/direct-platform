@@ -419,13 +419,13 @@ test("normalizeStoredMoneyMovement: суммы без правила не даю
 
 // 21/22 — persistence -------------------------------------------------------------------
 
-test("состояния v11 парсятся, схема становится 13", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 13);
+test("состояния v11 парсятся, схема становится текущей", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 14);
   const legacy = createDefaultState() as unknown as Record<string, unknown>;
   legacy.schemaVersion = 11;
   const parsed = parseStoredState(JSON.stringify(legacy));
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 13);
+  assert.equal(parsed.schemaVersion, 14);
 
   // Заказ с валидным правилом переживает serialize/parse без изменений.
   const { state, orderId } = platformOrder();

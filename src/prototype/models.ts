@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 13 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 14 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -189,6 +189,38 @@ export type RestaurantSettlementNetDirection =
  * решение. Списание требований (WAIVED) в групповой расчёт не входит и
  * остаётся отдельным workflow resolveRestaurantAccountingEntry.
  */
+/** Способ фактического расчёта между Direct и рестораном (v14). */
+export type RestaurantSettlementMethod =
+  | "BANK_TRANSFER"
+  | "CASH"
+  | "OTHER"
+  | "NETTING";
+
+/**
+ * Детали фактического исполнения расчёта (v14). Discriminated union, а не
+ * набор независимых optional-полей: неполная комбинация «способ есть, суммы
+ * нет» в типе существовать не должна.
+ *
+ * LEGACY_UNKNOWN — запись схем 11–13, созданная до появления этих деталей.
+ * Восстановить их задним числом невозможно (исторический остаток после той
+ * операции уже не выводится из текущего состояния), поэтому они честно
+ * отсутствуют и НЕ додумываются.
+ */
+export type RestaurantSettlementExecution =
+  | {
+      dataStatus: "COMPLETE";
+      method: RestaurantSettlementMethod;
+      /** Фактически переданная сумма; при взаимозачёте — 0. */
+      transferredAmountCents: number;
+      /** Открытая позиция ресторана ПОСЛЕ этого расчёта (snapshot). */
+      remainingOpenEntryCount: number;
+      remainingRestaurantOwesDirectCents: number;
+      remainingDirectOwesRestaurantCents: number;
+      remainingNetDirection: RestaurantSettlementNetDirection;
+      remainingNetAmountCents: number;
+    }
+  | { dataStatus: "LEGACY_UNKNOWN" };
+
 export interface RestaurantSettlementRecord {
   id: string;
   restaurantId: string;
@@ -203,6 +235,8 @@ export interface RestaurantSettlementRecord {
   actor: "ADMIN";
   note: string;
   externalReference: string | null;
+  /** v14: способ расчёта, фактическая сумма и остаток открытой позиции. */
+  execution: RestaurantSettlementExecution;
 }
 
 export type PromotionType = "BUY_N_GET_M_CHEAPEST_FREE";

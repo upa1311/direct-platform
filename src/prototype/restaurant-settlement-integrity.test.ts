@@ -26,20 +26,48 @@ const NOW = "2026-07-20T12:00:00.000Z";
 function validRecord(
   overrides: Partial<RestaurantSettlementRecord> = {},
 ): RestaurantSettlementRecord {
-  return {
+  const base = {
     id: "settlement-record-1",
     restaurantId: "restaurant-1",
-    currencyCode: "USD",
+    currencyCode: "USD" as const,
     accountingEntryIds: ["c1", "p1"],
     restaurantOwesDirectCents: 800,
     directOwesRestaurantCents: 5100,
-    netDirection: "DIRECT_OWES_RESTAURANT",
+    netDirection: "DIRECT_OWES_RESTAURANT" as const,
     netAmountCents: 4300,
     settledAt: NOW,
-    actor: "ADMIN",
+    actor: "ADMIN" as const,
     note: "Перевод подтверждён",
-    externalReference: "bank-777",
+    externalReference: "bank-777" as string | null,
     ...overrides,
+  };
+  // v14: детали исполнения по умолчанию согласованы с итогом самой записи —
+  // тесты, проверяющие ДРУГИЕ поля, не должны падать из-за них.
+  return {
+    ...base,
+    execution:
+      overrides.execution ??
+      (base.netDirection === "BALANCED"
+        ? {
+            dataStatus: "COMPLETE",
+            method: "NETTING",
+            transferredAmountCents: 0,
+            remainingOpenEntryCount: 0,
+            remainingRestaurantOwesDirectCents: 0,
+            remainingDirectOwesRestaurantCents: 0,
+            remainingNetDirection: "BALANCED",
+            remainingNetAmountCents: 0,
+          }
+        : {
+            dataStatus: "COMPLETE",
+            method: "BANK_TRANSFER",
+            transferredAmountCents: base.netAmountCents,
+            remainingOpenEntryCount: 0,
+            remainingRestaurantOwesDirectCents: 0,
+            remainingDirectOwesRestaurantCents: 0,
+            remainingNetDirection: "BALANCED",
+            remainingNetAmountCents: 0,
+          }),
   };
 }
 

@@ -100,6 +100,7 @@ import {
 } from "./restaurant-accounting";
 import {
   confirmRestaurantSettlement,
+  type ConfirmRestaurantSettlementInput,
   type RestaurantSettlementConfirmResult,
 } from "./restaurant-settlement-records";
 import type { EtaAdjustmentIntent } from "./order-eta";
@@ -320,10 +321,7 @@ export interface PrototypeContextValue {
    * строит канонический preview — UI-preview авторитетным не считается.
    */
   confirmSettlement: (
-    restaurantId: string,
-    accountingEntryIds: readonly string[],
-    note: string,
-    externalReference: string | null,
+    input: Omit<ConfirmRestaurantSettlementInput, "nowIso">,
   ) => Promise<RestaurantSettlementConfirmResult>;
   /** Выдача самовывоза после фактической оплаты на точке; код не требуется. */
   completePickup: (
@@ -1313,25 +1311,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const confirmSettlement = useCallback(
-    (
-      restaurantId: string,
-      accountingEntryIds: readonly string[],
-      note: string,
-      externalReference: string | null,
-    ) => {
+    (input: Omit<ConfirmRestaurantSettlementInput, "nowIso">) => {
       // Один канонический момент операции на всю транзакцию: он попадёт в
       // запись расчёта, закрытые обязательства, audit-события и её id.
       const nowIso = new Date().toISOString();
       return runSerializedActionMutation({
         mutation: (baseState) =>
-          confirmRestaurantSettlement(
-            baseState,
-            restaurantId,
-            accountingEntryIds,
-            note,
-            externalReference,
-            nowIso,
-          ),
+          confirmRestaurantSettlement(baseState, { ...input, nowIso }),
         infrastructureFailure: (error) => ({
           ok: false,
           error,
