@@ -8,6 +8,7 @@ import {
   adminCancelOrder,
   assignDriverToOrder,
   createOrderFromCart,
+  goDriverOnline,
   requestOrderCancellationByClient,
   simulateSuccessfulOnlinePayment,
   updateCartAddress,
@@ -239,7 +240,8 @@ function paidPlatformPreparingWithDriver(): {
   state: PrototypeState;
   orderId: string;
 } {
-  let s = createDefaultState();
+  // v16: назначить можно только онлайн-водителя с подтверждённой зоной.
+  let s = goDriverOnline(createDefaultState(), "driver-1", "zone-1").state;
   s = updateCartAddress(s, ADDR);
   s = addCartItem(s, "restaurant-2-item-1").state;
   const created = createOrderFromCart(s);
@@ -255,7 +257,10 @@ test("§3: adminCancelOrder с PENDING-запросом — атомарно APP
   const withReq = requestOrderCancellationByClient(state, orderId, "причина").state;
   const settlementsBefore = JSON.stringify(withReq.settlements);
   const financialsBefore = JSON.stringify(orderOf(withReq, orderId).financials);
-  assert.equal(withReq.drivers.find((d) => d.id === "driver-1")?.status, "BUSY");
+  assert.equal(
+    withReq.drivers.find((d) => d.id === "driver-1")?.status,
+    "BUSY_DIRECT",
+  );
 
   const res = adminCancelOrder(withReq, orderId, "решение админа");
   assert.equal(res.result.ok, true);
@@ -265,7 +270,10 @@ test("§3: adminCancelOrder с PENDING-запросом — атомарно APP
   assert.ok(order.paidAt);
   assert.equal(JSON.stringify(res.state.settlements), settlementsBefore);
   assert.equal(JSON.stringify(order.financials), financialsBefore);
-  assert.equal(res.state.drivers.find((d) => d.id === "driver-1")?.status, "AVAILABLE");
+  assert.equal(
+    res.state.drivers.find((d) => d.id === "driver-1")?.status,
+    "ZONE_CONFIRMATION_REQUIRED",
+  );
 
   const request = res.state.cancellationRequests.find((r) => r.orderId === orderId);
   assert.equal(request?.status, "APPROVED");

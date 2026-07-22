@@ -14,6 +14,7 @@ import type {
   DriverProfile,
   DriverStatus,
   FulfillmentChoice,
+  ZoneId,
   MenuItemSubmission,
   MenuItemSubmissionStatus,
   MenuItemSubmissionVariant,
@@ -3143,26 +3144,40 @@ function isTerminalOrderStatus(status: OrderStatus): boolean {
 }
 
 /**
- * Освобождает назначенного водителя заказа `releasedOrderId`. Fail-closed: в
- * AVAILABLE переводим только если у водителя НЕ осталось другого активного
- * заказа (проверка через getDriverActiveOrder с исключением освобождаемого
- * заказа). Если другой активный заказ есть (в т.ч. при повреждённом двойном
- * назначении) — водитель остаётся/становится BUSY, а не AVAILABLE.
+ * Освобождает назначенного водителя заказа `releasedOrderId`.
+ *
+ * Освобождённый водитель НЕ становится сразу доступным: после завершения,
+ * отмены или снятия назначения он попадает в ZONE_CONFIRMATION_REQUIRED и до
+ * подтверждения текущей зоны предложения не получает. Система не решает за
+ * водителя, где он физически оказался, — она может лишь предложить зону
+ * завершённого заказа через `suggestedZoneId`.
+ *
+ * Fail-closed: если у водителя остался ДРУГОЙ активный заказ (в т.ч. при
+ * повреждённом двойном назначении), он остаётся BUSY_DIRECT, а зона и
+ * предложение не трогаются.
  */
 function releaseAssignedDriver(
   state: PrototypeState,
   driverId: string | null,
   releasedOrderId: string,
+  suggestedZoneId: ZoneId | null = null,
 ): DriverProfile[] {
   if (!driverId) {
     return state.drivers;
   }
   const hasOtherActive =
     getDriverActiveOrder(state, driverId, releasedOrderId) !== null;
-  return setDriverStatus(
-    state.drivers,
-    driverId,
-    hasOtherActive ? "BUSY" : "AVAILABLE",
+  if (hasOtherActive) {
+    return setDriverStatus(state.drivers, driverId, "BUSY_DIRECT");
+  }
+  return state.drivers.map((driver) =>
+    driver.id === driverId
+      ? {
+          ...driver,
+          status: "ZONE_CONFIRMATION_REQUIRED" as const,
+          suggestedZoneId,
+        }
+      : driver,
   );
 }
 
@@ -3173,6 +3188,17 @@ function setDriverStatus(
 ): DriverProfile[] {
   return drivers.map((driver) =>
     driver.id === driverId ? { ...driver, status } : driver,
+  );
+}
+
+/** Точечное обновление полей водителя без пересборки остальных. */
+function updateDriver(
+  drivers: DriverProfile[],
+  driverId: string,
+  patch: Partial<DriverProfile>,
+): DriverProfile[] {
+  return drivers.map((driver) =>
+    driver.id === driverId ? { ...driver, ...patch } : driver,
   );
 }
 
@@ -3932,68 +3958,284 @@ export interface DriverActionResult {
   error: string | null;
 }
 
+const driverFail = (
+  state: PrototypeState,
+  error: string,
+): ActionResult<DriverActionResult> => ({
+  state,
+  result: { ok: false, error },
+});
+
+const driverOk = (
+  nextState: PrototypeState,
+): ActionResult<DriverActionResult> => ({
+  state: nextState,
+  result: { ok: true, error: null },
+});
+
+/** Текст отказа при попытке сменить доступность во время активной доставки. */
+const DRIVER_BUSY_ERROR = "Нельзя менять доступность во время активной доставки.";
+/** Текст отказа, когда действие требует уже подтверждённой зоны. */
+const DRIVER_ZONE_REQUIRED_ERROR = "Сначала выберите текущую зону.";
+
+/** Существует ли такая зона в текущем состоянии прототипа. */
+function zoneExists(state: PrototypeState, zoneId: ZoneId): boolean {
+  return state.zones.some((zone) => zone.id === zoneId);
+}
+
 /**
- * Водитель сам управляет сменой: онлайн (`OFFLINE → AVAILABLE`) или офлайн
- * (`AVAILABLE → OFFLINE`). Инварианты:
- *  - неизвестный водитель → ошибка, состояние не меняется;
- *  - уйти офлайн во время активной доставки нельзя (есть заказ в работе или
- *    статус `BUSY`) — сначала завершается доставка;
- *  - `BUSY` онлайн-запросом не понижается (водитель уже на смене и везёт заказ);
- *  - повторный запрос того же состояния — успех без изменения ревизии (no-op).
+ * Водитель выходит онлайн, ВРУЧНУЮ указывая текущую зону. Зона никогда не
+ * определяется автоматически: система не знает, где водитель физически
+ * находится, и не подставляет правдоподобное значение.
  *
- * `BUSY` устанавливается/снимается только жизненным циклом назначения (assign /
- * complete / cancel), а не этим действием. Состояние не мутируется.
+ * Инварианты: водитель и зона существуют; активного заказа нет; BUSY_DIRECT
+ * этим действием не понижается. Повторный вызов с той же зоной — успешный
+ * no-op без роста ревизии.
+ */
+export function goDriverOnline(
+  state: PrototypeState,
+  driverId: string,
+  zoneId: ZoneId,
+): ActionResult<DriverActionResult> {
+  const driver = state.drivers.find((d) => d.id === driverId);
+  if (!driver) return driverFail(state, "Водитель не найден.");
+  if (!zoneExists(state, zoneId)) return driverFail(state, "Зона не найдена.");
+  if (driver.status === "BUSY_DIRECT") {
+    return driverFail(state, DRIVER_BUSY_ERROR);
+  }
+  // Fail-closed: незавершённый назначенный заказ означает, что водитель занят,
+  // даже если поле статуса рассинхронизировано. Статус молча не «чиним».
+  if (getDriverActiveOrder(state, driverId)) {
+    return driverFail(
+      state,
+      "Нельзя выйти онлайн свободным: есть незавершённый активный заказ.",
+    );
+  }
+  if (
+    driver.status === "AVAILABLE" &&
+    driver.currentZoneId === zoneId &&
+    driver.suggestedZoneId === null
+  ) {
+    return driverOk(state);
+  }
+  const now = new Date().toISOString();
+  return driverOk(
+    finalizeMutation(
+      state,
+      {
+        ...state,
+        drivers: updateDriver(state.drivers, driverId, {
+          status: "AVAILABLE",
+          currentZoneId: zoneId,
+          suggestedZoneId: null,
+        }),
+      },
+      now,
+    ),
+  );
+}
+
+/**
+ * Пауза: `AVAILABLE → PAUSED`. Зона сохраняется, причина паузы не принимается и
+ * нигде не хранится — водитель никому не объясняет, почему сделал перерыв.
+ * Повторная пауза — успешный no-op.
+ */
+export function pauseDriver(
+  state: PrototypeState,
+  driverId: string,
+): ActionResult<DriverActionResult> {
+  const driver = state.drivers.find((d) => d.id === driverId);
+  if (!driver) return driverFail(state, "Водитель не найден.");
+  if (driver.status === "PAUSED") return driverOk(state);
+  if (driver.status === "BUSY_DIRECT" || getDriverActiveOrder(state, driverId)) {
+    return driverFail(state, DRIVER_BUSY_ERROR);
+  }
+  if (driver.status !== "AVAILABLE") {
+    return driverFail(state, "Пауза доступна только онлайн.");
+  }
+  const now = new Date().toISOString();
+  return driverOk(
+    finalizeMutation(
+      state,
+      { ...state, drivers: setDriverStatus(state.drivers, driverId, "PAUSED") },
+      now,
+    ),
+  );
+}
+
+/**
+ * Возобновление поиска заказов: `PAUSED → AVAILABLE`. Требуется уже
+ * подтверждённая зона — иначе водитель стал бы доступным без указания места.
+ */
+export function resumeDriver(
+  state: PrototypeState,
+  driverId: string,
+): ActionResult<DriverActionResult> {
+  const driver = state.drivers.find((d) => d.id === driverId);
+  if (!driver) return driverFail(state, "Водитель не найден.");
+  if (driver.status === "AVAILABLE") return driverOk(state);
+  if (driver.status === "BUSY_DIRECT" || getDriverActiveOrder(state, driverId)) {
+    return driverFail(state, DRIVER_BUSY_ERROR);
+  }
+  if (driver.status !== "PAUSED") {
+    return driverFail(state, "Возобновить можно только с паузы.");
+  }
+  if (driver.currentZoneId === null) {
+    return driverFail(state, DRIVER_ZONE_REQUIRED_ERROR);
+  }
+  const now = new Date().toISOString();
+  return driverOk(
+    finalizeMutation(
+      state,
+      {
+        ...state,
+        drivers: updateDriver(state.drivers, driverId, {
+          status: "AVAILABLE",
+          suggestedZoneId: null,
+        }),
+      },
+      now,
+    ),
+  );
+}
+
+/**
+ * Уход из сети. Разрешён из OFFLINE, AVAILABLE, PAUSED и
+ * ZONE_CONFIRMATION_REQUIRED; во время активной доставки (BUSY_DIRECT либо
+ * назначенный незавершённый заказ) запрещён. Зоны очищаются: выйдя из сети,
+ * водитель заново подтвердит, где он находится.
+ */
+export function goDriverOffline(
+  state: PrototypeState,
+  driverId: string,
+): ActionResult<DriverActionResult> {
+  const driver = state.drivers.find((d) => d.id === driverId);
+  if (!driver) return driverFail(state, "Водитель не найден.");
+  if (driver.status === "BUSY_DIRECT" || getDriverActiveOrder(state, driverId)) {
+    return driverFail(state, "Нельзя уйти офлайн во время активной доставки.");
+  }
+  if (
+    driver.status === "OFFLINE" &&
+    driver.currentZoneId === null &&
+    driver.suggestedZoneId === null
+  ) {
+    return driverOk(state);
+  }
+  const now = new Date().toISOString();
+  return driverOk(
+    finalizeMutation(
+      state,
+      {
+        ...state,
+        drivers: updateDriver(state.drivers, driverId, {
+          status: "OFFLINE",
+          currentZoneId: null,
+          suggestedZoneId: null,
+        }),
+      },
+      now,
+    ),
+  );
+}
+
+/**
+ * Смена текущей зоны без смены доступности. Разрешена только из AVAILABLE и
+ * PAUSED: в OFFLINE зона выбирается через `goDriverOnline`, в
+ * ZONE_CONFIRMATION_REQUIRED — через `confirmDriverZone`, а BUSY_DIRECT зону не
+ * меняет вовсе.
+ */
+export function changeDriverZone(
+  state: PrototypeState,
+  driverId: string,
+  zoneId: ZoneId,
+): ActionResult<DriverActionResult> {
+  const driver = state.drivers.find((d) => d.id === driverId);
+  if (!driver) return driverFail(state, "Водитель не найден.");
+  if (!zoneExists(state, zoneId)) return driverFail(state, "Зона не найдена.");
+  if (driver.status === "BUSY_DIRECT" || getDriverActiveOrder(state, driverId)) {
+    return driverFail(state, DRIVER_BUSY_ERROR);
+  }
+  if (driver.status !== "AVAILABLE" && driver.status !== "PAUSED") {
+    return driverFail(state, "Сменить зону можно только онлайн или на паузе.");
+  }
+  if (driver.currentZoneId === zoneId && driver.suggestedZoneId === null) {
+    return driverOk(state);
+  }
+  const now = new Date().toISOString();
+  return driverOk(
+    finalizeMutation(
+      state,
+      {
+        ...state,
+        drivers: updateDriver(state.drivers, driverId, {
+          currentZoneId: zoneId,
+          suggestedZoneId: null,
+        }),
+      },
+      now,
+    ),
+  );
+}
+
+/**
+ * Подтверждение зоны после завершения, отмены или снятия назначения. Только из
+ * ZONE_CONFIRMATION_REQUIRED. Предложенная системой зона авторитетной НЕ
+ * считается: водитель подтверждает зону явно и сам выбирает, продолжать поиск
+ * заказов или остаться на паузе.
+ */
+export function confirmDriverZone(
+  state: PrototypeState,
+  driverId: string,
+  zoneId: ZoneId,
+  nextAvailability: "AVAILABLE" | "PAUSED",
+): ActionResult<DriverActionResult> {
+  const driver = state.drivers.find((d) => d.id === driverId);
+  if (!driver) return driverFail(state, "Водитель не найден.");
+  if (!zoneExists(state, zoneId)) return driverFail(state, "Зона не найдена.");
+  if (driver.status !== "ZONE_CONFIRMATION_REQUIRED") {
+    return driverFail(state, "Подтверждение зоны сейчас не требуется.");
+  }
+  if (getDriverActiveOrder(state, driverId)) {
+    return driverFail(state, DRIVER_BUSY_ERROR);
+  }
+  const now = new Date().toISOString();
+  return driverOk(
+    finalizeMutation(
+      state,
+      {
+        ...state,
+        drivers: updateDriver(state.drivers, driverId, {
+          status: nextAvailability,
+          currentZoneId: zoneId,
+          suggestedZoneId: null,
+        }),
+      },
+      now,
+    ),
+  );
+}
+
+/**
+ * Compatibility-wrapper прежнего булева переключателя смены. Второй независимой
+ * логики доступности не существует: вызов делегируется каноническим действиям.
+ *  - `online === false` → `goDriverOffline`;
+ *  - `online === true` → `goDriverOnline` с УЖЕ подтверждённой зоной водителя;
+ *    зоны нет — отказ, потому что автоматически её выбрать нельзя.
  */
 export function setDriverAvailability(
   state: PrototypeState,
   driverId: string,
   online: boolean,
 ): ActionResult<DriverActionResult> {
-  const fail = (error: string): ActionResult<DriverActionResult> => ({
-    state,
-    result: { ok: false, error },
-  });
-  const ok = (nextState: PrototypeState): ActionResult<DriverActionResult> => ({
-    state: nextState,
-    result: { ok: true, error: null },
-  });
-
+  if (!online) {
+    return goDriverOffline(state, driverId);
+  }
   const driver = state.drivers.find((d) => d.id === driverId);
-  if (!driver) return fail("Водитель не найден.");
-
-  if (online) {
-    // Онлайн только из OFFLINE; AVAILABLE/BUSY уже на смене — no-op успех.
-    if (driver.status !== "OFFLINE") return ok(state);
-    // Fail-closed: OFFLINE-водитель с уже существующим активным назначенным
-    // заказом (повреждённое состояние) НЕ становится AVAILABLE. Статус не
-    // «чиним» молча и не переводим в BUSY здесь — просто отказ.
-    if (getDriverActiveOrder(state, driverId)) {
-      return fail("Нельзя выйти на смену свободным: есть незавершённый активный заказ.");
-    }
-    const now = new Date().toISOString();
-    return ok(
-      finalizeMutation(
-        state,
-        { ...state, drivers: setDriverStatus(state.drivers, driverId, "AVAILABLE") },
-        now,
-      ),
-    );
+  if (!driver) return driverFail(state, "Водитель не найден.");
+  if (driver.currentZoneId === null) {
+    return driverFail(state, DRIVER_ZONE_REQUIRED_ERROR);
   }
-
-  // Офлайн: запрещён при активной доставке.
-  if (driver.status === "BUSY" || getDriverActiveOrder(state, driverId)) {
-    return fail("Нельзя уйти офлайн во время активной доставки.");
-  }
-  // Офлайн только из AVAILABLE; уже OFFLINE — no-op успех.
-  if (driver.status !== "AVAILABLE") return ok(state);
-  const now = new Date().toISOString();
-  return ok(
-    finalizeMutation(
-      state,
-      { ...state, drivers: setDriverStatus(state.drivers, driverId, "OFFLINE") },
-      now,
-    ),
-  );
+  return goDriverOnline(state, driverId, driver.currentZoneId);
 }
 
 /** Назначение свободного водителя Direct на заказ PLATFORM_DRIVER. */
@@ -4032,6 +4274,11 @@ export function assignDriverToOrder(
   if (driver.status !== "AVAILABLE") {
     return fail("Водитель недоступен.");
   }
+  // Назначать можно только водителя с подтверждённой зоной: без неё неизвестно,
+  // откуда он поедет, а зона автоматически не определяется.
+  if (driver.currentZoneId === null) {
+    return fail("У водителя не подтверждена текущая зона.");
+  }
   // Fail-closed «один активный заказ на водителя»: не полагаемся только на
   // status. Назначаемый заказ ещё не привязан к этому водителю, поэтому любой
   // найденный активный заказ — это ДРУГОЙ заказ.
@@ -4063,7 +4310,7 @@ export function assignDriverToOrder(
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
-      drivers: setDriverStatus(state.drivers, driverId, "BUSY"),
+      drivers: setDriverStatus(state.drivers, driverId, "BUSY_DIRECT"),
     },
     now,
   );
@@ -4113,6 +4360,9 @@ export function reassignDriverForOrder(
   if (newDriver.status !== "AVAILABLE") {
     return fail("Водитель недоступен.");
   }
+  if (newDriver.currentZoneId === null) {
+    return fail("У водителя не подтверждена текущая зона.");
+  }
   // Тот же fail-closed guard для нового водителя: нельзя переназначить на того,
   // кто уже ведёт другую активную доставку (исключаем текущий заказ — он сейчас
   // на старом водителе, но защищаемся явно). Не полагаемся только на status.
@@ -4140,11 +4390,12 @@ export function reassignDriverForOrder(
     ],
   };
   // Сначала освобождаем старого (fail-closed, исключая текущий заказ), затем
-  // занимаем нового.
+  // занимаем нового. Старый водитель уходит подтверждать зону: заказ он не
+  // довёз, поэтому предлагать ему зону клиента нельзя.
   const drivers = setDriverStatus(
     releaseAssignedDriver(state, order.assignedDriverId, order.id),
     newDriverId,
-    "BUSY",
+    "BUSY_DIRECT",
   );
   const nextState = finalizeMutation(
     state,
@@ -4283,7 +4534,15 @@ export function markOrderDeliveredByDriverWithResult(
     {
       ...state,
       orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
-      drivers: releaseAssignedDriver(state, order.assignedDriverId, order.id),
+      // Заказ доставлен — водитель почти наверняка находится в зоне клиента,
+      // поэтому она ПРЕДЛАГАЕТСЯ для подтверждения, но доступным водитель не
+      // становится, пока не подтвердит зону сам.
+      drivers: releaseAssignedDriver(
+        state,
+        order.assignedDriverId,
+        order.id,
+        order.financials.customerZoneId,
+      ),
       restaurantAccountingEntries: [
         ...state.restaurantAccountingEntries,
         ...accounting.entries,

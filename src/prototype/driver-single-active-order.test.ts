@@ -4,8 +4,8 @@ import { test } from "node:test";
 import {
   assignDriverToOrder,
   markOrderDeliveredByDriverWithResult,
+  goDriverOnline,
   reassignDriverForOrder,
-  setDriverAvailability,
   unassignDriverFromOrder,
 } from "./actions.ts";
 import { createDefaultState } from "./default-state.ts";
@@ -20,7 +20,7 @@ import type {
   PrototypeState,
 } from "./models.ts";
 
-// Сид: driver-1/driver-2 = AVAILABLE, driver-3 = OFFLINE.
+// Сид v16: все демо-водители OFFLINE и без зоны; нужные статусы задаются явно.
 const D1 = "driver-1";
 const D2 = "driver-2";
 const D3 = "driver-3";
@@ -51,6 +51,11 @@ function order(id: string, overrides: Partial<Order> = {}): Order {
   } as unknown as Order;
 }
 
+/**
+ * Ставит статус напрямую (в т.ч. заведомо повреждённые сочетания). Любой
+ * не-OFFLINE статус получает подтверждённую зону: без неё водитель недоступен
+ * по определению, и проверялся бы не тот инвариант.
+ */
 function withDriverStatus(
   state: PrototypeState,
   driverId: string,
@@ -59,7 +64,13 @@ function withDriverStatus(
   return {
     ...state,
     drivers: state.drivers.map((d) =>
-      d.id === driverId ? { ...d, status } : d,
+      d.id === driverId
+        ? {
+            ...d,
+            status,
+            currentZoneId: status === "OFFLINE" ? null : "zone-1",
+          }
+        : d,
     ),
   };
 }
@@ -88,7 +99,7 @@ test("OFFLINE + активный заказ → online fail, state/revision не
     { [D3]: "OFFLINE" },
   );
   const before = JSON.stringify(state);
-  const res = setDriverAvailability(state, D3, true);
+  const res = goDriverOnline(state, D3, "zone-1");
   assert.equal(res.result.ok, false);
   assert.equal(res.state, state, "тот же объект state");
   assert.equal(res.state.revision, state.revision);
@@ -101,7 +112,7 @@ test("OFFLINE + активный заказ → online fail, state/revision не
 test("AVAILABLE + активный заказ → недоступен для новых offers", () => {
   const state = stateWith(
     [order("A", { assignedDriverId: D1, status: "READY" })],
-    { [D1]: "AVAILABLE" }, // поле status повреждено (должно быть BUSY)
+    { [D1]: "AVAILABLE" }, // поле status повреждено (должно быть BUSY_DIRECT)
   );
   const driver = state.drivers.find((d) => d.id === D1)!;
   assert.equal(isDriverAvailableForOffers(state, driver), false);
@@ -134,7 +145,7 @@ test("AVAILABLE + активный заказ → переназначение �
       order("A", { assignedDriverId: D1, status: "OUT_FOR_DELIVERY" }),
       order("B", { assignedDriverId: D2, status: "READY" }),
     ],
-    { [D1]: "AVAILABLE", [D2]: "BUSY" },
+    { [D1]: "AVAILABLE", [D2]: "BUSY_DIRECT" },
   );
   const before = JSON.stringify(state);
   const res = reassignDriverForOrder(state, "B", D1, "смена водителя");
@@ -153,7 +164,7 @@ test("терминальный DELIVERED/CANCELED не блокирует online
     [order("done", { assignedDriverId: D3, status: "DELIVERED" })],
     { [D3]: "OFFLINE" },
   );
-  const r1 = setDriverAvailability(s1, D3, true);
+  const r1 = goDriverOnline(s1, D3, "zone-1");
   assert.equal(r1.result.ok, true, r1.result.error ?? "");
   assert.equal(statusOf(r1.state, D3), "AVAILABLE");
 
@@ -168,7 +179,7 @@ test("терминальный DELIVERED/CANCELED не блокирует online
   const r2 = assignDriverToOrder(s2, "new", D1);
   assert.equal(r2.result.ok, true, r2.result.error ?? "");
   assert.equal(orderById(r2.state, "new").assignedDriverId, D1);
-  assert.equal(statusOf(r2.state, D1), "BUSY");
+  assert.equal(statusOf(r2.state, D1), "BUSY_DIRECT");
 });
 
 // 6 --------------------------------------------------------------------------
@@ -197,46 +208,59 @@ test("PREPARING/READY/OUT_FOR_DELIVERY/ARRIVING считаются активн�
 
 // 7 --------------------------------------------------------------------------
 
-test("после нормального завершения единственного заказа водитель становится AVAILABLE", () => {
+test("после завершения единственного заказа водитель подтверждает зону", () => {
   const state = stateWith(
     [order("A", { assignedDriverId: D1, status: "OUT_FOR_DELIVERY" })],
-    { [D1]: "BUSY" },
+    { [D1]: "BUSY_DIRECT" },
   );
   const res = markOrderDeliveredByDriverWithResult(state, "A");
   assert.equal(res.result.ok, true, res.result.error ?? "");
   assert.equal(orderById(res.state, "A").status, "DELIVERED");
-  assert.equal(statusOf(res.state, D1), "AVAILABLE", "освобождён после завершения");
+  assert.equal(
+    statusOf(res.state, D1),
+    "ZONE_CONFIRMATION_REQUIRED",
+    "освобождён, но до подтверждения зоны предложений не получает",
+  );
 });
 
 // 8 --------------------------------------------------------------------------
 
-test("после освобождения одного заказа при другом активном — водитель остаётся BUSY", () => {
+test("после освобождения одного заказа при другом активном — водитель остаётся занят", () => {
   // Повреждённое двойное назначение: у D1 два активных заказа.
   const state = stateWith(
     [
       order("A", { assignedDriverId: D1, status: "OUT_FOR_DELIVERY" }),
       order("B", { assignedDriverId: D1, status: "READY" }),
     ],
-    { [D1]: "BUSY" },
+    { [D1]: "BUSY_DIRECT" },
   );
   const res = unassignDriverFromOrder(state, "A", "ошибочное назначение");
   assert.equal(res.result.ok, true, res.result.error ?? "");
-  // A снят, но B всё ещё активен → водитель НЕ становится AVAILABLE.
+  // A снят, но B всё ещё активен → водитель НЕ освобождается.
   assert.equal(orderById(res.state, "A").assignedDriverId, null);
-  assert.equal(statusOf(res.state, D1), "BUSY", "остаётся BUSY при другом активном заказе");
+  assert.equal(
+    statusOf(res.state, D1),
+    "BUSY_DIRECT",
+    "остаётся занят при другом активном заказе",
+  );
   assert.equal(getDriverActiveOrder(res.state, D1)?.id, "B");
 });
 
 // 9 --------------------------------------------------------------------------
 
-test("нормальное освобождение единственного заказа через unassign → AVAILABLE", () => {
+test("нормальное освобождение единственного заказа через unassign → подтверждение зоны", () => {
   const state = stateWith(
     [order("A", { assignedDriverId: D1, status: "OUT_FOR_DELIVERY" })],
-    { [D1]: "BUSY" },
+    { [D1]: "BUSY_DIRECT" },
   );
   const res = unassignDriverFromOrder(state, "A", "по просьбе ресторана");
   assert.equal(res.result.ok, true, res.result.error ?? "");
-  assert.equal(statusOf(res.state, D1), "AVAILABLE");
+  assert.equal(statusOf(res.state, D1), "ZONE_CONFIRMATION_REQUIRED");
+  // Снятие назначения зону клиента не предлагает: заказ не доставлен.
+  assert.equal(
+    res.state.drivers.find((d) => d.id === D1)?.suggestedZoneId,
+    null,
+  );
 });
 
 // 10 -------------------------------------------------------------------------
@@ -245,12 +269,12 @@ test("успешное переназначение освобождает ст�
   // D1 везёт A; переназначаем на свободного D2 (без активных заказов).
   const state = stateWith(
     [order("A", { assignedDriverId: D1, status: "OUT_FOR_DELIVERY" })],
-    { [D1]: "BUSY", [D2]: "AVAILABLE" },
+    { [D1]: "BUSY_DIRECT", [D2]: "AVAILABLE" },
   );
   const res = reassignDriverForOrder(state, "A", D2, "ближе к адресу");
   assert.equal(res.result.ok, true, res.result.error ?? "");
   assert.equal(orderById(res.state, "A").assignedDriverId, D2);
-  assert.equal(statusOf(res.state, D2), "BUSY", "новый водитель занят");
-  // Старый водитель без других активных заказов освобождён.
-  assert.equal(statusOf(res.state, D1), "AVAILABLE");
+  assert.equal(statusOf(res.state, D2), "BUSY_DIRECT", "новый водитель занят");
+  // Старый водитель освобождён и подтверждает зону, а не становится доступным.
+  assert.equal(statusOf(res.state, D1), "ZONE_CONFIRMATION_REQUIRED");
 });

@@ -33,6 +33,13 @@ import {
   resumeRestaurantOrders,
   setMenuItemOperationallyUnavailable,
   adminSetPreparationMinutesWithResult,
+  changeDriverZone,
+  confirmDriverZone,
+  goDriverOffline,
+  goDriverOnline,
+  pauseDriver,
+  resumeDriver,
+  type DriverActionResult,
   markOrderArrivingWithResult,
   markOrderDeliveredByDriverWithResult,
   markOrderDeliveredWithResult,
@@ -128,6 +135,7 @@ import type {
   RestaurantOrderWorkflowMode,
   RestaurantWorkspaceRole,
   TariffMatrix,
+  ZoneId,
 } from "./models";
 import {
   isNewerState,
@@ -401,6 +409,27 @@ export interface PrototypeContextValue {
   ) => Promise<AdminActionResult>;
   saveTariffMatrix: (tariffs: TariffMatrix) => MutationAckPromise;
   restoreTariffs: () => MutationAckPromise;
+  /**
+   * Кабинет водителя (v16). Зона всегда передаётся явно: система её не
+   * определяет. BUSY_DIRECT ни одним из этих действий не снимается — он
+   * принадлежит жизненному циклу назначения заказа.
+   */
+  driverGoOnline: (
+    driverId: string,
+    zoneId: ZoneId,
+  ) => Promise<DriverActionResult>;
+  driverPause: (driverId: string) => Promise<DriverActionResult>;
+  driverResume: (driverId: string) => Promise<DriverActionResult>;
+  driverGoOffline: (driverId: string) => Promise<DriverActionResult>;
+  driverChangeZone: (
+    driverId: string,
+    zoneId: ZoneId,
+  ) => Promise<DriverActionResult>;
+  driverConfirmZone: (
+    driverId: string,
+    zoneId: ZoneId,
+    nextAvailability: "AVAILABLE" | "PAUSED",
+  ) => Promise<DriverActionResult>;
   createRestaurantEntry: (
     input: RestaurantFormInput,
   ) => Promise<CreateRestaurantResult>;
@@ -1613,6 +1642,69 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedStateMutation],
   );
 
+  // --- Кабинет водителя: доступность и текущая зона ---------------------------
+  // Все шесть действий идут через ту же сериализованную мутацию под Web Lock,
+  // что и остальные операции: компонент водителя состояние напрямую не меняет.
+
+  const driverGoOnline = useCallback(
+    (driverId: string, zoneId: ZoneId) =>
+      runSerializedActionMutation({
+        mutation: (baseState) => goDriverOnline(baseState, driverId, zoneId),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const driverPause = useCallback(
+    (driverId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) => pauseDriver(baseState, driverId),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const driverResume = useCallback(
+    (driverId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) => resumeDriver(baseState, driverId),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const driverGoOffline = useCallback(
+    (driverId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) => goDriverOffline(baseState, driverId),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const driverChangeZone = useCallback(
+    (driverId: string, zoneId: ZoneId) =>
+      runSerializedActionMutation({
+        mutation: (baseState) => changeDriverZone(baseState, driverId, zoneId),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const driverConfirmZone = useCallback(
+    (
+      driverId: string,
+      zoneId: ZoneId,
+      nextAvailability: "AVAILABLE" | "PAUSED",
+    ) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          confirmDriverZone(baseState, driverId, zoneId, nextAvailability),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
+    [runSerializedActionMutation],
+  );
+
   const createRestaurantEntry = useCallback(
     (input: RestaurantFormInput) =>
       runSerializedActionMutation({
@@ -1722,6 +1814,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       issuePickupNoCode,
       saveTariffMatrix,
       restoreTariffs,
+      driverGoOnline,
+      driverPause,
+      driverResume,
+      driverGoOffline,
+      driverChangeZone,
+      driverConfirmZone,
       createRestaurantEntry,
       updateRestaurantEntry,
       setMenuItemVariants,
@@ -1785,6 +1883,12 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       issuePickupNoCode,
       saveTariffMatrix,
       restoreTariffs,
+      driverGoOnline,
+      driverPause,
+      driverResume,
+      driverGoOffline,
+      driverChangeZone,
+      driverConfirmZone,
       createRestaurantEntry,
       updateRestaurantEntry,
       setMenuItemVariants,

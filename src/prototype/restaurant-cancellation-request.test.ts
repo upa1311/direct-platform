@@ -373,7 +373,9 @@ test("APPROVED: заказ CANCELED, финансы сохранены, води
   const withDriver: PrototypeState = {
     ...state,
     drivers: state.drivers.map((d) =>
-      d.id === driverId ? { ...d, status: "BUSY" } : d,
+      d.id === driverId
+        ? { ...d, status: "BUSY_DIRECT" as const, currentZoneId: "zone-1" as const }
+        : d,
     ),
     orders: state.orders.map((o) =>
       o.id === orderId ? { ...o, assignedDriverId: driverId } : o,
@@ -409,11 +411,11 @@ test("APPROVED: заказ CANCELED, финансы сохранены, води
   assert.equal(after.paidAt, before.paidAt);
   assert.equal(after.financials, before.financials);
   assert.equal(approved.state.settlements, state.settlements);
-  // Водитель освобождён.
+  // Водитель освобождён, но до подтверждения зоны предложения не получает.
   assert.equal(after.assignedDriverId, null);
   assert.equal(
     approved.state.drivers.find((d) => d.id === driverId)!.status,
-    "AVAILABLE",
+    "ZONE_CONFIRMATION_REQUIRED",
   );
 });
 

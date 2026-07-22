@@ -11,6 +11,7 @@ import {
   createOrderFromCart,
   createRestaurant,
   getSafeAdminStatusCorrections,
+  goDriverOnline,
   markOrderArriving,
   markOrderDelivered,
   markOrderDeliveredByDriver,
@@ -37,8 +38,19 @@ import {
   type WeeklySchedule,
 } from "./models.ts";
 
-function makePlatformReviewOrder(): { state: PrototypeState; orderId: string } {
+/**
+ * v16: назначить можно только AVAILABLE-водителя с подтверждённой зоной,
+ * поэтому тесты назначения выводят демо-водителей онлайн явно.
+ */
+function seedOnline(): PrototypeState {
   let s = createDefaultState();
+  s = goDriverOnline(s, "driver-1", "zone-1").state;
+  s = goDriverOnline(s, "driver-2", "zone-1").state;
+  return s;
+}
+
+function makePlatformReviewOrder(): { state: PrototypeState; orderId: string } {
+  let s = seedOnline();
   s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
@@ -181,7 +193,7 @@ test("водителя можно назначить после оплаты", (
   const { state, orderId } = makePlatformReady(); // PAID, READY
   const res = assignDriverToOrder(state, orderId, "driver-1");
   assert.equal(res.result.ok, true);
-  assert.equal(getDriverById(res.state, "driver-1")?.status, "BUSY");
+  assert.equal(getDriverById(res.state, "driver-1")?.status, "BUSY_DIRECT");
 });
 
 // 10: READY без водителя нельзя в OUT
@@ -225,7 +237,10 @@ test("отмена освобождает водителя", () => {
   const assigned = assignDriverToOrder(state, orderId, "driver-1");
   const canceled = adminCancelOrder(assigned.state, orderId, "Клиент отменил");
   assert.equal(canceled.result.ok, true);
-  assert.equal(getDriverById(canceled.state, "driver-1")?.status, "AVAILABLE");
+  assert.equal(
+    getDriverById(canceled.state, "driver-1")?.status,
+    "ZONE_CONFIRMATION_REQUIRED",
+  );
 });
 
 // 14: новый ресторан DRAFT и не принимает

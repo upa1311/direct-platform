@@ -9,6 +9,7 @@ import {
   assignDriverToOrder,
   completePickupWithCode,
   createOrderFromCart,
+  goDriverOnline,
   expireUnansweredRestaurantOrders,
   markOrderArrivingWithResult,
   markOrderDeliveredWithResult,
@@ -67,7 +68,9 @@ function makeOrder(
   fulfillment: "PICKUP" | "DELIVERY",
   mode: RestaurantOrderWorkflowMode = "COMBINED",
 ): { state: PrototypeState; orderId: string } {
-  let s = stateWithMode(restaurantId, mode);
+  // v16: назначить можно только онлайн-водителя с подтверждённой зоной.
+  let s = goDriverOnline(stateWithMode(restaurantId, mode), "driver-1", "zone-1")
+    .state;
   s = setCartFulfillmentChoice(s, fulfillment);
   if (fulfillment === "DELIVERY") {
     s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });

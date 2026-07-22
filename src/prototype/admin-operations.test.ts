@@ -10,6 +10,7 @@ import {
   completePickupAtRestaurant,
   correctOrderStatus,
   createOrderFromCart,
+  goDriverOnline,
   issuePickupWithoutCode,
   markOrderArriving,
   markOrderDelivered,
@@ -31,8 +32,20 @@ import {
 import { upgradeToV6 } from "./prototype-store.ts";
 import type { PrototypeState } from "./models.ts";
 
-function makePlatformOrder(): { state: PrototypeState; orderId: string } {
+/**
+ * v16: демо-водители стартуют не в сети и без зоны, а назначить можно только
+ * AVAILABLE-водителя с подтверждённой зоной. Тесты назначения выводят нужных
+ * водителей онлайн явно — автоматической зоны в домене нет.
+ */
+function seedOnline(): PrototypeState {
   let s = createDefaultState();
+  s = goDriverOnline(s, "driver-1", "zone-1").state;
+  s = goDriverOnline(s, "driver-2", "zone-1").state;
+  return s;
+}
+
+function makePlatformOrder(): { state: PrototypeState; orderId: string } {
+  let s = seedOnline();
   s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
@@ -53,7 +66,7 @@ function makePickupReady(): {
   orderId: string;
   code: string;
 } {
-  let s = createDefaultState();
+  let s = seedOnline();
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart({
     ...s,
@@ -145,7 +158,7 @@ test("PLATFORM_DRIVER получает доступного водителя", (
     res.state.orders.find((o) => o.id === orderId)?.assignedDriverId,
     "driver-1",
   );
-  assert.equal(getDriverById(res.state, "driver-1")?.status, "BUSY");
+  assert.equal(getDriverById(res.state, "driver-1")?.status, "BUSY_DIRECT");
 });
 
 // 6: PICKUP не может получить водителя Direct
@@ -174,8 +187,11 @@ test("переназначение освобождает старого вод�
     "Первый водитель занят",
   );
   assert.equal(reassigned.result.ok, true);
-  assert.equal(getDriverById(reassigned.state, "driver-1")?.status, "AVAILABLE");
-  assert.equal(getDriverById(reassigned.state, "driver-2")?.status, "BUSY");
+  assert.equal(
+    getDriverById(reassigned.state, "driver-1")?.status,
+    "ZONE_CONFIRMATION_REQUIRED",
+  );
+  assert.equal(getDriverById(reassigned.state, "driver-2")?.status, "BUSY_DIRECT");
   assert.equal(
     reassigned.state.orders.find((o) => o.id === orderId)?.assignedDriverId,
     "driver-2",
@@ -193,7 +209,10 @@ test("завершение заказа освобождает водителя"
     delivered.orders.find((o) => o.id === orderId)?.status,
     "DELIVERED",
   );
-  assert.equal(getDriverById(delivered, "driver-1")?.status, "AVAILABLE");
+  assert.equal(
+    getDriverById(delivered, "driver-1")?.status,
+    "ZONE_CONFIRMATION_REQUIRED",
+  );
 });
 
 // 10: отмена освобождает водителя
@@ -210,7 +229,10 @@ test("отмена заказа освобождает водителя", () => 
     canceled.state.orders.find((o) => o.id === orderId)?.status,
     "CANCELED",
   );
-  assert.equal(getDriverById(canceled.state, "driver-1")?.status, "AVAILABLE");
+  assert.equal(
+    getDriverById(canceled.state, "driver-1")?.status,
+    "ZONE_CONFIRMATION_REQUIRED",
+  );
 });
 
 // 11: отклонение требует причину

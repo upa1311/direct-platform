@@ -4,6 +4,7 @@ import {
   type Cart,
   type DaySchedule,
   type DeliveryMode,
+  type DriverStatus,
   type FinancialSnapshot,
   type MenuItemSubmission,
   type MenuItemSubmissionReviewEntry,
@@ -15,6 +16,7 @@ import {
   type PrototypeState,
   type RestaurantDeliveryProvider,
   type WeeklySchedule,
+  type ZoneId,
 } from "./models";
 import {
   normalizeOptionalCategory,
@@ -97,12 +99,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * FinancialSnapshot, v11 — restaurantSettlementRecords, v12 — снимок
  * финансового правила заказа, v13 — финансовый режим получения платежей,
  * v14 — детали исполнения закрытого расчёта, v15 — область расчёта: полная
- * позиция или выбранные записи), поэтому состояние прежней версии безопасно
+ * позиция или выбранные записи, v16 — оперативные статусы и подтверждаемая
+ * вручную зона водителя), поэтому состояние прежней версии безопасно
  * принимается и доводится нормализацией до текущей без потери данных. Ключ
  * хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14, 15,
+  7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -771,21 +774,51 @@ function normalizeCustomer(
   };
 }
 
-/** Нормализация одного водителя: добавляет безопасный статус и телефон. */
+/** Существующие зоны прототипа: всё остальное зоной не считается. */
+const KNOWN_ZONE_IDS: ReadonlySet<string> = new Set([
+  "zone-1",
+  "zone-2",
+  "zone-3",
+  "zone-4",
+]);
+
+/**
+ * Зона водителя из хранилища. Сохраняем ТОЛЬКО фактически существующий ZoneId:
+ * выдуманная или удалённая зона — это не «почти правильная» зона, а отсутствие
+ * подтверждения, поэтому null. Водитель подтвердит зону вручную.
+ */
+function normalizeDriverZone(value: unknown): ZoneId | null {
+  return typeof value === "string" && KNOWN_ZONE_IDS.has(value)
+    ? (value as ZoneId)
+    : null;
+}
+
+/**
+ * Нормализация одного водителя (v16). Legacy-статус BUSY соответствует новому
+ * BUSY_DIRECT; неизвестное значение — не повод угадывать доступность, поэтому
+ * fail-closed OFFLINE. У legacy-водителя полей зон нет — обе становятся null,
+ * и водитель подтверждает зону сам. `cashEnabled` сохраняется как есть.
+ */
 function normalizeDriver(value: unknown): PrototypeState["drivers"][number] {
   const raw = isRecord(value) ? value : {};
-  const status =
+  const status: DriverStatus =
     raw.status === "AVAILABLE" ||
-    raw.status === "BUSY" ||
-    raw.status === "OFFLINE"
+    raw.status === "PAUSED" ||
+    raw.status === "OFFLINE" ||
+    raw.status === "BUSY_DIRECT" ||
+    raw.status === "ZONE_CONFIRMATION_REQUIRED"
       ? raw.status
-      : "OFFLINE"; // безопасный статус для старых водителей
+      : raw.status === "BUSY"
+        ? "BUSY_DIRECT" // legacy v≤15
+        : "OFFLINE"; // безопасный статус для неизвестных значений
   return {
     id: str(raw.id, ""),
     name: str(raw.name, ""),
     cashEnabled: raw.cashEnabled === true,
     status,
     phone: str(raw.phone, ""),
+    currentZoneId: normalizeDriverZone(raw.currentZoneId),
+    suggestedZoneId: normalizeDriverZone(raw.suggestedZoneId),
   };
 }
 

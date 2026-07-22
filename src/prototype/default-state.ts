@@ -545,10 +545,37 @@ export function createDefaultState(): PrototypeState {
       ],
       noShowPickupCount: 0,
     },
+    // Демо-водители стартуют не в сети и без зоны: зону водитель подтверждает
+    // сам, автоматическая «правдоподобная» зона не подставляется. Наличные
+    // разрешены только Петру; глобальный platformDriverCashEnabled выключен.
     drivers: [
-      { id: "driver-1", name: "Водитель Пётр", cashEnabled: false, status: "AVAILABLE", phone: "+373 777 40001" },
-      { id: "driver-2", name: "Водитель Олег", cashEnabled: false, status: "AVAILABLE", phone: "+373 777 40002" },
-      { id: "driver-3", name: "Водитель Сергей", cashEnabled: false, status: "OFFLINE", phone: "+373 777 40003" },
+      {
+        id: "driver-1",
+        name: "Водитель Пётр",
+        cashEnabled: true,
+        status: "OFFLINE",
+        currentZoneId: null,
+        suggestedZoneId: null,
+        phone: "+373 777 40001",
+      },
+      {
+        id: "driver-2",
+        name: "Водитель Олег",
+        cashEnabled: false,
+        status: "OFFLINE",
+        currentZoneId: null,
+        suggestedZoneId: null,
+        phone: "+373 777 40002",
+      },
+      {
+        id: "driver-3",
+        name: "Водитель Сергей",
+        cashEnabled: false,
+        status: "OFFLINE",
+        currentZoneId: null,
+        suggestedZoneId: null,
+        phone: "+373 777 40003",
+      },
     ],
     cart: createEmptyCart(),
     orders: [],

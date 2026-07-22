@@ -276,7 +276,13 @@ test("§6.9: существующие label maps остаются полными
   ];
   for (const s of payStatuses) assert.ok(paymentStatusLabels[s]);
 
-  const driverStatuses: DriverStatus[] = ["AVAILABLE", "BUSY", "OFFLINE"];
+  const driverStatuses: DriverStatus[] = [
+    "OFFLINE",
+    "AVAILABLE",
+    "PAUSED",
+    "BUSY_DIRECT",
+    "ZONE_CONFIRMATION_REQUIRED",
+  ];
   for (const d of driverStatuses) assert.ok(driverStatusLabels[d]);
 
   const pubStatuses: PublicationStatus[] = [

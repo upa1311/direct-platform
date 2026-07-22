@@ -200,10 +200,16 @@ export function clientHistoryEvent(
   return { message: event.message, hideActor: false };
 }
 
+/**
+ * Русские подписи оперативного статуса. Единственный источник текста статуса
+ * для интерфейса: сырые enum-значения пользователю не показываются.
+ */
 export const driverStatusLabels: Record<DriverStatus, string> = {
-  AVAILABLE: "Свободен",
-  BUSY: "Занят",
-  OFFLINE: "Не на смене",
+  OFFLINE: "Не в сети",
+  AVAILABLE: "Онлайн · ожидает заказы",
+  PAUSED: "Пауза",
+  BUSY_DIRECT: "Выполняет заказ Direct",
+  ZONE_CONFIRMATION_REQUIRED: "Подтвердите текущую зону",
 };
 
 export const publicationStatusLabels: Record<PublicationStatus, string> = {
@@ -2040,9 +2046,10 @@ export function getDriverActiveOrder(
 
 /**
  * Доступен ли водитель для новых предложений. Fail-closed инвариант: только когда
- * ОДНОВРЕМЕННО `status === "AVAILABLE"` И у водителя нет активного назначенного
- * заказа (`getDriverActiveOrder === null`). Не полагается только на поле status —
- * повреждённое состояние (AVAILABLE + активный заказ) недоступным считается верно.
+ * ОДНОВРЕМЕННО `status === "AVAILABLE"`, зона подтверждена И у водителя нет
+ * активного назначенного заказа (`getDriverActiveOrder === null`). Не полагается
+ * только на поле status — повреждённое состояние (AVAILABLE + активный заказ или
+ * AVAILABLE без зоны) недоступным считается верно.
  */
 export function isDriverAvailableForOffers(
   state: PrototypeState,
@@ -2050,6 +2057,7 @@ export function isDriverAvailableForOffers(
 ): boolean {
   return (
     driver.status === "AVAILABLE" &&
+    driver.currentZoneId !== null &&
     getDriverActiveOrder(state, driver.id) === null
   );
 }

@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 15 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 16 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -545,17 +545,36 @@ export interface CustomerProfile {
   noShowPickupCount: number;
 }
 
-/** Оперативный статус водителя Direct. */
-export type DriverStatus = "AVAILABLE" | "BUSY" | "OFFLINE";
+/**
+ * Оперативный статус водителя Direct.
+ *
+ * OFFLINE                    — не в сети, предложения не поступают; зоны null.
+ * AVAILABLE                  — онлайн и ждёт заказы; есть валидная currentZoneId.
+ * PAUSED                     — временно не принимает предложения; зона сохранена.
+ * BUSY_DIRECT                — выполняет назначенный заказ Direct; ставится
+ *                              только жизненным циклом назначения, не водителем.
+ * ZONE_CONFIRMATION_REQUIRED — заказ завершён, отменён или назначение снято; до
+ *                              подтверждения текущей зоны предложения запрещены.
+ */
+export type DriverStatus =
+  | "OFFLINE"
+  | "AVAILABLE"
+  | "PAUSED"
+  | "BUSY_DIRECT"
+  | "ZONE_CONFIRMATION_REQUIRED";
 
 export interface DriverProfile {
   id: string;
   name: string;
   cashEnabled: boolean;
-  /** Доступен / занят / не на смене. Для назначения годятся только AVAILABLE. */
+  /** Оперативный статус. Для назначения годится только AVAILABLE с зоной. */
   status: DriverStatus;
   /** Телефон водителя (для связи из админки). */
   phone: string;
+  /** Подтверждённая водителем текущая зона. */
+  currentZoneId: ZoneId | null;
+  /** Зона завершённого заказа, предложенная для подтверждения. */
+  suggestedZoneId: ZoneId | null;
 }
 
 export interface CartItem {

@@ -1,0 +1,227 @@
+/* Рабочее место водителя. Наследует KDS-переменные экрана (kitchen.module.css)
+   и повторяет приёмы ресторанных страниц: спокойные карточки, те же радиусы,
+   те же кнопки, одна колонка на узких экранах. Отдельного «такси-дизайна» нет. */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.sectionTitle {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 4px 0 0;
+}
+
+/* --- Выбор демо-водителя --------------------------------------------------- */
+
+.pickerLabel {
+  font-size: 13px;
+  color: var(--kds-muted, #66706a);
+}
+
+.driverList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.driverPick {
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.driverPick:hover {
+  border-color: var(--kds-border-strong, #aeb7b1);
+}
+
+.driverPickName {
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.driverPickMeta {
+  font-size: 12px;
+  color: var(--kds-muted, #66706a);
+}
+
+/* --- Карточка текущего состояния ------------------------------------------ */
+
+.statusCard {
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 12px;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.driverName {
+  font-size: 18px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.statusValue {
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.statusHint {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--kds-muted, #66706a);
+}
+
+.metaLine {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* Допуск к наличным — спокойная строка состояния, а не кнопка. */
+.cashLine {
+  font-size: 13px;
+  color: var(--kds-muted, #66706a);
+}
+
+/* --- Действия -------------------------------------------------------------- */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.primaryButton {
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.secondaryButton {
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.linkButton {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--kds-muted, #66706a);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.linkButton:hover {
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* --- Выбор зоны ------------------------------------------------------------ */
+
+.zoneField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.zoneSelect {
+  height: 40px;
+  max-width: 260px;
+  padding: 0 10px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 7px;
+  background: var(--kds-surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+/* --- Служебные блоки ------------------------------------------------------- */
+
+.notice {
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-left: 4px solid currentColor;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.error {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--kds-danger, #a8322d);
+}
+
+.empty {
+  padding: 16px;
+  color: var(--kds-muted, #66706a);
+  font-size: 14px;
+  text-align: center;
+}
+
+.orderLine {
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.orderLink {
+  align-self: flex-start;
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}

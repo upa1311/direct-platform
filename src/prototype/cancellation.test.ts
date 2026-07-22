@@ -9,6 +9,7 @@ import {
   assignDriverToOrder,
   cancelOrderByClient,
   createOrderFromCart,
+  goDriverOnline,
   expireUnansweredRestaurantOrders,
   markOrderArriving,
   markOrderOutForDelivery,
@@ -328,11 +329,13 @@ test("отклонение запроса оставляет заказ акти
 
 test("одобрение отмены: заказ CANCELED, онлайн-оплата PAID, без refund/settlement, водитель освобождён", () => {
   // PLATFORM_DRIVER, оплачен, с назначенным водителем.
-  const d = addDeliveryReview(createDefaultState(), "restaurant-2-item-1");
+  // v16: назначить можно только онлайн-водителя с подтверждённой зоной.
+  const online = goDriverOnline(createDefaultState(), "driver-1", "zone-1").state;
+  const d = addDeliveryReview(online, "restaurant-2-item-1");
   let s = acceptRestaurantOrder(d.state, d.orderId, 20); // AWAITING_PAYMENT
   s = simulateSuccessfulOnlinePayment(s, d.orderId); // PREPARING, PAID
   s = assignDriverToOrder(s, d.orderId, "driver-1").state;
-  assert.equal(getDriverStatus(s, "driver-1"), "BUSY");
+  assert.equal(getDriverStatus(s, "driver-1"), "BUSY_DIRECT");
   s = requestOrderCancellationByClient(s, d.orderId, "причина").state;
   const settlementsBefore = JSON.stringify(s.settlements);
   const financialsBefore = JSON.stringify(orderOf(s, d.orderId).financials);
@@ -349,7 +352,7 @@ test("одобрение отмены: заказ CANCELED, онлайн-опл�
   assert.equal(JSON.stringify(res.state.settlements), settlementsBefore);
   assert.equal(JSON.stringify(order.financials), financialsBefore);
   // Водитель освобождён.
-  assert.equal(getDriverStatus(res.state, "driver-1"), "AVAILABLE");
+  assert.equal(getDriverStatus(res.state, "driver-1"), "ZONE_CONFIRMATION_REQUIRED");
   // Запрос APPROVED; повторное решение идемпотентно.
   const request = res.state.cancellationRequests.find((r) => r.id === requestId);
   assert.equal(request?.status, "APPROVED");
