@@ -253,51 +253,37 @@ export default function RestaurantSettlementsPage() {
         </div>
       ) : (
         <div className={`${styles.container} direct-print-screen`}>
-          {/* Возврат на главный канонический обзор. */}
-          <div className={styles.overviewBackRow}>
-            <button
-              type="button"
-              className={styles.periodButton}
-              onClick={() => setView("OVERVIEW")}
-            >
-              ← К расчётам
-            </button>
-          </div>
+          {/* Возврат на главный экран: спокойная текстовая кнопка, а не вкладка
+              и не фильтр — пользователь уже внутри раздела «Расчёты», поэтому
+              подпись называет цель («Общий баланс»), а не текущий раздел. */}
+          <button
+            type="button"
+            className={styles.backLink}
+            onClick={() => setView("OVERVIEW")}
+          >
+            ← Общий баланс
+          </button>
 
-          {/* Переключатель представления всегда первым (не пункт навигации). */}
-          <div className={styles.periods} role="group" aria-label="Представление">
-            <button
-              type="button"
-              className={styles.periodButton}
-              aria-pressed={view === "ORDERS"}
-              onClick={() => setView("ORDERS")}
-            >
-              По заказам
-            </button>
-            <button
-              type="button"
-              className={styles.periodButton}
-              aria-pressed={view === "DAILY"}
-              onClick={() => setView("DAILY")}
-            >
-              По дням
-            </button>
-            <button
-              type="button"
-              className={styles.periodButton}
-              aria-pressed={view === "OBLIGATIONS"}
-              onClick={() => setView("OBLIGATIONS")}
-            >
-              Обязательства
-            </button>
-            <button
-              type="button"
-              className={styles.periodButton}
-              aria-pressed={view === "STATEMENT"}
-              onClick={() => setView("STATEMENT")}
-            >
-              Выписка
-            </button>
+          {/* Переключатель представления: единая панель вкладок. */}
+          <div className={styles.viewTabs} role="group" aria-label="Представление">
+            {(
+              [
+                ["ORDERS", "По заказам"],
+                ["DAILY", "По дням"],
+                ["OBLIGATIONS", "Обязательства"],
+                ["STATEMENT", "Выписка"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={styles.viewTab}
+                aria-pressed={view === value}
+                onClick={() => setView(value)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           {/* Период и сводка заказов — только в отчётах по заказам/дням. */}
@@ -310,19 +296,29 @@ export default function RestaurantSettlementsPage() {
 
           {isPeriodReport && !reportError && overview ? (
             <>
-              {/* Переключатель периода */}
-              <div className={styles.periods} role="group" aria-label="Период">
-                {RESTAURANT_SETTLEMENT_PERIOD_ORDER.map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    className={styles.periodButton}
-                    aria-pressed={period === p}
-                    onClick={() => setPeriod(p)}
-                  >
-                    {RESTAURANT_SETTLEMENT_PERIOD_LABELS[p]}
-                  </button>
-                ))}
+              {/* Фильтр периода: легче вкладок и с подписью — виден только в
+                  отчётах по заказам и по дням, где период реально применяется. */}
+              <div className={styles.periodFilter}>
+                <span className={styles.periodFilterLabel} id="period-filter-label">
+                  Период
+                </span>
+                <div
+                  className={styles.periodChips}
+                  role="group"
+                  aria-labelledby="period-filter-label"
+                >
+                  {RESTAURANT_SETTLEMENT_PERIOD_ORDER.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className={styles.periodChip}
+                      aria-pressed={period === p}
+                      onClick={() => setPeriod(p)}
+                    >
+                      {RESTAURANT_SETTLEMENT_PERIOD_LABELS[p]}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* Основная сводка: четыре главных показателя, всегда видимы. */}
