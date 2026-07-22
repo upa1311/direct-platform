@@ -96,12 +96,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * restaurantAccountingResolutionEvents, v10 — каноническое движение денег в
  * FinancialSnapshot, v11 — restaurantSettlementRecords, v12 — снимок
  * финансового правила заказа, v13 — финансовый режим получения платежей,
- * v14 — детали исполнения закрытого расчёта), поэтому состояние прежней версии
- * безопасно принимается и доводится нормализацией до текущей без потери
- * данных. Ключ хранилища не меняется.
+ * v14 — детали исполнения закрытого расчёта, v15 — область расчёта: полная
+ * позиция или выбранные записи), поэтому состояние прежней версии безопасно
+ * принимается и доводится нормализацией до текущей без потери данных. Ключ
+ * хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14,
+  7, 8, 9, 10, 11, 12, 13, 14, 15,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -908,16 +909,26 @@ function normalizeRestaurantSettlementRecords(
   // неизвестный или неполный execution — повреждение, и маскировать его
   // архивным маркером нельзя.
   const migrateExecution = sourceSchemaVersion < 14;
+  // v15: область расчёта появилась только в схеме 15. Запись прежней схемы
+  // ничего не утверждала про полноту расчёта, поэтому помечается выборочной —
+  // считать её полным расчётом лишь потому, что сохранённый остаток нулевой,
+  // запрещено. Для схемы 15 отсутствующая или неизвестная область — повреждение.
+  const migrateSelection = sourceSchemaVersion < 15;
   const kept: PrototypeState["restaurantSettlementRecords"] = [];
   const seenRecordIds = new Set<string>();
   const claimedEntryIds = new Set<string>();
   for (const candidate of value) {
-    const prepared =
-      migrateExecution && isRecord(candidate)
-        ? // Вложенные execution-поля старой схемы не переносятся: spread идёт
-          // ПЕРЕД полем execution, поэтому любое исходное значение затирается.
-          { ...candidate, execution: { dataStatus: "LEGACY_UNKNOWN" } }
-        : candidate;
+    let prepared = candidate;
+    if (migrateExecution && isRecord(prepared)) {
+      // Вложенные execution-поля старой схемы не переносятся: spread идёт
+      // ПЕРЕД полем execution, поэтому любое исходное значение затирается.
+      prepared = { ...prepared, execution: { dataStatus: "LEGACY_UNKNOWN" } };
+    }
+    if (migrateSelection && isRecord(prepared)) {
+      // Тот же принцип: найденная в старой схеме область недостоверна и
+      // заменяется целиком, а не дополняется.
+      prepared = { ...prepared, selection: { scope: "SELECTED_ENTRIES" } };
+    }
     // Остальные канонические поля записи (id, суммы, момент, основание,
     // ссылка) по-прежнему проходят полную intrinsic-валидацию без послаблений.
     const validated = validateRestaurantSettlementRecord(prepared);

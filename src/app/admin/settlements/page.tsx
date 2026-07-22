@@ -19,12 +19,20 @@ import {
   type AdminAccountingRow,
 } from "@/prototype/restaurant-accounting";
 import {
+  buildFullRestaurantSettlementPreview,
   buildRestaurantSettlementPreview,
+  getLatestFullRestaurantSettlement,
   getRestaurantSettlementRecords,
 } from "@/prototype/restaurant-settlement-records";
 import {
   canConfirmSettlement,
+  describeFullSettlementNet,
   describeSettlementNet,
+  formatFullSettlementSuccess,
+  FULL_SETTLEMENT_WARNING,
+  fullSettlementConfirmLabel,
+  SETTLEMENT_SCOPE_LABELS,
+  type FullSettlementSuccess,
   formatSettlementSuccess,
   LEGACY_EXECUTION_MESSAGE,
   MANUAL_SETTLEMENT_METHODS,
@@ -49,7 +57,8 @@ type DirectionFilter =
   | "DIRECT_OWES_RESTAURANT";
 
 export default function AdminSettlementsPage() {
-  const { state, isHydrated, confirmSettlement } = usePrototype();
+  const { state, isHydrated, confirmSettlement, confirmFullSettlement } =
+    usePrototype();
   // Все известные рестораны (в т.ч. архивные/остановленные), чтобы история
   // сверки не исчезала вместе с публикацией.
   const restaurants = state.restaurants;
@@ -72,6 +81,20 @@ export default function AdminSettlementsPage() {
   const [settlementMethod, setSettlementMethod] =
     useState<RestaurantSettlementMethod>("BANK_TRANSFER");
   const [settlementAmount, setSettlementAmount] = useState("");
+  // Полный расчёт (v15): отдельная форма, обязательства не выбираются вручную.
+  const [fullMethod, setFullMethod] =
+    useState<RestaurantSettlementMethod>("BANK_TRANSFER");
+  const [fullNote, setFullNote] = useState("");
+  const [fullReference, setFullReference] = useState("");
+  const [fullSuccess, setFullSuccess] = useState<FullSettlementSuccess | null>(
+    null,
+  );
+  const {
+    error: fullError,
+    pending: fullPending,
+    run: runFullSettlement,
+    clearError: clearFullError,
+  } = useMutationGuard();
   const [settlementSuccess, setSettlementSuccess] =
     useState<SettlementSuccess | null>(null);
   const {
@@ -97,6 +120,11 @@ export default function AdminSettlementsPage() {
     setSettlementAmount("");
     setSettlementSuccess(null);
     clearSettlementError();
+    setFullMethod("BANK_TRANSFER");
+    setFullNote("");
+    setFullReference("");
+    setFullSuccess(null);
+    clearFullError();
   };
 
   const changeStatusFilter = (next: StatusFilter) => {
@@ -143,6 +171,76 @@ export default function AdminSettlementsPage() {
   const previewNet = previewOk
     ? describeSettlementNet(previewOk.netDirection)
     : null;
+
+  // Полная открытая позиция для ПОКАЗА. Отсечка берётся из самого состояния
+  // (updatedAt последней мутации) — чистое значение без обращения к часам:
+  // авторитетную отсечку домен всё равно создаёт сам под Web Lock.
+  const fullPreviewResult = useMemo(() => {
+    if (!activeRestaurantId) return null;
+    return buildFullRestaurantSettlementPreview(
+      state,
+      activeRestaurantId,
+      state.updatedAt,
+    );
+  }, [state, activeRestaurantId]);
+  const fullPreview =
+    fullPreviewResult && fullPreviewResult.ok ? fullPreviewResult.preview : null;
+  const fullNet = fullPreview
+    ? describeFullSettlementNet(fullPreview.netDirection)
+    : null;
+  const fullBalanced = fullPreview?.netDirection === "BALANCED";
+  const fullEffectiveMethod: RestaurantSettlementMethod = fullBalanced
+    ? "NETTING"
+    : fullMethod;
+  // Сумма полного расчёта не редактируется: она равна итогу позиции.
+  const fullTransferredCents = fullBalanced ? 0 : (fullPreview?.netAmountCents ?? 0);
+  const canConfirmFull =
+    fullPreview !== null &&
+    fullPreview.openEntryCount > 0 &&
+    fullNote.trim().length > 0 &&
+    (fullBalanced || fullReference.trim().length > 0) &&
+    !fullPending;
+
+  const submitFullSettlement = async () => {
+    if (!canConfirmFull || !fullPreview) return;
+    const confirmed = fullPreview;
+    const method = fullEffectiveMethod;
+    const transferredAmountCents = fullTransferredCents;
+    const res = await runFullSettlement(async () => {
+      const r = await confirmFullSettlement({
+        restaurantId: activeRestaurantId,
+        // Ожидаемый снимок: домен откажет, если баланс изменился.
+        expectedAccountingEntryIds: confirmed.accountingEntryIds,
+        expectedRestaurantOwesDirectCents: confirmed.restaurantOwesDirectCents,
+        expectedDirectOwesRestaurantCents: confirmed.directOwesRestaurantCents,
+        expectedNetDirection: confirmed.netDirection,
+        expectedNetAmountCents: confirmed.netAmountCents,
+        method,
+        transferredAmountCents,
+        note: fullNote,
+        externalReference: fullReference.trim() ? fullReference : null,
+      });
+      return { ok: r.ok, error: r.error, changed: r.ok };
+    });
+    if (res.ok) {
+      // Момент отсечки создал домен внутри lock; в баннере показываем именно
+      // его — берём из свежесозданной записи полного расчёта.
+      const created = getLatestFullRestaurantSettlement(state, activeRestaurantId);
+      const cutoffAt =
+        created && created.selection.scope === "FULL_OPEN_POSITION"
+          ? created.selection.cutoffAt
+          : confirmed.cutoffAt;
+      setFullSuccess({
+        cutoffAt,
+        netDirection: confirmed.netDirection,
+        method,
+        transferredAmountCents,
+        entryCount: confirmed.openEntryCount,
+      });
+      setFullNote("");
+      setFullReference("");
+    }
+  };
 
   const settlementRecords = useMemo(
     () =>
@@ -312,10 +410,181 @@ export default function AdminSettlementsPage() {
               </div>
             ) : null}
 
-            {/* Новый групповой расчёт: выбор обязательств → канонический
-                preview → одно доменное подтверждение. */}
-            <h2 className={styles.sectionTitle}>Новый расчёт</h2>
-            <section className={styles.settlementPanel} aria-label="Новый расчёт">
+            {/* Основной сценарий: полный расчёт всей открытой позиции. */}
+            <h2 className={styles.sectionTitle}>Полный расчёт сейчас</h2>
+            <section
+              className={styles.settlementPanel}
+              aria-label="Полный расчёт сейчас"
+            >
+              {fullPreviewResult && !fullPreviewResult.ok ? (
+                <p className={styles.error} role="alert">
+                  {fullPreviewResult.error}
+                </p>
+              ) : fullPreview && fullNet ? (
+                fullPreview.openEntryCount === 0 ? (
+                  <p className={styles.settlementHint}>
+                    Открытых обязательств для расчёта нет.
+                  </p>
+                ) : (
+                  <>
+                    <div className={styles.settlementPreview}>
+                      <PositionCard
+                        label="Открытых обязательств"
+                        value={String(fullPreview.openEntryCount)}
+                      />
+                      <PositionCard
+                        label="Ресторан должен Direct"
+                        value={formatMoney(fullPreview.restaurantOwesDirectCents)}
+                      />
+                      <PositionCard
+                        label="Direct должен ресторану"
+                        value={formatMoney(fullPreview.directOwesRestaurantCents)}
+                      />
+                    </div>
+                    <div className={styles.settlementNet}>
+                      <span className={styles.settlementNetLabel}>
+                        {fullNet.title}
+                      </span>
+                      <span className={styles.settlementNetValue}>
+                        {formatMoney(fullPreview.netAmountCents)}
+                      </span>
+                    </div>
+
+                    <div className={styles.settlementForm}>
+                      {fullBalanced ? (
+                        <div className={styles.field}>
+                          <span>Способ расчёта</span>
+                          <p className={styles.settlementHint}>
+                            Способ: {RESTAURANT_SETTLEMENT_METHOD_LABELS.NETTING}
+                          </p>
+                          <p className={styles.settlementHint}>
+                            Фактически передано: {formatMoney(0)}
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <label className={styles.field}>
+                            <span>Способ расчёта</span>
+                            <select
+                              className={styles.select}
+                              value={fullMethod}
+                              disabled={fullPending}
+                              onChange={(e) => {
+                                setFullMethod(
+                                  e.target.value as RestaurantSettlementMethod,
+                                );
+                                clearFullError();
+                              }}
+                            >
+                              {MANUAL_SETTLEMENT_METHODS.map((method) => (
+                                <option value={method} key={method}>
+                                  {RESTAURANT_SETTLEMENT_METHOD_LABELS[method]}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <div className={styles.field}>
+                            <span>Сумма полного расчёта</span>
+                            {/* Сумма не редактируется: полный расчёт закрывает
+                                позицию целиком, частичный не поддерживается. */}
+                            <input
+                              value={formatMoney(fullTransferredCents)}
+                              readOnly
+                              aria-readonly="true"
+                            />
+                          </div>
+                        </>
+                      )}
+                      <label className={styles.field}>
+                        <span>Основание расчёта</span>
+                        <textarea
+                          value={fullNote}
+                          maxLength={ACCOUNTING_RESOLUTION_NOTE_MAX}
+                          disabled={fullPending}
+                          onChange={(e) => {
+                            setFullNote(e.target.value);
+                            clearFullError();
+                          }}
+                          placeholder="Опишите основание расчёта"
+                        />
+                      </label>
+                      <label className={styles.field}>
+                        <span>
+                          Номер операции или документа
+                          {fullBalanced ? " (необязательно)" : ""}
+                        </span>
+                        <input
+                          value={fullReference}
+                          maxLength={ACCOUNTING_RESOLUTION_REFERENCE_MAX}
+                          disabled={fullPending}
+                          onChange={(e) => {
+                            setFullReference(e.target.value);
+                            clearFullError();
+                          }}
+                          placeholder="Номер операции / документа"
+                        />
+                      </label>
+                    </div>
+
+                    <p className={styles.confirmNote}>{FULL_SETTLEMENT_WARNING}</p>
+
+                    {fullError ? (
+                      <p className={styles.error} role="alert">
+                        {fullError}
+                      </p>
+                    ) : null}
+
+                    <div className={styles.rowActions}>
+                      <button
+                        type="button"
+                        className={`${styles.btn} ${styles.btnPrimary}`}
+                        disabled={!canConfirmFull}
+                        onClick={() => void submitFullSettlement()}
+                      >
+                        {fullPending
+                          ? "Сохраняем расчёт…"
+                          : fullSettlementConfirmLabel(
+                              fullPreview.netDirection,
+                              formatMoney(fullTransferredCents),
+                            )}
+                      </button>
+                    </div>
+                  </>
+                )
+              ) : null}
+
+              {fullSuccess ? (
+                <div
+                  className={styles.confirmBanner}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span>
+                    {formatFullSettlementSuccess(
+                      fullSuccess,
+                      formatDateTime(fullSuccess.cutoffAt),
+                      formatMoney(fullSuccess.transferredAmountCents),
+                      formatMoney(0),
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className={styles.confirmClose}
+                    onClick={() => setFullSuccess(null)}
+                  >
+                    Закрыть сообщение
+                  </button>
+                </div>
+              ) : null}
+            </section>
+
+            {/* Выборочный расчёт — advanced-сценарий: выбор обязательств →
+                канонический preview → одно доменное подтверждение. */}
+            <h2 className={styles.sectionTitle}>Выборочный расчёт</h2>
+            <section
+              className={styles.settlementPanel}
+              aria-label="Выборочный расчёт"
+            >
               <div className={styles.settlementSelectionRow}>
                 <span className={styles.settlementSelected}>
                   Выбрано: {effectiveSelectedIds.length}{" "}
@@ -654,6 +923,7 @@ export default function AdminSettlementsPage() {
                         {formatDateTime(record.settledAt)}
                       </span>
                       <span className={styles.historyDirection}>
+                        {SETTLEMENT_SCOPE_LABELS[record.selection.scope]} ·{" "}
                         {settlementHistoryLabel(record.netDirection)}
                       </span>
                       <span className={styles.historyAmount}>
@@ -681,6 +951,15 @@ export default function AdminSettlementsPage() {
                       <p className={styles.subtle}>
                         Количество обязательств: {record.entryCount}
                       </p>
+                      {/* Полный расчёт: момент отсечки и нулевой баланс после
+                          него — как они сохранены в записи. */}
+                      {record.selection.scope === "FULL_OPEN_POSITION" ? (
+                        <p className={styles.subtle}>
+                          Рассчитано полностью по{" "}
+                          {formatDateTime(record.selection.cutoffAt)}. Баланс
+                          после расчёта: {formatMoney(0)}.
+                        </p>
+                      ) : null}
                       {/* Детали исполнения показываются ТОЛЬКО как сохранены в
                           записи: текущий баланс ресторана сюда не подставляется. */}
                       {record.execution.dataStatus === "COMPLETE" ? (

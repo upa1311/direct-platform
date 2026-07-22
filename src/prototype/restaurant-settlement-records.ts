@@ -558,6 +558,10 @@ export function confirmRestaurantSettlement(
       remainingNetDirection: preview.remainingNetDirection,
       remainingNetAmountCents: preview.remainingNetAmountCents,
     },
+    // v15: ручной групповой расчёт закрывает ТОЛЬКО выбранные обязательства и
+    // ничего не утверждает про остальную позицию — даже если остаток случайно
+    // оказался нулевым, это не «полный расчёт».
+    selection: { scope: "SELECTED_ENTRIES" },
   };
   // Defensive invariant: создаваемая запись проходит тот же канонический
   // validator, что и сохранённые. Неожиданно невалидная запись не должна
@@ -627,6 +631,456 @@ export function confirmRestaurantSettlement(
     state: nextState,
     result: { ok: true, error: null, settlementRecordId: recordId },
   };
+}
+
+// --- Полный расчёт всей открытой позиции (v15) --------------------------------
+
+/**
+ * Полная взаимная позиция ресторана на момент отсечки: сколько сторон должно
+ * друг другу и кто кому передаёт итог. Ручного выбора обязательств здесь нет —
+ * берутся ВСЕ открытые обязательства ресторана.
+ */
+export interface FullRestaurantSettlementPreview {
+  restaurantId: string;
+  currencyCode: CurrencyCode;
+  cutoffAt: string;
+  accountingEntryIds: string[];
+  openEntryCount: number;
+  restaurantOwesDirectCents: number;
+  directOwesRestaurantCents: number;
+  netDirection: RestaurantSettlementNetDirection;
+  netAmountCents: number;
+}
+
+export type FullRestaurantSettlementPreviewResult =
+  | { ok: true; preview: FullRestaurantSettlementPreview }
+  | { ok: false; error: string };
+
+/** Ресторан без открытых обязательств: расчёт закрывать нечего. */
+export const NO_OPEN_OBLIGATIONS_ERROR =
+  "Открытых обязательств для расчёта нет.";
+
+/** Баланс изменился между показом preview и подтверждением. */
+export const STALE_FULL_SETTLEMENT_ERROR =
+  "Баланс изменился. Обновите расчёт и подтвердите новую сумму.";
+
+function fullPreviewFail(error: string): FullRestaurantSettlementPreviewResult {
+  return { ok: false, error };
+}
+
+/**
+ * Чистый расчёт полной открытой позиции ресторана на момент cutoffAt.
+ *
+ * Берутся ВСЕ обязательства ресторана со статусом OPEN: закрытые (SETTLED),
+ * списанные (WAIVED) и чужие рестораны не участвуют. Каждое обязательство
+ * проходит ту же строгую проверку целостности, что и выборочный расчёт —
+ * известные direction/type, допустимая пара, положительные безопасные центы,
+ * единая валюта, уникальный id, максимум одно обязательство на заказ,
+ * отсутствие resolution event и отсутствие в уже закрытых расчётах.
+ *
+ * Момент признания каждого обязательства обязан быть каноническим и не позже
+ * отсечки: cutoffAt создаётся уже ПОСЛЕ получения актуального состояния, и
+ * обязательство «из будущего» — повреждённые данные, а не запись, которую
+ * можно молча пропустить.
+ *
+ * Любая проблема отклоняет ВЕСЬ preview: правдоподобная неполная позиция
+ * хуже честного отказа. Пустая позиция — законный нулевой read-model
+ * (подтверждать её нечем, это проверяет уже confirm).
+ */
+export function buildFullRestaurantSettlementPreview(
+  state: PrototypeState,
+  restaurantId: string,
+  cutoffAt: string,
+): FullRestaurantSettlementPreviewResult {
+  if (!isCanonicalIsoTimestamp(cutoffAt)) {
+    return fullPreviewFail("Некорректное время операции.");
+  }
+  const cutoffMs = Date.parse(cutoffAt);
+
+  const resolvedEntryIds = new Set(
+    state.restaurantAccountingResolutionEvents.map(
+      (event) => event.accountingEntryId,
+    ),
+  );
+  const alreadySettledIds = new Set(
+    state.restaurantSettlementRecords.flatMap(
+      (record) => record.accountingEntryIds,
+    ),
+  );
+
+  const accountingEntryIds: string[] = [];
+  const seenEntryIds = new Set<string>();
+  const seenOrderIds = new Set<string>();
+  let restaurantOwesDirectCents = 0;
+  let directOwesRestaurantCents = 0;
+  let currencyCode: CurrencyCode | null = null;
+
+  for (const entry of state.restaurantAccountingEntries) {
+    if (entry.restaurantId !== restaurantId) continue;
+    if (entry.status !== "OPEN") continue;
+
+    if (seenEntryIds.has(entry.id)) {
+      return fullPreviewFail("Обязательство встречается несколько раз.");
+    }
+    seenEntryIds.add(entry.id);
+    if (resolvedEntryIds.has(entry.id)) {
+      return fullPreviewFail("По обязательству уже есть решение администратора.");
+    }
+    if (alreadySettledIds.has(entry.id)) {
+      return fullPreviewFail("Обязательство уже входит в закрытый расчёт.");
+    }
+    if (
+      entry.direction !== "RESTAURANT_OWES_DIRECT" &&
+      entry.direction !== "DIRECT_OWES_RESTAURANT"
+    ) {
+      return fullPreviewFail("Неизвестное направление обязательства.");
+    }
+    if (
+      entry.type !== "PLATFORM_COMMISSION" &&
+      entry.type !== "RESTAURANT_PAYOUT" &&
+      entry.type !== "RESTAURANT_REMITTANCE"
+    ) {
+      return fullPreviewFail("Неизвестный тип обязательства.");
+    }
+    if (!isAllowedDirectionTypePair(entry.direction, entry.type)) {
+      return fullPreviewFail(SETTLEMENT_DIRECTION_TYPE_ERROR);
+    }
+    if (!isPositiveCents(entry.amountCents)) {
+      return fullPreviewFail("Некорректная сумма обязательства.");
+    }
+    if (!SUPPORTED_CURRENCIES.includes(entry.currencyCode)) {
+      return fullPreviewFail("Валюта обязательства не поддерживается.");
+    }
+    if (currencyCode === null) {
+      currencyCode = entry.currencyCode;
+    } else if (entry.currencyCode !== currencyCode) {
+      return fullPreviewFail("В расчёт нельзя включать разные валюты.");
+    }
+    if (seenOrderIds.has(entry.orderId)) {
+      return fullPreviewFail("У заказа обнаружено несколько открытых обязательств.");
+    }
+    seenOrderIds.add(entry.orderId);
+    if (!isCanonicalIsoTimestamp(entry.recognizedAt)) {
+      return fullPreviewFail("Некорректная дата признания обязательства.");
+    }
+    if (Date.parse(entry.recognizedAt) > cutoffMs) {
+      return fullPreviewFail(
+        "Обязательство признано позже момента расчёта — состояние повреждено.",
+      );
+    }
+
+    if (entry.direction === "RESTAURANT_OWES_DIRECT") {
+      const next = addChecked(restaurantOwesDirectCents, entry.amountCents);
+      if (next === null) return fullPreviewFail("Сумма расчёта слишком велика.");
+      restaurantOwesDirectCents = next;
+    } else {
+      const next = addChecked(directOwesRestaurantCents, entry.amountCents);
+      if (next === null) return fullPreviewFail("Сумма расчёта слишком велика.");
+      directOwesRestaurantCents = next;
+    }
+    accountingEntryIds.push(entry.id);
+  }
+
+  const netAmountCents = netAmountOf(
+    restaurantOwesDirectCents,
+    directOwesRestaurantCents,
+  );
+  if (netAmountCents === null) {
+    return fullPreviewFail("Сумма расчёта слишком велика.");
+  }
+
+  return {
+    ok: true,
+    preview: {
+      restaurantId,
+      // Пустая позиция валюты не имеет: показываем валюту платформы.
+      currencyCode: currencyCode ?? "USD",
+      cutoffAt,
+      accountingEntryIds,
+      openEntryCount: accountingEntryIds.length,
+      restaurantOwesDirectCents,
+      directOwesRestaurantCents,
+      netDirection: netDirectionOf(
+        restaurantOwesDirectCents,
+        directOwesRestaurantCents,
+      ),
+      netAmountCents,
+    },
+  };
+}
+
+/**
+ * Вход подтверждения полного расчёта. Отдельно от выборочного: администратор
+ * не выбирает обязательства, зато подтверждает ИМЕННО ТУ позицию, которую
+ * видел на экране — ожидаемый снимок приходит вместе с решением.
+ *
+ * cutoffAt из UI не принимается: момент отсечки создаётся внутри
+ * сериализованной мутации над свежим состоянием.
+ */
+export interface ConfirmFullRestaurantSettlementInput {
+  restaurantId: string;
+  expectedAccountingEntryIds: readonly string[];
+  expectedRestaurantOwesDirectCents: number;
+  expectedDirectOwesRestaurantCents: number;
+  expectedNetDirection: RestaurantSettlementNetDirection;
+  expectedNetAmountCents: number;
+  method: RestaurantSettlementMethod;
+  transferredAmountCents: number;
+  note: string;
+  externalReference: string | null;
+}
+
+/** Совпадают ли наборы id независимо от порядка массива. */
+function sameEntryIdSet(
+  a: readonly string[],
+  b: readonly string[],
+): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((id, index) => id === right[index]);
+}
+
+/**
+ * Административное подтверждение ПОЛНОГО расчёта: закрывается вся открытая
+ * взаимная позиция ресторана на момент cutoffAt.
+ *
+ * Порядок защиты:
+ * 1) полная позиция строится заново из свежего state — UI-preview не авторитет;
+ * 2) ожидаемый снимок администратора сверяется с ней по составу обязательств
+ *    (как множество, а не по порядку массива), обеим gross-сторонам,
+ *    направлению и сумме итога: если между показом и нажатием появилось или
+ *    закрылось обязательство, система НЕ записывает другой расчёт молча;
+ * 3) способ и фактическая сумма проверяются как в выборочном расчёте —
+ *    частичные расчёты не поддерживаются.
+ *
+ * При успехе одной транзакцией: одна запись FULL_OPEN_POSITION со строго
+ * нулевым остатком, все обязательства → SETTLED с общим settledAt = cutoffAt,
+ * по одному resolution event на обязательство, синхронизация старых
+ * комиссионных settlements и один рост revision. Любая ошибка возвращает
+ * исходный state ТЕМ ЖЕ объектом.
+ */
+export function confirmFullRestaurantSettlement(
+  state: PrototypeState,
+  input: ConfirmFullRestaurantSettlementInput & { cutoffAt: string },
+): { state: PrototypeState; result: RestaurantSettlementConfirmResult } {
+  const {
+    restaurantId,
+    method,
+    transferredAmountCents,
+    note,
+    externalReference,
+    cutoffAt,
+  } = input;
+  const fail = (error: string) => ({
+    state,
+    result: { ok: false, error, settlementRecordId: null },
+  });
+
+  if (!isCanonicalIsoTimestamp(cutoffAt)) {
+    return fail("Некорректное время операции.");
+  }
+
+  const normalizedNote = (note ?? "").trim();
+  if (!normalizedNote) {
+    return fail("Укажите основание расчёта.");
+  }
+  if (normalizedNote.length > ACCOUNTING_RESOLUTION_NOTE_MAX) {
+    return fail("Комментарий слишком длинный.");
+  }
+  const trimmedReference =
+    externalReference == null ? null : externalReference.trim();
+  const normalizedReference = trimmedReference ? trimmedReference : null;
+  if (
+    normalizedReference !== null &&
+    normalizedReference.length > ACCOUNTING_RESOLUTION_REFERENCE_MAX
+  ) {
+    return fail("Внешняя ссылка слишком длинная.");
+  }
+
+  // 1. Авторитетная полная позиция из свежего состояния.
+  const previewResult = buildFullRestaurantSettlementPreview(
+    state,
+    restaurantId,
+    cutoffAt,
+  );
+  if (!previewResult.ok) {
+    return fail(previewResult.error);
+  }
+  const preview = previewResult.preview;
+  if (preview.openEntryCount === 0) {
+    return fail(NO_OPEN_OBLIGATIONS_ERROR);
+  }
+
+  // 2. Сверка с тем, что видел администратор.
+  if (
+    !sameEntryIdSet(
+      preview.accountingEntryIds,
+      input.expectedAccountingEntryIds ?? [],
+    ) ||
+    preview.restaurantOwesDirectCents !== input.expectedRestaurantOwesDirectCents ||
+    preview.directOwesRestaurantCents !== input.expectedDirectOwesRestaurantCents ||
+    preview.netDirection !== input.expectedNetDirection ||
+    preview.netAmountCents !== input.expectedNetAmountCents
+  ) {
+    return fail(STALE_FULL_SETTLEMENT_ERROR);
+  }
+
+  // 3. Способ и фактическая сумма (частичный расчёт не поддерживается).
+  if (!isSafeCents(transferredAmountCents)) {
+    return fail("Некорректная фактически переданная сумма.");
+  }
+  if (preview.netDirection === "BALANCED") {
+    if (method !== "NETTING") {
+      return fail("При нулевом итоге возможен только взаимозачёт.");
+    }
+    if (transferredAmountCents !== 0) {
+      return fail("При взаимозачёте фактически переданная сумма равна нулю.");
+    }
+  } else {
+    if (method !== "BANK_TRANSFER" && method !== "CASH" && method !== "OTHER") {
+      return fail("Выберите способ фактического расчёта.");
+    }
+    if (transferredAmountCents !== preview.netAmountCents) {
+      return fail(PARTIAL_SETTLEMENT_ERROR);
+    }
+    if (normalizedReference === null) {
+      return fail("Укажите внешнюю ссылку на платёж.");
+    }
+  }
+
+  const recordId = settlementRecordId(
+    restaurantId,
+    cutoffAt,
+    preview.accountingEntryIds,
+  );
+  if (state.restaurantSettlementRecords.some((r) => r.id === recordId)) {
+    return fail("Такой расчёт уже подтверждён.");
+  }
+
+  const selectedIds = new Set(preview.accountingEntryIds);
+  const draftRecord: RestaurantSettlementRecord = {
+    id: recordId,
+    restaurantId,
+    currencyCode: preview.currencyCode,
+    accountingEntryIds: [...preview.accountingEntryIds],
+    restaurantOwesDirectCents: preview.restaurantOwesDirectCents,
+    directOwesRestaurantCents: preview.directOwesRestaurantCents,
+    netDirection: preview.netDirection,
+    netAmountCents: preview.netAmountCents,
+    settledAt: cutoffAt,
+    actor: "ADMIN",
+    note: normalizedNote,
+    externalReference: normalizedReference,
+    // Полный расчёт по определению не оставляет открытой позиции: остаток
+    // строго нулевой, и этот инвариант проверяет канонический validator.
+    execution: {
+      dataStatus: "COMPLETE",
+      method,
+      transferredAmountCents,
+      remainingOpenEntryCount: 0,
+      remainingRestaurantOwesDirectCents: 0,
+      remainingDirectOwesRestaurantCents: 0,
+      remainingNetDirection: "BALANCED",
+      remainingNetAmountCents: 0,
+    },
+    selection: { scope: "FULL_OPEN_POSITION", cutoffAt },
+  };
+  const validated = validateRestaurantSettlementRecord(draftRecord);
+  if (!validated.ok) {
+    return fail(validated.error);
+  }
+  const record = validated.record;
+
+  const nextEntries = state.restaurantAccountingEntries.map((entry) =>
+    selectedIds.has(entry.id)
+      ? { ...entry, status: "SETTLED" as const, settledAt: cutoffAt }
+      : entry,
+  );
+
+  const newEvents: RestaurantAccountingResolutionEvent[] =
+    preview.accountingEntryIds.map((entryId) => ({
+      id: `accounting-resolution-${entryId}`,
+      accountingEntryId: entryId,
+      restaurantId,
+      previousStatus: "OPEN",
+      nextStatus: "SETTLED",
+      occurredAt: cutoffAt,
+      actor: "ADMIN",
+      note: normalizedNote,
+      externalReference: normalizedReference,
+    }));
+
+  // Старый журнал комиссий синхронизируется только для комиссионных
+  // обязательств; перечисление ресторана (v13) legacy-записи не имеет.
+  const commissionOrderIds = new Set(
+    state.restaurantAccountingEntries
+      .filter(
+        (entry) =>
+          selectedIds.has(entry.id) && entry.type === "PLATFORM_COMMISSION",
+      )
+      .map((entry) => entry.orderId),
+  );
+  const nextSettlements = state.settlements.map((settlement) =>
+    settlement.restaurantId === restaurantId &&
+    commissionOrderIds.has(settlement.orderId)
+      ? { ...settlement, status: "PAID" as const }
+      : settlement,
+  );
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...state,
+      restaurantAccountingEntries: nextEntries,
+      restaurantAccountingResolutionEvents: [
+        ...state.restaurantAccountingResolutionEvents,
+        ...newEvents,
+      ],
+      restaurantSettlementRecords: [
+        ...state.restaurantSettlementRecords,
+        record,
+      ],
+      settlements: nextSettlements,
+    },
+    cutoffAt,
+  );
+  return {
+    state: nextState,
+    result: { ok: true, error: null, settlementRecordId: recordId },
+  };
+}
+
+/**
+ * Последний ПОЛНЫЙ расчёт ресторана либо null. Выборочный расчёт и архивная
+ * запись полным расчётом не считаются, даже если их остаток нулевой или
+ * неизвестен. Новые сверху по моменту отсечки, детерминированный tie-break
+ * по id.
+ */
+export function getLatestFullRestaurantSettlement(
+  state: PrototypeState,
+  restaurantId: string,
+): RestaurantSettlementRecord | null {
+  const full = state.restaurantSettlementRecords.filter(
+    (record) =>
+      record.restaurantId === restaurantId &&
+      record.selection.scope === "FULL_OPEN_POSITION",
+  );
+  if (full.length === 0) return null;
+  return full.reduce((latest, candidate) => {
+    const latestCutoff =
+      latest.selection.scope === "FULL_OPEN_POSITION"
+        ? Date.parse(latest.selection.cutoffAt)
+        : 0;
+    const candidateCutoff =
+      candidate.selection.scope === "FULL_OPEN_POSITION"
+        ? Date.parse(candidate.selection.cutoffAt)
+        : 0;
+    if (candidateCutoff !== latestCutoff) {
+      return candidateCutoff > latestCutoff ? candidate : latest;
+    }
+    return candidate.id > latest.id ? candidate : latest;
+  });
 }
 
 /** Записи закрытых расчётов ресторана, новые сверху (read-only). */

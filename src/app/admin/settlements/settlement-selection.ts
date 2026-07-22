@@ -4,6 +4,7 @@ import type {
   RestaurantSettlementMethod,
   RestaurantSettlementNetDirection,
   RestaurantSettlementRecord,
+  RestaurantSettlementSelection,
 } from "@/prototype/models";
 // Относительный путь намеренно: этот модуль импортируется напрямую доменными
 // тестами (node --test), где alias `@/` не резолвится для value-импортов.
@@ -245,11 +246,96 @@ export interface SettlementHistoryRow {
   externalReference: string | null;
   /** v14: детали исполнения как они сохранены в записи (не пересчитываются). */
   execution: RestaurantSettlementExecution;
+  /** v15: область расчёта — полная позиция или выбранные обязательства. */
+  selection: RestaurantSettlementSelection;
 }
 
 /** Честное сообщение для архивной записи без деталей исполнения. */
 export const LEGACY_EXECUTION_MESSAGE =
   "Архивная запись: способ, фактическая сумма и остаток после расчёта не были сохранены.";
+
+// --- Полный расчёт всей открытой позиции (v15) --------------------------------
+
+/** Русские подписи области расчёта (сырой enum наружу не выводится). */
+export const SETTLEMENT_SCOPE_LABELS: Record<
+  RestaurantSettlementSelection["scope"],
+  string
+> = {
+  FULL_OPEN_POSITION: "Полный расчёт",
+  SELECTED_ENTRIES: "Выборочный расчёт",
+};
+
+/** Предупреждение перед подтверждением полного расчёта. */
+export const FULL_SETTLEMENT_WARNING =
+  "Будут закрыты все открытые обязательства ресторана на момент подтверждения. После полного расчёта баланс на этот момент станет равен нулю.";
+
+/**
+ * Кто кому передаёт итог полного расчёта. Направление приходит готовым из
+ * доменного preview — здесь только подпись, без арифметики и без минусов.
+ */
+export function describeFullSettlementNet(
+  netDirection: RestaurantSettlementNetDirection,
+): { title: string; buttonPrefix: string } {
+  if (netDirection === "DIRECT_OWES_RESTAURANT") {
+    return {
+      title: "Direct передаёт ресторану",
+      buttonPrefix: "Подтвердить: Direct передал ресторану",
+    };
+  }
+  if (netDirection === "RESTAURANT_OWES_DIRECT") {
+    return {
+      title: "Ресторан передаёт Direct",
+      buttonPrefix: "Подтвердить: ресторан передал Direct",
+    };
+  }
+  return {
+    title: "Взаимозачёт без передачи денег",
+    buttonPrefix: "Подтвердить полный взаимозачёт",
+  };
+}
+
+/** Текст кнопки полного расчёта: направление и сумма видны сразу. */
+export function fullSettlementConfirmLabel(
+  netDirection: RestaurantSettlementNetDirection,
+  amountText: string,
+): string {
+  const { buttonPrefix } = describeFullSettlementNet(netDirection);
+  return netDirection === "BALANCED"
+    ? buttonPrefix
+    : `${buttonPrefix} ${amountText}`;
+}
+
+/** Данные успешного полного расчёта для спокойного баннера. */
+export interface FullSettlementSuccess {
+  cutoffAt: string;
+  netDirection: RestaurantSettlementNetDirection;
+  method: RestaurantSettlementMethod;
+  transferredAmountCents: number;
+  entryCount: number;
+}
+
+/**
+ * Сообщение об успешном полном расчёте: момент отсечки, кто кому передал,
+ * сумма, способ, сколько закрыто и нулевой баланс на этот момент.
+ */
+export function formatFullSettlementSuccess(
+  success: FullSettlementSuccess,
+  cutoffText: string,
+  transferredText: string,
+  zeroText: string,
+): string {
+  const closed = `Закрыто ${success.entryCount} ${pluralObligations(success.entryCount)}.`;
+  const balance = `Баланс на момент расчёта: ${zeroText}.`;
+  const methodLabel =
+    RESTAURANT_SETTLEMENT_METHOD_LABELS[success.method].toLowerCase();
+  const payment =
+    success.netDirection === "BALANCED"
+      ? "Зафиксирован взаимозачёт без передачи денег."
+      : success.netDirection === "DIRECT_OWES_RESTAURANT"
+        ? `Direct передал ресторану ${transferredText} (${methodLabel}).`
+        : `Ресторан передал Direct ${transferredText} (${methodLabel}).`;
+  return `Полный расчёт подтверждён. Рассчитано полностью по ${cutoffText}. ${payment} ${closed} ${balance}`;
+}
 
 /**
  * История групповых расчётов для показа: внутренние accountingEntryIds наружу
@@ -270,5 +356,6 @@ export function toSettlementHistoryRows(
     note: record.note,
     externalReference: record.externalReference,
     execution: record.execution,
+    selection: record.selection,
   }));
 }

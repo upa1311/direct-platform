@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 14 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 15 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -221,6 +221,20 @@ export type RestaurantSettlementExecution =
     }
   | { dataStatus: "LEGACY_UNKNOWN" };
 
+/**
+ * Область расчёта (v15): закрыл ли он ВСЮ открытую взаимную позицию ресторана
+ * или только вручную выбранные обязательства.
+ *
+ * FULL_OPEN_POSITION означает «на момент cutoffAt стороны рассчитались
+ * полностью»: после такого расчёта баланс на этот момент равен нулю, а всё
+ * последующее относится к новому расчётному периоду. SELECTED_ENTRIES —
+ * существующий выборочный workflow: он полного расчёта НЕ означает, даже если
+ * остаток случайно оказался нулевым.
+ */
+export type RestaurantSettlementSelection =
+  | { scope: "SELECTED_ENTRIES" }
+  | { scope: "FULL_OPEN_POSITION"; cutoffAt: string };
+
 export interface RestaurantSettlementRecord {
   id: string;
   restaurantId: string;
@@ -237,6 +251,8 @@ export interface RestaurantSettlementRecord {
   externalReference: string | null;
   /** v14: способ расчёта, фактическая сумма и остаток открытой позиции. */
   execution: RestaurantSettlementExecution;
+  /** v15: закрыл ли расчёт всю открытую позицию или только выбранные записи. */
+  selection: RestaurantSettlementSelection;
 }
 
 export type PromotionType = "BUY_N_GET_M_CHEAPEST_FREE";

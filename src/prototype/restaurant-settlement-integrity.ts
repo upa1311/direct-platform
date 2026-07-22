@@ -4,6 +4,7 @@ import type {
   RestaurantSettlementMethod,
   RestaurantSettlementNetDirection,
   RestaurantSettlementRecord,
+  RestaurantSettlementSelection,
 } from "./models";
 import {
   ACCOUNTING_RESOLUTION_NOTE_MAX,
@@ -268,6 +269,81 @@ export function validateSettlementExecution(
   };
 }
 
+export type SettlementSelectionValidationResult =
+  | { ok: true; selection: RestaurantSettlementSelection }
+  | { ok: false; error: string };
+
+/**
+ * Валидация области расчёта (v15).
+ *
+ * FULL_OPEN_POSITION — сильное утверждение «стороны рассчитались полностью на
+ * момент cutoffAt», поэтому проверяется вместе с деталями исполнения: момент
+ * отсечки обязан совпадать с моментом расчёта, а остаток обязан быть строго
+ * нулевым по ВСЕМ полям. Полный расчёт с ненулевым остатком — противоречие в
+ * самой записи, а не редкий бизнес-случай.
+ *
+ * SELECTED_ENTRIES не несёт дополнительных полей: выборочный расчёт ничего не
+ * утверждает про остальную позицию, и его остаток остаётся как есть.
+ */
+export function validateSettlementSelection(
+  value: unknown,
+  settledAt: string,
+  execution: RestaurantSettlementExecution,
+): SettlementSelectionValidationResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, error: "Область расчёта повреждена." };
+  }
+  const raw = value as Record<string, unknown>;
+
+  if (raw.scope === "SELECTED_ENTRIES") {
+    if (Object.keys(raw).length !== 1) {
+      return {
+        ok: false,
+        error: "Выборочный расчёт не может содержать момент полного расчёта.",
+      };
+    }
+    return { ok: true, selection: { scope: "SELECTED_ENTRIES" } };
+  }
+  if (raw.scope !== "FULL_OPEN_POSITION") {
+    return { ok: false, error: "Неизвестная область расчёта." };
+  }
+  if (Object.keys(raw).length !== 2) {
+    return { ok: false, error: "Область полного расчёта повреждена." };
+  }
+  if (!isCanonicalIsoTimestamp(raw.cutoffAt)) {
+    return { ok: false, error: "Некорректный момент полного расчёта." };
+  }
+  // Отсечка полного расчёта — это и есть момент самого расчёта.
+  if (raw.cutoffAt !== settledAt) {
+    return {
+      ok: false,
+      error: "Момент полного расчёта не совпадает с датой расчёта.",
+    };
+  }
+  if (execution.dataStatus !== "COMPLETE") {
+    return {
+      ok: false,
+      error: "Полный расчёт обязан содержать детали исполнения.",
+    };
+  }
+  if (
+    execution.remainingOpenEntryCount !== 0 ||
+    execution.remainingRestaurantOwesDirectCents !== 0 ||
+    execution.remainingDirectOwesRestaurantCents !== 0 ||
+    execution.remainingNetDirection !== "BALANCED" ||
+    execution.remainingNetAmountCents !== 0
+  ) {
+    return {
+      ok: false,
+      error: "Полный расчёт не может оставлять открытую позицию.",
+    };
+  }
+  return {
+    ok: true,
+    selection: { scope: "FULL_OPEN_POSITION", cutoffAt: raw.cutoffAt },
+  };
+}
+
 export type SettlementRecordValidationResult =
   | { ok: true; record: RestaurantSettlementRecord }
   | { ok: false; error: string };
@@ -431,6 +507,17 @@ export function validateRestaurantSettlementRecord(
     return invalid(executionResult.error);
   }
 
+  // v15: область расчёта проверяется вместе с исполнением — «полный расчёт»
+  // обязан быть согласован с моментом расчёта и нулевым остатком.
+  const selectionResult = validateSettlementSelection(
+    raw.selection,
+    raw.settledAt,
+    executionResult.execution,
+  );
+  if (!selectionResult.ok) {
+    return invalid(selectionResult.error);
+  }
+
   return {
     ok: true,
     record: {
@@ -447,6 +534,7 @@ export function validateRestaurantSettlementRecord(
       note: raw.note,
       externalReference: raw.externalReference as string | null,
       execution: executionResult.execution,
+      selection: selectionResult.selection,
     },
   };
 }

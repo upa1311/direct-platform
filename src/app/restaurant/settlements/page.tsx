@@ -68,7 +68,13 @@ import { buildStatementPrintModel, type StatementPrintModel } from "./statement-
 import styles from "./settlements.module.css";
 import "./statement-print.css";
 
-import type { PrototypeState } from "@/prototype/models";
+import { getLatestFullRestaurantSettlement } from "@/prototype/restaurant-settlement-records";
+import { RESTAURANT_SETTLEMENT_METHOD_LABELS } from "@/app/admin/settlements/settlement-selection";
+
+import type {
+  PrototypeState,
+  RestaurantSettlementRecord,
+} from "@/prototype/models";
 
 /** Вид раздела: главный обзор, по заказам, по дням, журнал или выписка. */
 type SettlementView = "OVERVIEW" | "ORDERS" | "DAILY" | "OBLIGATIONS" | "STATEMENT";
@@ -208,6 +214,12 @@ export default function RestaurantSettlementsPage() {
     return buildRestaurantAccountingJournal(state, selectedRestaurantId);
   }, [view, isHydrated, restaurant, state, selectedRestaurantId]);
 
+  // Последний ПОЛНЫЙ расчёт — read-only справка на главном экране.
+  const lastFullSettlement = useMemo(() => {
+    if (!isHydrated || !restaurant) return null;
+    return getLatestFullRestaurantSettlement(state, selectedRestaurantId);
+  }, [isHydrated, restaurant, state, selectedRestaurantId]);
+
   const money = (cents: number) =>
     formatMoney(cents, overview?.currencyCode ?? "USD");
 
@@ -247,6 +259,7 @@ export default function RestaurantSettlementsPage() {
             result={financeResult}
             money={money}
             timeZone={timeZone}
+            lastFull={lastFullSettlement}
             onShowOrders={() => setView("ORDERS")}
             onShowStatement={() => setView("STATEMENT")}
           />
@@ -458,16 +471,26 @@ export default function RestaurantSettlementsPage() {
  * fail-closed блок без fallback на старые helpers и без правдоподобного
  * баланса.
  */
+/** Способ последнего полного расчёта русской подписью (enum не показывается). */
+function lastFullMethodSuffix(record: RestaurantSettlementRecord): string {
+  return record.execution.dataStatus === "COMPLETE"
+    ? ` (${RESTAURANT_SETTLEMENT_METHOD_LABELS[record.execution.method].toLowerCase()})`
+    : "";
+}
+
 function FinanceOverview({
   result,
   money,
   timeZone,
+  lastFull,
   onShowOrders,
   onShowStatement,
 }: {
   result: RestaurantFinanceReadModelResult | null;
   money: (cents: number) => string;
   timeZone: string;
+  /** Последний ПОЛНЫЙ расчёт ресторана либо null (read-only). */
+  lastFull: RestaurantSettlementRecord | null;
   onShowOrders: () => void;
   onShowStatement: () => void;
 }) {
@@ -488,6 +511,18 @@ function FinanceOverview({
   const model = result.model;
   // Готовое направление и сумма после взаимозачёта — из model, без арифметики.
   const net = describeFinanceNet(model);
+  // Момент отсечки и платёж последнего полного расчёта — как они сохранены.
+  const lastFullCutoffAt =
+    lastFull && lastFull.selection.scope === "FULL_OPEN_POSITION"
+      ? lastFull.selection.cutoffAt
+      : null;
+  const lastFullPayment = !lastFull
+    ? ""
+    : lastFull.netDirection === "BALANCED"
+      ? "Взаимозачёт без передачи денег."
+      : lastFull.netDirection === "DIRECT_OWES_RESTAURANT"
+        ? `Direct передал вам ${money(lastFull.netAmountCents)}${lastFullMethodSuffix(lastFull)}.`
+        : `Вы передали Direct ${money(lastFull.netAmountCents)}${lastFullMethodSuffix(lastFull)}.`;
 
   return (
     <>
@@ -513,6 +548,33 @@ function FinanceOverview({
             <dd>{money(model.restaurantOwesDirectCents)}</dd>
           </div>
         </dl>
+      </section>
+
+      {/* Последний ПОЛНЫЙ расчёт: read-only, ресторан здесь ничего не
+          подтверждает. Выборочный расчёт полным не считается. */}
+      <section className={styles.noticeCard} aria-label="Последний полный расчёт">
+        {lastFull === null ? (
+          <span>Полных расчётов пока не было.</span>
+        ) : (
+          <>
+            <div>
+              <strong>
+                Последний полный расчёт:{" "}
+                {formatInZone(lastFullCutoffAt as string, timeZone)}
+              </strong>
+            </div>
+            <div>На этот момент баланс был закрыт полностью.</div>
+            <div>{lastFullPayment}</div>
+            {lastFull.externalReference ? (
+              <div>Документ: {lastFull.externalReference}</div>
+            ) : null}
+            {model.openAccountingEntryCount > 0 ? (
+              <div>
+                Текущий баланс сформирован после последнего полного расчёта.
+              </div>
+            ) : null}
+          </>
+        )}
       </section>
 
       {/* Компактная сводная метаинформация. */}

@@ -138,6 +138,9 @@ function record(
       remainingNetDirection: "BALANCED",
       remainingNetAmountCents: 0,
     },
+    // v15: выборочный расчёт по умолчанию — тесты этого файла проверяют
+    // детали исполнения, а не область расчёта.
+    selection: { scope: "SELECTED_ENTRIES" },
     ...overrides,
   };
 }
@@ -151,17 +154,17 @@ function withExecution(
 
 // --- 1–5: типы и схема --------------------------------------------------------
 
-test("1: схема поднята с 13 до 14", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 14);
+test("1: схема поднята до текущей версии", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 15);
 });
 
-test("2: состояния прежних схем по-прежнему парсятся, схема становится 14", () => {
-  for (const version of [11, 12, 13, 14]) {
+test("2: состояния прежних схем по-прежнему парсятся", () => {
+  for (const version of [11, 12, 13, 14, 15]) {
     const legacy = createDefaultState() as unknown as Record<string, unknown>;
     legacy.schemaVersion = version;
     const parsed = parseStoredState(JSON.stringify(legacy));
     assert.ok(parsed, String(version));
-    assert.equal(parsed.schemaVersion, 14, String(version));
+    assert.equal(parsed.schemaVersion, 15, String(version));
   }
 });
 
@@ -1304,6 +1307,6 @@ test("97: нормальный расчёт по-прежнему создаёт
   assert.equal(stored.execution.dataStatus, "COMPLETE");
 });
 
-test("98: версия схемы остаётся 14", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 14);
+test("98: версия схемы актуальна", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 15);
 });

@@ -41,10 +41,11 @@ function validRecord(
     externalReference: "bank-777" as string | null,
     ...overrides,
   };
-  // v14: детали исполнения по умолчанию согласованы с итогом самой записи —
-  // тесты, проверяющие ДРУГИЕ поля, не должны падать из-за них.
+  // v14/v15: детали исполнения и область расчёта по умолчанию согласованы с
+  // самой записью — тесты, проверяющие ДРУГИЕ поля, не должны падать из-за них.
   return {
     ...base,
+    selection: overrides.selection ?? { scope: "SELECTED_ENTRIES" },
     execution:
       overrides.execution ??
       (base.netDirection === "BALANCED"

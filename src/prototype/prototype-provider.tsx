@@ -99,7 +99,9 @@ import {
   type RestaurantAccountingResolutionResult,
 } from "./restaurant-accounting";
 import {
+  confirmFullRestaurantSettlement,
   confirmRestaurantSettlement,
+  type ConfirmFullRestaurantSettlementInput,
   type ConfirmRestaurantSettlementInput,
   type RestaurantSettlementConfirmResult,
 } from "./restaurant-settlement-records";
@@ -322,6 +324,14 @@ export interface PrototypeContextValue {
    */
   confirmSettlement: (
     input: Omit<ConfirmRestaurantSettlementInput, "nowIso">,
+  ) => Promise<RestaurantSettlementConfirmResult>;
+  /**
+   * Полный расчёт всей открытой позиции ресторана (v15). Момент отсечки
+   * создаётся ВНУТРИ сериализованной мутации над свежим состоянием — UI его не
+   * передаёт, иначе закрывалась бы позиция на момент открытия экрана.
+   */
+  confirmFullSettlement: (
+    input: ConfirmFullRestaurantSettlementInput,
   ) => Promise<RestaurantSettlementConfirmResult>;
   /** Выдача самовывоза после фактической оплаты на точке; код не требуется. */
   completePickup: (
@@ -1328,6 +1338,28 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  const confirmFullSettlement = useCallback(
+    (input: ConfirmFullRestaurantSettlementInput) => {
+      return runSerializedActionMutation({
+        // Отсечка берётся уже под lock и от актуального baseState: расчёт
+        // закрывает позицию на момент подтверждения, а не на момент открытия
+        // экрана. Один и тот же момент попадёт в запись, закрытые
+        // обязательства, audit-события и id расчёта.
+        mutation: (baseState) =>
+          confirmFullRestaurantSettlement(baseState, {
+            ...input,
+            cutoffAt: new Date().toISOString(),
+          }),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          settlementRecordId: null,
+        }),
+      });
+    },
+    [runSerializedActionMutation],
+  );
+
   const requestRestaurantCancellation = useCallback(
     (
       orderId: string,
@@ -1668,6 +1700,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       requestRestaurantCancellation,
       resolveAccountingEntry,
       confirmSettlement,
+      confirmFullSettlement,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
@@ -1730,6 +1763,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       requestRestaurantCancellation,
       resolveAccountingEntry,
       confirmSettlement,
+      confirmFullSettlement,
       completePickup,
       markPickupNoShow,
       markOutForDelivery,
