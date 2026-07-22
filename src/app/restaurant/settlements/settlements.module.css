@@ -336,38 +336,58 @@
   gap: 8px;
 }
 
-/* Сводные карточки: auto-fill, на узких экранах одна колонка. */
+/* Компактная read-only сводка показателей. Это финансовая таблица, а не набор
+   кнопок: одна группа с общими горизонтальными границами, у самих показателей
+   нет собственной рамки, заливки, крупного скругления и hover/active состояний.
+   Разделители между колонками — волосяные линии, вытянутые отрицательным
+   margin за пределы группы и обрезанные overflow, поэтому крайние показатели в
+   каждом ряду лишней линии не получают (работает и при переносе на мобильном). */
 .summaryGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--kds-border, #d0d5dd);
+  border-bottom: 1px solid var(--kds-border, #d0d5dd);
+  overflow: hidden;
 }
 
 .card {
-  border: 1px solid var(--kds-border, #d0d5dd);
-  border-radius: 10px;
-  padding: 12px 14px;
+  border: 0;
+  border-left: 1px solid var(--kds-border, #eceff3);
+  border-top: 1px solid var(--kds-border, #eceff3);
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 14px;
+  margin: -1px 0 0 -1px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
 .cardLabel {
   font-size: 12px;
-  opacity: 0.72;
+  font-weight: 500;
+  line-height: 1.3;
+  opacity: 0.7;
   overflow-wrap: anywhere;
 }
 
 .cardValue {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
   overflow-wrap: anywhere;
 }
 
 .cardHint {
   font-size: 11px;
+  line-height: 1.35;
   opacity: 0.6;
+  overflow-wrap: anywhere;
 }
 
 /* Спокойный информационный блок — не обещает бухгалтерскую достоверность. */
@@ -421,16 +441,68 @@
   overflow-wrap: anywhere;
 }
 
-/* «Подробности сверки»: только курсор summary и отступ до раскрытых карточек. */
+/* «Подробности сверки»: компактная строка-раскрытие, а не карточка и не кнопка.
+   Раскрытие остаётся нативным details, поэтому состояние нигде не хранится. */
+.reconDetails {
+  border: 0;
+  padding: 0;
+}
+
 .reconSummary {
   cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 2px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.reconSummary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }
 
 .reconDetailsBody {
-  margin-top: 12px;
+  margin-top: 10px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* «Как рассчитываются выплаты»: длинное объяснение схемы скрыто по умолчанию.
+   В закрытом виде — одна спокойная строка без рамки-карточки; заголовок схемы
+   и пункты появляются только после раскрытия. */
+.schemeDetails {
+  border: 0;
+  padding: 0;
+}
+
+.schemeSummary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 2px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.schemeSummary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.schemeBody {
+  margin-top: 8px;
+  border: 1px solid var(--kds-border, #d0d5dd);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.schemeTitle {
+  display: block;
+  overflow-wrap: anywhere;
 }
 
 /* Банковская комиссия дня: компактная строка вместо отдельных карточек. */
@@ -693,8 +765,16 @@
 }
 
 @media (max-width: 480px) {
+  /* Одна или две колонки в зависимости от ширины — auto-fit сам решает по
+     minmax; принудительная одна колонка растянула бы сводку по вертикали. */
   .summaryGrid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+  .card {
+    padding: 8px 12px;
+  }
+  .cardValue {
+    font-size: 21px;
   }
   .container {
     padding: 12px;

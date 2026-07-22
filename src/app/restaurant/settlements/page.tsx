@@ -625,16 +625,24 @@ function FinanceOverview({
       )}
 
       {/* Как устроен расчёт именно этого ресторана: текст определяется его
-          конфигурацией, а не идентификатором. */}
+          конфигурацией, а не идентификатором. Объяснение длинное и нужно не
+          каждый раз, поэтому скрыто за нативным details — закрыто по умолчанию,
+          без React-state и без сохранения раскрытия. В закрытом виде видна
+          только короткая строка: ни заголовок схемы, ни ставки не показываются. */}
       {modelNotes ? (
-        <section className={styles.noticeCard} aria-label="Как работает ваша схема">
-          <strong>Как работает ваша схема · {modelNotes.title}</strong>
-          <ul className={styles.modelNotes}>
-            {modelNotes.notes.map((note) => (
-              <li key={note}>{note}</li>
-            ))}
-          </ul>
-        </section>
+        <details className={styles.schemeDetails}>
+          <summary className={styles.schemeSummary}>
+            Как рассчитываются выплаты
+          </summary>
+          <div className={styles.schemeBody}>
+            <strong className={styles.schemeTitle}>{modelNotes.title}</strong>
+            <ul className={styles.modelNotes}>
+              {modelNotes.notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          </div>
+        </details>
       ) : null}
 
       {/* Последний ПОЛНЫЙ расчёт: read-only, ресторан здесь ничего не
@@ -1908,6 +1916,10 @@ function SummaryCard({
   value: string;
   hint?: string;
 }) {
+  // Read-only показатель: обычный div внутри общей группы .summaryGrid. Это не
+  // кнопка и не ссылка — ничего не открывает, не имеет собственной рамки,
+  // заливки и hover/active состояния. Единственный renderer показателей: его
+  // используют и сводка периода, и «Подробности сверки», и карточки «По дням».
   return (
     <div className={styles.card}>
       <span className={styles.cardLabel}>{label}</span>
