@@ -21,7 +21,6 @@ import {
 import {
   buildFullRestaurantSettlementPreview,
   buildRestaurantSettlementPreview,
-  getLatestFullRestaurantSettlement,
   getRestaurantSettlementRecords,
 } from "@/prototype/restaurant-settlement-records";
 import {
@@ -206,6 +205,10 @@ export default function AdminSettlementsPage() {
     const confirmed = fullPreview;
     const method = fullEffectiveMethod;
     const transferredAmountCents = fullTransferredCents;
+    // Авторитетный момент отсечки приходит ИЗ доменного результата: он создан
+    // под Web Lock. Искать его в React-состоянии после await нельзя — это
+    // устаревший снимок, и баннер показал бы чужой или прошлый момент.
+    let authoritativeCutoffAt: string | null = null;
     const res = await runFullSettlement(async () => {
       const r = await confirmFullSettlement({
         restaurantId: activeRestaurantId,
@@ -220,18 +223,14 @@ export default function AdminSettlementsPage() {
         note: fullNote,
         externalReference: fullReference.trim() ? fullReference : null,
       });
+      if (r.ok) {
+        authoritativeCutoffAt = r.cutoffAt;
+      }
       return { ok: r.ok, error: r.error, changed: r.ok };
     });
-    if (res.ok) {
-      // Момент отсечки создал домен внутри lock; в баннере показываем именно
-      // его — берём из свежесозданной записи полного расчёта.
-      const created = getLatestFullRestaurantSettlement(state, activeRestaurantId);
-      const cutoffAt =
-        created && created.selection.scope === "FULL_OPEN_POSITION"
-          ? created.selection.cutoffAt
-          : confirmed.cutoffAt;
+    if (res.ok && authoritativeCutoffAt !== null) {
       setFullSuccess({
-        cutoffAt,
+        cutoffAt: authoritativeCutoffAt,
         netDirection: confirmed.netDirection,
         method,
         transferredAmountCents,

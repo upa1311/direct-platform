@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+import {
+  addCartItem,
+  createOrderFromCart,
+  setCartFulfillmentChoice,
+} from "./actions.ts";
 import { createDefaultState } from "./default-state.ts";
 import { PROTOTYPE_SCHEMA_VERSION } from "./models.ts";
 import type {
@@ -21,6 +26,7 @@ import {
 import {
   buildFullRestaurantSettlementPreview,
   confirmFullRestaurantSettlement,
+  FULL_SETTLEMENT_REVIEW_REQUIRED_ERROR,
   confirmRestaurantSettlement,
   getLatestFullRestaurantSettlement,
   NO_OPEN_OBLIGATIONS_ERROR,
@@ -991,4 +997,353 @@ test("71: архивная запись полным расчётом не сч�
 
 test("72: версия схемы поднята до 15", () => {
   assert.equal(PROTOTYPE_SCHEMA_VERSION, 15);
+});
+
+// --- 73–112: авторитетный cutoff и запрет при REVIEW_REQUIRED ------------------
+
+/** Настоящий заказ-шаблон: собирается штатным путём через корзину. */
+const TEMPLATE_ORDER = (() => {
+  let s = setCartFulfillmentChoice(createDefaultState(), "PICKUP");
+  s = addCartItem(s, "restaurant-1-item-1").state;
+  const created = createOrderFromCart(s);
+  const order = created.state.orders.find(
+    (o) => o.id === (created.result.orderId as string),
+  );
+  assert.ok(order);
+  return order;
+})();
+
+/** Заказ ресторана с заданным статусом движения денег. */
+function orderWithStatus(
+  id: string,
+  restaurantId: string,
+  moneyMovementStatus: "COMPLETE" | "REVIEW_REQUIRED" | "PENDING_PAYMENT_CHANNEL",
+): PrototypeState["orders"][number] {
+  return {
+    ...TEMPLATE_ORDER,
+    id,
+    publicNumber: `DIR-${id}`,
+    restaurant: { ...TEMPLATE_ORDER.restaurant, id: restaurantId },
+    financials: {
+      ...TEMPLATE_ORDER.financials,
+      moneyMovementStatus,
+      ...(moneyMovementStatus === "COMPLETE" ? {} : { moneyMovement: undefined }),
+    },
+  };
+}
+
+/** Состояние с обязательствами и заказами (для guard REVIEW_REQUIRED). */
+function stateWithOrders(
+  entries: RestaurantAccountingEntry[],
+  orders: PrototypeState["orders"],
+): PrototypeState {
+  return { ...stateWith(entries), orders };
+}
+
+test("73: успешный полный расчёт возвращает момент отсечки", () => {
+  const state = directOwesState();
+  const res = confirmFullRestaurantSettlement(state, fullInput(state));
+  assert.equal(res.result.ok, true);
+  assert.ok(res.result.ok && typeof res.result.cutoffAt === "string");
+});
+
+test("74: возвращённый момент равен переданному domain cutoff", () => {
+  const state = directOwesState();
+  const res = confirmFullRestaurantSettlement(state, fullInput(state));
+  assert.ok(res.result.ok);
+  assert.equal(res.result.ok && res.result.cutoffAt, CUTOFF);
+});
+
+test("75: момент совпадает с selection.cutoffAt записи", () => {
+  const state = directOwesState();
+  const res = confirmFullRestaurantSettlement(state, fullInput(state));
+  assert.ok(res.result.ok);
+  const record = res.state.restaurantSettlementRecords[0];
+  assert.ok(record && record.selection.scope === "FULL_OPEN_POSITION");
+  if (!record || record.selection.scope !== "FULL_OPEN_POSITION") throw new Error("x");
+  assert.equal(res.result.ok && res.result.cutoffAt, record.selection.cutoffAt);
+});
+
+test("76: момент совпадает с settledAt записи", () => {
+  const state = directOwesState();
+  const res = confirmFullRestaurantSettlement(state, fullInput(state));
+  assert.ok(res.result.ok);
+  const record = res.state.restaurantSettlementRecords[0];
+  assert.ok(record);
+  assert.equal(res.result.ok && res.result.cutoffAt, record.settledAt);
+});
+
+test("77: момент совпадает с settledAt всех закрытых обязательств", () => {
+  const state = directOwesState();
+  const res = confirmFullRestaurantSettlement(state, fullInput(state));
+  assert.ok(res.result.ok);
+  const cutoff = res.result.ok ? res.result.cutoffAt : null;
+  for (const stored of res.state.restaurantAccountingEntries) {
+    assert.equal(stored.settledAt, cutoff);
+  }
+});
+
+test("78: момент совпадает с occurredAt всех новых событий", () => {
+  const state = directOwesState();
+  const res = confirmFullRestaurantSettlement(state, fullInput(state));
+  assert.ok(res.result.ok);
+  const cutoff = res.result.ok ? res.result.cutoffAt : null;
+  for (const event of res.state.restaurantAccountingResolutionEvents) {
+    assert.equal(event.occurredAt, cutoff);
+  }
+});
+
+test("79: доменный отказ возвращает cutoffAt: null", () => {
+  const state = directOwesState();
+  const res = confirmFullRestaurantSettlement(
+    state,
+    fullInput(state, { note: "   " }),
+  );
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.cutoffAt, null);
+  assert.equal(res.result.settlementRecordId, null);
+});
+
+test("80: инфраструктурный отказ провайдера возвращает cutoffAt: null", () => {
+  const PROVIDER = readFileSync("src/prototype/prototype-provider.tsx", "utf8");
+  const body = PROVIDER.slice(
+    PROVIDER.indexOf("const confirmFullSettlement = useCallback("),
+    PROVIDER.indexOf("const requestRestaurantCancellation"),
+  );
+  assert.ok(body.includes("infrastructureFailure"));
+  assert.ok(body.includes("cutoffAt: null"));
+  // Момент отсечки создаётся ровно один раз и только внутри мутации.
+  assert.equal(body.split("new Date().toISOString()").length - 1, 1);
+  assert.ok(body.includes("cutoffAt: new Date().toISOString()"));
+});
+
+test("81: баннер администратора использует возвращённый cutoffAt", () => {
+  assert.ok(ADMIN_PAGE.includes("authoritativeCutoffAt = r.cutoffAt"));
+  assert.ok(ADMIN_PAGE.includes("cutoffAt: authoritativeCutoffAt"));
+  assert.ok(ADMIN_PAGE.includes("res.ok && authoritativeCutoffAt !== null"));
+});
+
+test("82: администратор не ищет момент в устаревшем React-состоянии", () => {
+  assert.ok(!ADMIN_PAGE.includes("getLatestFullRestaurantSettlement"));
+  // И не подставляет момент из preview или часов после await.
+  assert.ok(!ADMIN_PAGE.includes("confirmed.cutoffAt"));
+  assert.ok(!/cutoffAt:\s*state\.updatedAt/.test(ADMIN_PAGE));
+  assert.ok(!/cutoffAt:\s*new Date\(\)\.toISOString\(\)/.test(ADMIN_PAGE));
+});
+
+test("83: первый полный расчёт не показывает прежний updatedAt состояния", () => {
+  const state = directOwesState();
+  const res = confirmFullRestaurantSettlement(state, fullInput(state));
+  assert.ok(res.result.ok);
+  assert.notEqual(res.result.ok && res.result.cutoffAt, state.updatedAt);
+});
+
+test("84: второй полный расчёт возвращает свой момент, а не первый", () => {
+  const state = directOwesState();
+  const first = confirmFullRestaurantSettlement(state, fullInput(state));
+  assert.ok(first.result.ok);
+  const later: PrototypeState = {
+    ...first.state,
+    restaurantAccountingEntries: [
+      ...first.state.restaurantAccountingEntries,
+      entry("c9", "RESTAURANT_OWES_DIRECT", 2_500),
+    ],
+  };
+  const secondCutoff = "2026-07-23T09:00:00.000Z";
+  const second = confirmFullRestaurantSettlement(
+    later,
+    fullInput(later, {}, secondCutoff),
+  );
+  assert.ok(second.result.ok);
+  assert.equal(second.result.ok && second.result.cutoffAt, secondCutoff);
+  assert.notEqual(
+    second.result.ok && second.result.cutoffAt,
+    first.result.ok && first.result.cutoffAt,
+  );
+});
+
+test("85: момент preview не используется как запасной после успеха", () => {
+  // Preview строится с одним cutoff, подтверждение — с другим: результат
+  // обязан вернуть именно момент подтверждения.
+  const state = directOwesState();
+  const input = fullInput(state, {}, "2026-07-22T14:35:00.000Z");
+  const confirmCutoff = "2026-07-22T18:00:00.000Z";
+  const res = confirmFullRestaurantSettlement(state, {
+    ...input,
+    cutoffAt: confirmCutoff,
+  });
+  assert.ok(res.result.ok);
+  assert.equal(res.result.ok && res.result.cutoffAt, confirmCutoff);
+});
+
+// --- REVIEW_REQUIRED -----------------------------------------------------------
+
+test("86: заказ ресторана с REVIEW_REQUIRED ломает полный preview", () => {
+  const state = stateWithOrders(
+    [entry("c1", "RESTAURANT_OWES_DIRECT", 4_000)],
+    [orderWithStatus("o1", RID, "REVIEW_REQUIRED")],
+  );
+  const result = previewOf(state);
+  assert.equal(result.ok, false);
+});
+
+test("87: возвращается точная доменная ошибка", () => {
+  const state = stateWithOrders(
+    [entry("c1", "RESTAURANT_OWES_DIRECT", 4_000)],
+    [orderWithStatus("o1", RID, "REVIEW_REQUIRED")],
+  );
+  const result = previewOf(state);
+  assert.ok(!result.ok);
+  assert.equal(
+    !result.ok && result.error,
+    FULL_SETTLEMENT_REVIEW_REQUIRED_ERROR,
+  );
+});
+
+test("88: REVIEW_REQUIRED другого ресторана не блокирует", () => {
+  const state = stateWithOrders(
+    [entry("c1", "RESTAURANT_OWES_DIRECT", 4_000)],
+    [orderWithStatus("o1", OTHER_RID, "REVIEW_REQUIRED")],
+  );
+  const preview = okPreview(state);
+  assert.equal(preview.openEntryCount, 1);
+});
+
+test("89: COMPLETE-заказ не блокирует полный расчёт", () => {
+  const state = stateWithOrders(
+    [entry("c1", "RESTAURANT_OWES_DIRECT", 4_000)],
+    [orderWithStatus("o1", RID, "COMPLETE")],
+  );
+  assert.equal(okPreview(state).openEntryCount, 1);
+});
+
+test("90: PENDING_PAYMENT_CHANNEL сам по себе не блокирует", () => {
+  const state = stateWithOrders(
+    [entry("c1", "RESTAURANT_OWES_DIRECT", 4_000)],
+    [orderWithStatus("o1", RID, "PENDING_PAYMENT_CHANNEL")],
+  );
+  assert.equal(okPreview(state).openEntryCount, 1);
+});
+
+test("91: REVIEW_REQUIRED между preview и confirm блокирует подтверждение", () => {
+  const clean = directOwesState();
+  const input = fullInput(clean);
+  const broken = stateWithOrders(clean.restaurantAccountingEntries, [
+    orderWithStatus("o1", RID, "REVIEW_REQUIRED"),
+  ]);
+  const res = confirmFullRestaurantSettlement(broken, input);
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, FULL_SETTLEMENT_REVIEW_REQUIRED_ERROR);
+});
+
+test("92: такой отказ возвращает cutoffAt: null и исходный state", () => {
+  const clean = directOwesState();
+  const input = fullInput(clean);
+  const broken = stateWithOrders(clean.restaurantAccountingEntries, [
+    orderWithStatus("o1", RID, "REVIEW_REQUIRED"),
+  ]);
+  const res = confirmFullRestaurantSettlement(broken, input);
+  assert.equal(res.result.cutoffAt, null);
+  assert.equal(res.result.settlementRecordId, null);
+  assert.equal(res.state, broken);
+});
+
+test("93: при отказе ничего не закрывается и не создаётся", () => {
+  const legacy: SettlementEntry = {
+    id: "settlement-order-c1",
+    orderId: "order-c1",
+    restaurantId: RID,
+    type: "PICKUP_COMMISSION",
+    amountCents: 4_000,
+    status: "PENDING",
+    createdAt: T0,
+  };
+  const clean = directOwesState();
+  const input = fullInput(clean);
+  const broken: PrototypeState = {
+    ...stateWithOrders(clean.restaurantAccountingEntries, [
+      orderWithStatus("o1", RID, "REVIEW_REQUIRED"),
+    ]),
+    settlements: [legacy],
+  };
+  const res = confirmFullRestaurantSettlement(broken, input);
+  assert.equal(res.result.ok, false);
+  assert.ok(
+    res.state.restaurantAccountingEntries.every((e) => e.status === "OPEN"),
+  );
+  assert.deepEqual(res.state.restaurantSettlementRecords, []);
+  assert.deepEqual(res.state.restaurantAccountingResolutionEvents, []);
+  assert.equal(res.state.settlements[0].status, "PENDING");
+  assert.equal(res.state.revision, broken.revision);
+  assert.equal(res.state.updatedAt, broken.updatedAt);
+});
+
+test("94: выборочный расчёт при REVIEW_REQUIRED остаётся доступным", () => {
+  const state = stateWithOrders(
+    [entry("c1", "RESTAURANT_OWES_DIRECT", 4_000)],
+    [orderWithStatus("o1", RID, "REVIEW_REQUIRED")],
+  );
+  const res = confirmRestaurantSettlement(state, {
+    restaurantId: RID,
+    accountingEntryIds: ["c1"],
+    method: "BANK_TRANSFER",
+    transferredAmountCents: 4_000,
+    note: "Выборочный",
+    externalReference: "ref",
+    nowIso: CUTOFF,
+  });
+  assert.equal(res.result.error, null);
+  assert.equal(
+    res.state.restaurantSettlementRecords[0].selection.scope,
+    "SELECTED_ENTRIES",
+  );
+});
+
+test("95: администратор показывает доменную ошибку полного расчёта", () => {
+  assert.ok(ADMIN_PAGE.includes("fullPreviewResult && !fullPreviewResult.ok"));
+  assert.ok(ADMIN_PAGE.includes("{fullPreviewResult.error}"));
+  // Кнопка появляется только при успешном preview.
+  assert.ok(ADMIN_PAGE.includes("fullPreview && fullNet ?"));
+  assert.ok(ADMIN_PAGE.includes("disabled={!canConfirmFull}"));
+});
+
+test("96: кнопка полного расчёта недоступна без успешного preview", () => {
+  assert.ok(ADMIN_PAGE.includes("fullPreview !== null &&"));
+  assert.ok(ADMIN_PAGE.includes("fullPreview.openEntryCount > 0 &&"));
+});
+
+// --- регрессия ------------------------------------------------------------------
+
+test("97: оба направления и взаимозачёт по-прежнему проходят", () => {
+  for (const make of [directOwesState, restaurantOwesState, balancedState]) {
+    const state = make();
+    const res = confirmFullRestaurantSettlement(state, fullInput(state));
+    assert.equal(res.result.ok, true);
+    assert.ok(res.result.ok && res.result.cutoffAt === CUTOFF);
+  }
+});
+
+test("98: устаревший снимок позиции по-прежнему отклоняется", () => {
+  const state = directOwesState();
+  const input = fullInput(state);
+  const changed: PrototypeState = {
+    ...state,
+    restaurantAccountingEntries: [
+      ...state.restaurantAccountingEntries,
+      entry("c9", "RESTAURANT_OWES_DIRECT", 2_000),
+    ],
+  };
+  const res = confirmFullRestaurantSettlement(changed, input);
+  assert.equal(res.result.ok, false);
+  assert.equal(res.result.error, STALE_FULL_SETTLEMENT_ERROR);
+  assert.equal(res.result.cutoffAt, null);
+});
+
+test("99: версия схемы остаётся 15", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 15);
+});
+
+test("100: ресторанный экран продолжает показывать последний полный расчёт", () => {
+  assert.ok(RESTAURANT_PAGE.includes("getLatestFullRestaurantSettlement("));
+  assert.ok(RESTAURANT_PAGE.includes("Последний полный расчёт:"));
 });

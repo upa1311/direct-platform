@@ -103,6 +103,7 @@ import {
   confirmRestaurantSettlement,
   type ConfirmFullRestaurantSettlementInput,
   type ConfirmRestaurantSettlementInput,
+  type FullRestaurantSettlementConfirmResult,
   type RestaurantSettlementConfirmResult,
 } from "./restaurant-settlement-records";
 import type { EtaAdjustmentIntent } from "./order-eta";
@@ -332,7 +333,7 @@ export interface PrototypeContextValue {
    */
   confirmFullSettlement: (
     input: ConfirmFullRestaurantSettlementInput,
-  ) => Promise<RestaurantSettlementConfirmResult>;
+  ) => Promise<FullRestaurantSettlementConfirmResult>;
   /** Выдача самовывоза после фактической оплаты на точке; код не требуется. */
   completePickup: (
     orderId: string,
@@ -1350,10 +1351,13 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             ...input,
             cutoffAt: new Date().toISOString(),
           }),
+        // Инфраструктурный отказ тоже обязан вернуть полный контракт: момента
+        // отсечки не было, поэтому cutoffAt строго null.
         infrastructureFailure: (error) => ({
-          ok: false,
+          ok: false as const,
           error,
           settlementRecordId: null,
+          cutoffAt: null,
         }),
       });
     },

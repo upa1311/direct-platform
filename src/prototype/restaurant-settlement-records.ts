@@ -664,6 +664,23 @@ export const NO_OPEN_OBLIGATIONS_ERROR =
 export const STALE_FULL_SETTLEMENT_ERROR =
   "Баланс изменился. Обновите расчёт и подтвердите новую сумму.";
 
+/**
+ * Полный расчёт утверждает «неизвестных обязательств нет». Заказ, финансовые
+ * данные которого требуют разбора, в открытый баланс не входит, поэтому такое
+ * утверждение было бы ложным.
+ */
+export const FULL_SETTLEMENT_REVIEW_REQUIRED_ERROR =
+  "Полный расчёт невозможен: есть заказы, требующие проверки финансовых данных.";
+
+/**
+ * Результат полного расчёта. Момент отсечки возвращается ЯВНО: он создаётся
+ * внутри сериализованной мутации, и UI не имеет права искать его в своём
+ * (уже устаревшем) снимке состояния или генерировать второй timestamp.
+ */
+export type FullRestaurantSettlementConfirmResult =
+  | { ok: true; error: null; settlementRecordId: string; cutoffAt: string }
+  | { ok: false; error: string; settlementRecordId: null; cutoffAt: null };
+
 function fullPreviewFail(error: string): FullRestaurantSettlementPreviewResult {
   return { ok: false, error };
 }
@@ -696,6 +713,22 @@ export function buildFullRestaurantSettlementPreview(
     return fullPreviewFail("Некорректное время операции.");
   }
   const cutoffMs = Date.parse(cutoffAt);
+
+  // Полный расчёт утверждает: «на этот момент неизвестных обязательств нет».
+  // Заказ, чьи финансовые данные требуют разбора, в открытый баланс не входит
+  // (направление и сумма не выводятся безопасно), поэтому такое утверждение
+  // было бы ложным: запись показала бы ноль при неизвестном потенциальном
+  // долге. Ни подставлять ноль, ни угадывать сумму, ни создавать синтетическое
+  // обязательство нельзя — только честный отказ. Владелец заказа берётся из
+  // его собственного снимка, поэтому чужой REVIEW_REQUIRED этот ресторан не
+  // блокирует. PENDING_PAYMENT_CHANNEL (незавершённый самовывоз) признанным
+  // обязательством не является и сюда не приравнивается.
+  for (const order of state.orders) {
+    if (order.restaurant.id !== restaurantId) continue;
+    if (order.financials.moneyMovementStatus === "REVIEW_REQUIRED") {
+      return fullPreviewFail(FULL_SETTLEMENT_REVIEW_REQUIRED_ERROR);
+    }
+  }
 
   const resolvedEntryIds = new Set(
     state.restaurantAccountingResolutionEvents.map(
@@ -863,7 +896,7 @@ function sameEntryIdSet(
 export function confirmFullRestaurantSettlement(
   state: PrototypeState,
   input: ConfirmFullRestaurantSettlementInput & { cutoffAt: string },
-): { state: PrototypeState; result: RestaurantSettlementConfirmResult } {
+): { state: PrototypeState; result: FullRestaurantSettlementConfirmResult } {
   const {
     restaurantId,
     method,
@@ -872,9 +905,11 @@ export function confirmFullRestaurantSettlement(
     externalReference,
     cutoffAt,
   } = input;
-  const fail = (error: string) => ({
+  const fail = (
+    error: string,
+  ): { state: PrototypeState; result: FullRestaurantSettlementConfirmResult } => ({
     state,
-    result: { ok: false, error, settlementRecordId: null },
+    result: { ok: false, error, settlementRecordId: null, cutoffAt: null },
   });
 
   if (!isCanonicalIsoTimestamp(cutoffAt)) {
@@ -1047,7 +1082,9 @@ export function confirmFullRestaurantSettlement(
   );
   return {
     state: nextState,
-    result: { ok: true, error: null, settlementRecordId: recordId },
+    // Момент отсечки возвращается вместе с результатом: это ровно тот же
+    // cutoffAt, что записан в selection, settledAt, обязательства и события.
+    result: { ok: true, error: null, settlementRecordId: recordId, cutoffAt },
   };
 }
 
