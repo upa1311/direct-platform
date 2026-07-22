@@ -498,10 +498,42 @@ export interface RestaurantSettlementModelPresentation {
 }
 
 /**
- * Как устроен расчёт именно у этого ресторана. Определяется его КОНФИГУРАЦИЕЙ
- * (способы получения заказа, самовывоз, текущие ставки), а не идентификатором.
- * Текущие ставки показываются только как справка о текущих условиях: уже
- * завершённые заказы рассчитаны по сохранённым условиям каждого заказа.
+ * Ставка комиссии из базисных пунктов в человекочитаемый процент БЕЗ
+ * округления и без лишних нулей: 700 → «7%», 1250 → «12.5%», 1 → «0.01%».
+ *
+ * Форматирование целочисленное (целая часть и остаток bps), поэтому ошибок
+ * плавающей арифметики не возникает. Повреждённое runtime-значение не
+ * превращается в выдуманную ставку и не бросает исключение — возвращается
+ * null, и строка про ставку просто не показывается.
+ */
+export function formatCommissionRateBps(rateBps: number): string | null {
+  if (
+    typeof rateBps !== "number" ||
+    !Number.isFinite(rateBps) ||
+    !Number.isInteger(rateBps) ||
+    !Number.isSafeInteger(rateBps) ||
+    rateBps < 0
+  ) {
+    return null;
+  }
+  const whole = Math.floor(rateBps / 100);
+  const fraction = String(rateBps % 100)
+    .padStart(2, "0")
+    .replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}%` : `${whole}%`;
+}
+
+/**
+ * Как устроен расчёт именно у этого ресторана СЕЙЧАС.
+ *
+ * Определяется только его конфигурацией: способы получения заказа, режим сбора
+ * платежей, самовывоз и текущие ставки — никаких идентификаторов ресторанов.
+ * Получатель денег при доставке водителем Direct уже определён полем
+ * financialCollectionMode, поэтому расплывчатое «деньги могут собирать Direct
+ * или ресторан» не показывается: объяснение однозначное.
+ *
+ * Текущая конфигурация служит ТОЛЬКО объяснением сегодняшней работы: она не
+ * пересчитывает расшифровку, исторические заказы, обязательства и расчёты.
  */
 export function describeRestaurantSettlementModel(
   restaurant: Restaurant,
@@ -509,17 +541,42 @@ export function describeRestaurantSettlementModel(
   const modes = restaurant.deliveryModes ?? [];
   const hasDirectDelivery = modes.includes("PLATFORM_DRIVER");
   const hasOwnDelivery = modes.includes("RESTAURANT_DELIVERY");
+  const mode = restaurant.financialCollectionMode;
+  const directCollectsPayment = mode === "MIXED_COLLECTION";
+  const restaurantCollectsPayment = mode === "RESTAURANT_COLLECTS_ALL";
   const notes: string[] = [];
 
   if (hasDirectDelivery) {
-    notes.push(
-      "При доставке Direct деньги за заказ могут собирать Direct или ресторан — от этого зависит направление расчёта.",
-    );
-    notes.push("Стоимость доставки предназначена водителю Direct.");
-    notes.push("Доплата за маленький заказ относится к Direct.");
+    if (directCollectsPayment) {
+      notes.push(
+        "При доставке водителем Direct оплату клиента принимает Direct.",
+      );
+      notes.push(
+        "Direct перечисляет ресторану стоимость еды за вычетом комиссии Direct и банковской доли ресторана.",
+      );
+      notes.push("Стоимость доставки предназначена водителю Direct.");
+      notes.push("Доплата за маленький заказ остаётся у Direct.");
+    } else if (restaurantCollectsPayment) {
+      notes.push(
+        "При доставке водителем Direct оплату клиента принимает ресторан.",
+      );
+      notes.push(
+        "После завершения заказа ресторан перечисляет Direct комиссию с еды, стоимость доставки водителю Direct и доплату за маленький заказ.",
+      );
+      notes.push("Стоимость доставки предназначена водителю Direct.");
+      notes.push("Доплата за маленький заказ относится к Direct.");
+    } else {
+      // Импортированное состояние может быть повреждено: ложную схему не
+      // показываем и MIXED_COLLECTION по умолчанию не подставляем.
+      notes.push(
+        "Текущий способ сбора оплаты для доставки Direct не определён. Требуется проверка настроек ресторана.",
+      );
+    }
   }
   if (hasOwnDelivery) {
-    notes.push("Ресторан получает оплату клиента и стоимость доставки.");
+    // Собственная доставка не зависит от режима сбора платежей доставки Direct.
+    notes.push("При собственной доставке оплату клиента принимает ресторан.");
+    notes.push("Стоимость собственной доставки остаётся ресторану.");
     notes.push("В расчёт с Direct входит комиссия с еды.");
     notes.push(
       "Доплата за маленький заказ к собственной доставке не применяется.",
@@ -527,24 +584,41 @@ export function describeRestaurantSettlementModel(
   }
   if (restaurant.pickupEnabled) {
     notes.push(
-      "При самовывозе ресторан принимает оплату и перечисляет Direct комиссию.",
+      "При самовывозе оплату принимает ресторан и перечисляет Direct комиссию с еды.",
     );
   }
 
-  notes.push(
-    `Текущие условия: доставка ${(restaurant.commissionRateBps / 100).toFixed(0)}%, самовывоз ${(restaurant.pickupCommissionRateBps / 100).toFixed(0)}%.`,
-  );
+  // Показываются только применимые ставки: неактивный режим не упоминается.
+  if (hasDirectDelivery || hasOwnDelivery) {
+    const deliveryRate = formatCommissionRateBps(restaurant.commissionRateBps);
+    if (deliveryRate !== null) {
+      notes.push(`Текущая комиссия с еды для доставки: ${deliveryRate}.`);
+    }
+  }
+  if (restaurant.pickupEnabled) {
+    const pickupRate = formatCommissionRateBps(
+      restaurant.pickupCommissionRateBps,
+    );
+    if (pickupRate !== null) {
+      notes.push(`Текущая комиссия с еды для самовывоза: ${pickupRate}.`);
+    }
+  }
   notes.push(
     "Это текущие условия. Уже завершённые заказы рассчитаны по сохранённым условиям каждого заказа.",
   );
 
+  const directTitle = directCollectsPayment
+    ? "Доставка Direct · оплату принимает Direct"
+    : restaurantCollectsPayment
+      ? "Доставка Direct · оплату принимает ресторан"
+      : "Доставка Direct · способ сбора оплаты не определён";
   const title =
     hasDirectDelivery && hasOwnDelivery
-      ? "Доставка Direct и собственная доставка"
+      ? `${directTitle} и собственная доставка`
       : hasOwnDelivery
         ? "Собственная доставка ресторана"
         : hasDirectDelivery
-          ? "Доставка Direct"
+          ? directTitle
           : "Самовывоз";
 
   return { title, notes };

@@ -25,6 +25,7 @@ import {
   BREAKDOWN_FAILED_ERROR,
   buildRestaurantOpenBalanceBreakdown,
   describeRestaurantSettlementModel,
+  formatCommissionRateBps,
   type RestaurantBalanceBreakdown,
   type RestaurantBalanceBreakdownCode,
 } from "./restaurant-balance-breakdown.ts";
@@ -755,6 +756,316 @@ test("46: заказы на проверке не входят в категор
 test("47: прозрачность банковской комиссии сохранена", () => {
   assert.ok(RESTAURANT_PAGE.includes("row.totalBankFeeCents"));
   assert.ok(RESTAURANT_PAGE.includes("overview.summary.restaurantBankFeeCents"));
+});
+
+// --- 49–85: фактическая модель сбора денег конкретного ресторана --------------
+
+/** Ресторан с заданной конфигурацией; идентификаторы в логике не участвуют. */
+function restaurantWith(overrides: Partial<Restaurant>): Restaurant {
+  const base = createDefaultState().restaurants.find(
+    (r) => r.id === DIRECT_RID,
+  ) as Restaurant;
+  return { ...base, ...overrides };
+}
+
+function notesOf(restaurant: Restaurant): string[] {
+  return describeRestaurantSettlementModel(restaurant).notes;
+}
+
+const DIRECT_MIXED = () =>
+  restaurantWith({
+    deliveryModes: ["PLATFORM_DRIVER"],
+    financialCollectionMode: MIXED,
+    pickupEnabled: false,
+  });
+const DIRECT_ALL = () =>
+  restaurantWith({
+    deliveryModes: ["PLATFORM_DRIVER"],
+    financialCollectionMode: ALL,
+    pickupEnabled: false,
+  });
+const OWN_ONLY = () =>
+  restaurantWith({
+    deliveryModes: ["RESTAURANT_DELIVERY"],
+    financialCollectionMode: MIXED,
+    pickupEnabled: false,
+  });
+
+test("49: MIXED_COLLECTION сообщает, что оплату принимает Direct", () => {
+  const presentation = describeRestaurantSettlementModel(DIRECT_MIXED());
+  assert.ok(
+    presentation.notes.includes(
+      "При доставке водителем Direct оплату клиента принимает Direct.",
+    ),
+  );
+  assert.equal(
+    presentation.title,
+    "Доставка Direct · оплату принимает Direct",
+  );
+});
+
+test("50: MIXED_COLLECTION показывает выплату после комиссии и банка", () => {
+  assert.ok(
+    notesOf(DIRECT_MIXED()).includes(
+      "Direct перечисляет ресторану стоимость еды за вычетом комиссии Direct и банковской доли ресторана.",
+    ),
+  );
+});
+
+test("51: MIXED_COLLECTION объясняет назначение доставки", () => {
+  assert.ok(
+    notesOf(DIRECT_MIXED()).includes(
+      "Стоимость доставки предназначена водителю Direct.",
+    ),
+  );
+});
+
+test("52: MIXED_COLLECTION объясняет доплату за маленький заказ", () => {
+  assert.ok(
+    notesOf(DIRECT_MIXED()).includes(
+      "Доплата за маленький заказ остаётся у Direct.",
+    ),
+  );
+});
+
+test("53: расплывчатая формулировка про сбор денег исчезла", () => {
+  for (const restaurant of [DIRECT_MIXED(), DIRECT_ALL()]) {
+    for (const note of notesOf(restaurant)) {
+      assert.ok(!note.includes("могут собирать"), note);
+    }
+  }
+});
+
+test("54: RESTAURANT_COLLECTS_ALL сообщает, что оплату принимает ресторан", () => {
+  const presentation = describeRestaurantSettlementModel(DIRECT_ALL());
+  assert.ok(
+    presentation.notes.includes(
+      "При доставке водителем Direct оплату клиента принимает ресторан.",
+    ),
+  );
+  assert.equal(
+    presentation.title,
+    "Доставка Direct · оплату принимает ресторан",
+  );
+});
+
+test("55: RESTAURANT_COLLECTS_ALL называет состав перечисления", () => {
+  const note = notesOf(DIRECT_ALL()).find((n) =>
+    n.includes("ресторан перечисляет Direct"),
+  );
+  assert.ok(note);
+  // Комиссия, доставка водителю и доплата — все три компонента названы.
+  assert.ok(note.includes("комиссию с еды"));
+  assert.ok(note.includes("стоимость доставки водителю Direct"));
+  assert.ok(note.includes("доплату за маленький заказ"));
+});
+
+test("56: RESTAURANT_COLLECTS_ALL не обещает выплату от Direct", () => {
+  for (const note of notesOf(DIRECT_ALL())) {
+    assert.ok(!note.includes("Direct перечисляет ресторану"), note);
+  }
+});
+
+test("57: собственная доставка объясняется отдельно", () => {
+  const notes = notesOf(OWN_ONLY());
+  assert.ok(
+    notes.includes("При собственной доставке оплату клиента принимает ресторан."),
+  );
+  assert.ok(notes.includes("Стоимость собственной доставки остаётся ресторану."));
+  assert.ok(notes.includes("В расчёт с Direct входит комиссия с еды."));
+  assert.ok(
+    notes.includes(
+      "Доплата за маленький заказ к собственной доставке не применяется.",
+    ),
+  );
+});
+
+test("58: у собственной доставки нет текста про доставку Direct", () => {
+  for (const note of notesOf(OWN_ONLY())) {
+    assert.ok(!note.includes("водителем Direct"), note);
+  }
+});
+
+test("59: смешанный ресторан получает обе модели", () => {
+  const mixedRestaurant = restaurantWith({
+    deliveryModes: ["PLATFORM_DRIVER", "RESTAURANT_DELIVERY"],
+    financialCollectionMode: ALL,
+    pickupEnabled: false,
+  });
+  const presentation = describeRestaurantSettlementModel(mixedRestaurant);
+  assert.ok(
+    presentation.notes.includes(
+      "При доставке водителем Direct оплату клиента принимает ресторан.",
+    ),
+  );
+  assert.ok(
+    presentation.notes.includes(
+      "При собственной доставке оплату клиента принимает ресторан.",
+    ),
+  );
+  // Заголовок отражает обе операционные модели, оставаясь однозначным.
+  assert.ok(presentation.title.includes("оплату принимает ресторан"));
+  assert.ok(presentation.title.includes("собственная доставка"));
+});
+
+test("60: режим сбора платежей относится только к доставке Direct", () => {
+  const mixedRestaurant = restaurantWith({
+    deliveryModes: ["PLATFORM_DRIVER", "RESTAURANT_DELIVERY"],
+    financialCollectionMode: MIXED,
+    pickupEnabled: false,
+  });
+  const notes = notesOf(mixedRestaurant);
+  // Доставка Direct: платит Direct. Собственная доставка — своя семантика.
+  assert.ok(
+    notes.includes("При доставке водителем Direct оплату клиента принимает Direct."),
+  );
+  assert.ok(notes.includes("Стоимость собственной доставки остаётся ресторану."));
+  assert.ok(
+    notes.includes(
+      "Доплата за маленький заказ к собственной доставке не применяется.",
+    ),
+  );
+});
+
+test("61: включённый самовывоз объясняется", () => {
+  const withPickup = restaurantWith({
+    deliveryModes: ["PLATFORM_DRIVER"],
+    financialCollectionMode: MIXED,
+    pickupEnabled: true,
+  });
+  assert.ok(
+    notesOf(withPickup).includes(
+      "При самовывозе оплату принимает ресторан и перечисляет Direct комиссию с еды.",
+    ),
+  );
+});
+
+test("62: выключенный самовывоз не описывается и не показывает ставку", () => {
+  const notes = notesOf(DIRECT_MIXED());
+  assert.ok(!notes.some((n) => n.includes("самовывоз")));
+  assert.ok(!notes.some((n) => n.includes("самовывоза")));
+});
+
+test("63: ставки форматируются без округления и лишних нулей", () => {
+  assert.equal(formatCommissionRateBps(700), "7%");
+  assert.equal(formatCommissionRateBps(1_500), "15%");
+  assert.equal(formatCommissionRateBps(1_250), "12.5%");
+  assert.equal(formatCommissionRateBps(725), "7.25%");
+  assert.equal(formatCommissionRateBps(1), "0.01%");
+  assert.equal(formatCommissionRateBps(0), "0%");
+});
+
+test("64: повреждённая ставка не превращается в выдуманную", () => {
+  for (const value of [
+    -1,
+    10.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    assert.equal(formatCommissionRateBps(value), null, String(value));
+  }
+  // Ресторан с повреждённой ставкой просто не показывает строку про неё.
+  const broken = restaurantWith({
+    deliveryModes: ["PLATFORM_DRIVER"],
+    financialCollectionMode: MIXED,
+    pickupEnabled: false,
+    commissionRateBps: Number.NaN,
+  });
+  assert.ok(!notesOf(broken).some((n) => n.includes("Текущая комиссия")));
+});
+
+test("65: показывается только применимая ставка доставки", () => {
+  const notes = notesOf(DIRECT_MIXED());
+  assert.ok(
+    notes.some((n) => n.startsWith("Текущая комиссия с еды для доставки:")),
+  );
+  assert.ok(
+    !notes.some((n) => n.startsWith("Текущая комиссия с еды для самовывоза:")),
+  );
+});
+
+test("66: ресторан без доставки не показывает ставку доставки", () => {
+  const pickupOnly = restaurantWith({
+    deliveryModes: [],
+    financialCollectionMode: MIXED,
+    pickupEnabled: true,
+  });
+  const notes = notesOf(pickupOnly);
+  assert.ok(
+    !notes.some((n) => n.startsWith("Текущая комиссия с еды для доставки:")),
+  );
+  assert.ok(
+    notes.some((n) => n.startsWith("Текущая комиссия с еды для самовывоза:")),
+  );
+});
+
+test("67: округления toFixed(0) в модуле нет", () => {
+  const SOURCE = readFileSync(
+    "src/prototype/restaurant-balance-breakdown.ts",
+    "utf8",
+  );
+  assert.ok(!SOURCE.includes("toFixed(0)"));
+  assert.ok(!SOURCE.includes("toFixed("));
+});
+
+test("68: предупреждение о сохранённых условиях сохранено", () => {
+  for (const restaurant of [DIRECT_MIXED(), DIRECT_ALL(), OWN_ONLY()]) {
+    assert.ok(
+      notesOf(restaurant).includes(
+        "Это текущие условия. Уже завершённые заказы рассчитаны по сохранённым условиям каждого заказа.",
+      ),
+    );
+  }
+});
+
+test("69: неизвестный режим сбора не подменяется смешанным", () => {
+  const broken = restaurantWith({
+    deliveryModes: ["PLATFORM_DRIVER"],
+    financialCollectionMode:
+      "SOMETHING_ELSE" as unknown as RestaurantFinancialCollectionMode,
+    pickupEnabled: false,
+  });
+  const presentation = describeRestaurantSettlementModel(broken);
+  assert.ok(
+    presentation.notes.includes(
+      "Текущий способ сбора оплаты для доставки Direct не определён. Требуется проверка настроек ресторана.",
+    ),
+  );
+  assert.ok(
+    !presentation.notes.some((n) => n.includes("принимает Direct.")),
+  );
+  assert.ok(
+    !presentation.notes.some((n) => n.includes("принимает ресторан.")),
+  );
+});
+
+test("70: изменение настроек ресторана не меняет суммы расшифровки", () => {
+  const { state } = driverCompleted(ALL);
+  const before = okBreakdown(state, DIRECT_RID);
+  // Меняем текущую конфигурацию ресторана уже ПОСЛЕ заказа.
+  const reconfigured: PrototypeState = {
+    ...state,
+    restaurants: state.restaurants.map((r) =>
+      r.id === DIRECT_RID
+        ? {
+            ...r,
+            financialCollectionMode: MIXED,
+            commissionRateBps: 2_500,
+            pickupEnabled: false,
+          }
+        : r,
+    ),
+  };
+  const after = okBreakdown(reconfigured, DIRECT_RID);
+  assert.deepEqual(after, before);
+});
+
+test("71: бухгалтерские обязательства при этом не меняются", () => {
+  const { state } = driverCompleted(ALL);
+  const before = JSON.stringify(state.restaurantAccountingEntries);
+  okBreakdown(state, DIRECT_RID);
+  assert.equal(JSON.stringify(state.restaurantAccountingEntries), before);
 });
 
 test("48: расшифровка не создаёт новых бухгалтерских обязательств", () => {
