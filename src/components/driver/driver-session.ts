@@ -3,50 +3,72 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Общий выбор демо-водителя для всех экранов кабинета (`/driver`,
- * `/driver/offers`, `/driver/current-order`, `/driver/settlements`).
+ * UI-сессия авторизованного водителя. После входа по имени и телефону в
+ * localStorage хранится ТОЛЬКО driverId — имя и телефон повторно не сохраняются.
+ * Это не доменное состояние: выход из аккаунта не меняет статус водителя.
  *
- * Это исключительно UI-предпочтение браузера, не доменное состояние: оно решает,
- * «под каким водителем» открыт кабинет. Пётр автоматически не выбирается; при
- * серверном рендере снимок — null (без расхождения гидратации). Изменения видны
- * и в текущей вкладке (локальный emitter), и из других вкладок (событие storage).
+ * SSR-снимок — null (без расхождения гидратации). Изменения видны в текущей
+ * вкладке (локальный emitter) и между вкладками (событие storage). Ошибки
+ * localStorage не ломают страницу.
  */
-export const SELECTED_DRIVER_KEY = "direct-selected-driver-id";
+export const DRIVER_SESSION_KEY = "direct-driver-session-id";
 
-export function readSelectedDriverId(): string | null {
+/** Старый ключ выбора демо-водителя. Больше НЕ авторизует и не мигрируется. */
+const LEGACY_SELECTED_DRIVER_KEY = "direct-selected-driver-id";
+
+export function readAuthenticatedDriverId(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(SELECTED_DRIVER_KEY);
+    return window.localStorage.getItem(DRIVER_SESSION_KEY);
   } catch {
     return null;
   }
 }
 
-export function writeSelectedDriverId(driverId: string | null): void {
+export function writeAuthenticatedDriverId(driverId: string): void {
   if (typeof window === "undefined") return;
   try {
-    if (driverId === null) {
-      window.localStorage.removeItem(SELECTED_DRIVER_KEY);
-    } else {
-      window.localStorage.setItem(SELECTED_DRIVER_KEY, driverId);
-    }
+    window.localStorage.setItem(DRIVER_SESSION_KEY, driverId);
   } catch {
-    // Отсутствие localStorage не должно ломать рабочий экран.
+    // Отсутствие localStorage не должно ломать вход.
   }
-  emitSelectedDriverChange();
+  emitSessionChange();
+}
+
+export function clearAuthenticatedDriverId(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(DRIVER_SESSION_KEY);
+  } catch {
+    // Игнорируем — сессия и так считается отсутствующей.
+  }
+  emitSessionChange();
+}
+
+/**
+ * Безопасно удаляет legacy-ключ выбора демо-водителя. Старый выбор Петра не
+ * должен превращаться в автоматический вход, поэтому ключ просто стирается.
+ */
+export function clearLegacySelectedDriverId(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(LEGACY_SELECTED_DRIVER_KEY);
+  } catch {
+    // Ничего не делаем.
+  }
 }
 
 /** Подписчики текущей вкладки: событие storage в своей вкладке не срабатывает. */
 const listeners = new Set<() => void>();
 
-function emitSelectedDriverChange(): void {
+function emitSessionChange(): void {
   for (const listener of listeners) listener();
 }
 
 function subscribe(onChange: () => void): () => void {
   listeners.add(onChange);
   const handleStorage = (event: StorageEvent) => {
-    if (event.key === SELECTED_DRIVER_KEY) onChange();
+    if (event.key === DRIVER_SESSION_KEY) onChange();
   };
   window.addEventListener("storage", handleStorage);
   return () => {
@@ -56,9 +78,9 @@ function subscribe(onChange: () => void): () => void {
 }
 
 /**
- * Текущий выбранный id как внешнее хранилище: переживает SPA-переходы без
+ * driverId текущей сессии как внешнее хранилище: переживает SPA-переходы без
  * setState в эффекте и отдаёт null на сервере.
  */
-export function useSelectedDriverId(): string | null {
-  return useSyncExternalStore(subscribe, readSelectedDriverId, () => null);
+export function useAuthenticatedDriverId(): string | null {
+  return useSyncExternalStore(subscribe, readAuthenticatedDriverId, () => null);
 }

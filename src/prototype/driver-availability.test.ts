@@ -50,6 +50,11 @@ const Z1: ZoneId = "zone-1";
 const Z2: ZoneId = "zone-2";
 
 const DRIVER_PAGE = readFileSync("src/app/driver/page.tsx", "utf8");
+// v18 UI: рабочий экран водителя вынесен в общий компонент.
+const DRIVER_WORKSPACE = readFileSync(
+  "src/components/driver/driver-workspace.tsx",
+  "utf8",
+);
 const DRIVER_SETTLEMENTS_PAGE = readFileSync(
   "src/app/driver/settlements/page.tsx",
   "utf8",
@@ -581,18 +586,18 @@ test("32: старый экран «Рабочая смена» удалён", (
   }
 });
 
-test("33: главная водителя не дублирует навигацию карточками разделов", () => {
+test("33: главная водителя — единый экран без выбора профиля", () => {
   assert.ok(!DRIVER_PAGE.includes("RouteCards"));
   assert.ok(!DRIVER_PAGE.includes("PageHeading"));
-  // Рабочее управление показывается сразу.
-  assert.ok(DRIVER_PAGE.includes("Выберите водителя"));
-  assert.ok(DRIVER_PAGE.includes("Выйти онлайн"));
-  assert.ok(DRIVER_PAGE.includes("Подтвердить зону и искать заказы"));
-  assert.ok(DRIVER_PAGE.includes("Подтвердить зону и остаться на паузе"));
-  // Выбор водителя — общее UI-предпочтение из driver-session, а не доменное
-  // состояние (ключ теперь живёт в общем модуле, а не в самой странице).
-  assert.ok(DRIVER_PAGE.includes("useSelectedDriverId"));
-  assert.ok(DRIVER_PAGE.includes("@/components/driver/driver-session"));
+  assert.ok(DRIVER_PAGE.includes("Заказы"));
+  assert.ok(DRIVER_PAGE.includes("DriverWorkspace"));
+  // v18 session UI: вход по имени/телефону, без списка и выбора водителей.
+  assert.ok(DRIVER_WORKSPACE.includes("Вход водителя"));
+  assert.ok(DRIVER_WORKSPACE.includes("Выйти онлайн"));
+  assert.ok(!DRIVER_WORKSPACE.includes("Выберите водителя"));
+  assert.ok(!DRIVER_WORKSPACE.includes("Сменить водителя"));
+  assert.ok(!DRIVER_WORKSPACE.includes("useSelectedDriverId"));
+  assert.ok(DRIVER_WORKSPACE.includes("useAuthenticatedDriverId"));
 });
 
 test("34: раздел «Расчёты» водителя существует отдельным маршрутом", () => {
@@ -616,10 +621,9 @@ test("35: страница расчётов не показывает выдум
 });
 
 test("36: интерфейс водителя не показывает английские статусы и наличные строки", () => {
-  // Статус всегда берётся из словаря подписей, а не печатается напрямую.
-  assert.ok(DRIVER_PAGE.includes("driverStatusLabels[status]"));
   // Сырые enum-значения и английские подписи в видимый текст не попадают.
-  const visibleText = DRIVER_PAGE.match(/>[^<>{}]*[A-Za-zА-Яа-яЁё][^<>{}]*</g) ?? [];
+  const visibleText =
+    DRIVER_WORKSPACE.match(/>[^<>{}]*[A-Za-zА-Яа-яЁё][^<>{}]*</g) ?? [];
   for (const chunk of visibleText) {
     assert.ok(
       !/(AVAILABLE|OFFLINE|PAUSED|BUSY_DIRECT|ZONE_CONFIRMATION_REQUIRED)/.test(
@@ -629,12 +633,15 @@ test("36: интерфейс водителя не показывает англ
     );
   }
   for (const phrase of ["Cash enabled", "Рабочая смена", "На смене"]) {
-    assert.ok(!DRIVER_PAGE.includes(phrase), `в UI не должно быть «${phrase}»`);
+    assert.ok(
+      !DRIVER_WORKSPACE.includes(phrase),
+      `в UI не должно быть «${phrase}»`,
+    );
   }
-  // Допуск к наличным — спокойная строка состояния, а не кнопка.
-  assert.ok(DRIVER_PAGE.includes("Наличные заказы разрешены"));
-  assert.ok(DRIVER_PAGE.includes("Наличные заказы недоступны"));
-  assert.ok(!DRIVER_PAGE.includes("platformDriverCashEnabled"));
+  // v18: строка допуска к наличным убрана из основного рабочего интерфейса.
+  assert.ok(!DRIVER_WORKSPACE.includes("Наличные заказы разрешены"));
+  assert.ok(!DRIVER_WORKSPACE.includes("Наличные заказы недоступны"));
+  assert.ok(!DRIVER_WORKSPACE.includes("platformDriverCashEnabled"));
 });
 
 // --- 37: соседние подсистемы не тронуты --------------------------------------------

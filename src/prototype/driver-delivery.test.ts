@@ -47,8 +47,9 @@ const D2 = "driver-2";
 const REST_ZONE: ZoneId = "zone-2"; // ресторан-2
 const T = (n: number) => `2026-07-22T12:0${n}:00.000Z`;
 
+// v18 session UI: активный заказ и его этапы живут на едином рабочем экране.
 const CURRENT_PAGE = readFileSync(
-  "src/app/driver/current-order/page.tsx",
+  "src/components/driver/driver-workspace.tsx",
   "utf8",
 );
 
@@ -613,8 +614,10 @@ test("48: при ожидании активной кнопки получени
   assert.ok(block.includes("Ожидаем готовность заказа"));
 });
 
-test("50: после доставки редирект на /driver", () => {
-  assert.ok(CURRENT_PAGE.includes('router.push("/driver")'));
+test("50: после доставки не уводит на отдельный маршрут", () => {
+  // v18: активный заказ на едином экране /driver — отдельной страницы
+  // «Текущий заказ» больше нет, поэтому перехода на неё после доставки нет.
+  assert.ok(!CURRENT_PAGE.includes('/driver/current-order'));
 });
 
 test("51: REVIEW_REQUIRED не показывает переходов", () => {
@@ -622,7 +625,7 @@ test("51: REVIEW_REQUIRED не показывает переходов", () => {
 });
 
 test("52: приватность — заказ показывается только назначенному водителю", () => {
-  assert.ok(CURRENT_PAGE.includes("assignedDriverId === selectedDriverId"));
+  assert.ok(CURRENT_PAGE.includes("order.assignedDriverId === driver.id"));
 });
 
 test("53–55: нет наличных кнопок, жалоб и карты", () => {

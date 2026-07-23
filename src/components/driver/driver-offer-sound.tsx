@@ -15,7 +15,7 @@ import {
 import { usePrototype } from "@/prototype/prototype-provider";
 import { getOpenDriverOffersForDriver } from "@/prototype/driver-offers";
 import { useNowMs } from "@/components/util/use-now";
-import { useSelectedDriverId } from "./driver-session";
+import { useAuthenticatedDriverId } from "./driver-session";
 import {
   DRIVER_OFFER_SOUND_KEY,
   isDriverOfferBeepDue,
@@ -122,15 +122,15 @@ export function useDriverOfferSoundPreference(): {
  */
 export function DriverOfferSoundPlayer() {
   const { state, isHydrated } = usePrototype();
-  const selectedDriverId = useSelectedDriverId();
+  const sessionDriverId = useAuthenticatedDriverId();
   const { soundEnabled } = useDriverOfferSoundPreference();
   const nowMs = useNowMs();
 
   const lastBeepRef = useRef<number | null>(null);
   const announcedRef = useRef<string[]>([]);
 
-  const driver = selectedDriverId
-    ? state.drivers.find((d) => d.id === selectedDriverId) ?? null
+  const driver = sessionDriverId
+    ? state.drivers.find((d) => d.id === sessionDriverId) ?? null
     : null;
 
   useEffect(() => {

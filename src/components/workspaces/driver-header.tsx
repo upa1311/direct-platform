@@ -1,27 +1,27 @@
+"use client";
+
 import { WorkspaceHeader } from "./workspace-header";
+import { useAuthenticatedDriverId } from "@/components/driver/driver-session";
 
 /**
- * Навигация кабинета водителя. «Обзор» — рабочее управление доступностью и
- * зоной; «Расчёты» — отдельный раздел, а не карточка на главной.
- *
- * Декоративного переключателя «Онлайн/Офлайн» в шапке больше нет: реальный
- * статус водителя живёт в доменном состоянии и меняется только действиями на
- * экране «Обзор». Два независимых управления доступностью противоречили бы
- * друг другу.
+ * Навигация кабинета водителя. До входа разделы не показываются (только название
+ * кабинета). После входа — ровно два раздела: «Заказы» и «Расчёты». Отдельных
+ * вкладок «Обзор», «Предложения» и «Текущий заказ» больше нет: новые и активный
+ * заказ живут на едином рабочем экране «Заказы».
  */
 const driverNavigation = [
-  { href: "/driver", label: "Обзор" },
-  { href: "/driver/offers", label: "Предложения" },
-  { href: "/driver/current-order", label: "Текущий заказ" },
+  { href: "/driver", label: "Заказы" },
   { href: "/driver/settlements", label: "Расчёты" },
 ] as const;
 
 export function DriverHeader() {
+  const sessionDriverId = useAuthenticatedDriverId();
   return (
     <WorkspaceHeader
       applicationName="Кабинет водителя"
       navAriaLabel="Навигация водителя"
-      navItems={driverNavigation}
+      navItems={sessionDriverId ? driverNavigation : []}
+      brandHref="/driver"
     />
   );
 }

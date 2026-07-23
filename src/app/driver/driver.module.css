@@ -19,7 +19,99 @@
   margin: 4px 0 0;
 }
 
-/* --- Выбор демо-водителя --------------------------------------------------- */
+.pageTitle {
+  font-size: 20px;
+  font-weight: 750;
+  margin: 0;
+}
+
+/* --- Вход водителя --------------------------------------------------------- */
+
+.loginCard {
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 12px;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.loginHint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--kds-muted, #66706a);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.textInput {
+  height: 40px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 8px;
+  background: var(--kds-surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+}
+
+/* --- Строка профиля и рабочая панель --------------------------------------- */
+
+.profileLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.profileText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--kds-border, #eceff3);
+}
+
+.workCounters {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workCount {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.zoneConfirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* --- Выбор демо-водителя (legacy, не используется) ------------------------- */
 
 .pickerLabel {
   font-size: 13px;
