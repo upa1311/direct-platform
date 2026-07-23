@@ -27,7 +27,7 @@ import {
   useAuthenticatedDriverId,
   writeAuthenticatedDriverId,
 } from "./driver-session";
-import { BellOff, BellRing, Car, MapPin } from "lucide-react";
+import { BellOff, BellRing, CarFront, MapPin } from "lucide-react";
 
 import { useDriverOfferSoundPreference } from "./driver-offer-sound";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
@@ -195,7 +195,7 @@ function ProfileLine({
     <section className={styles.profileLine} aria-label="Профиль водителя">
       <div className={styles.profileText}>
         <span className={styles.driverName}>
-          <Car size={18} aria-hidden="true" className={styles.driverNameIcon} />
+          <CarFront size={18} aria-hidden="true" className={styles.driverNameIcon} />
           Водитель {getDriverDisplayName(driver)}
         </span>
         <span className={styles.statusValue}>
