@@ -103,6 +103,7 @@ import {
   acceptDriverOffer,
   declineDriverOffer,
   reconcileDriverOffers,
+  type AcceptDriverOfferInput,
   type DriverOfferActionResult,
   type ReconcileDriverOffersResult,
 } from "./driver-offers";
@@ -472,6 +473,7 @@ export interface PrototypeContextValue {
   driverAcceptOffer: (
     driverId: string,
     offerId: string,
+    input: AcceptDriverOfferInput,
   ) => Promise<DriverOfferActionResult>;
   driverDeclineOffer: (
     driverId: string,
@@ -1827,10 +1829,16 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const driverAcceptOffer = useCallback(
-    (driverId: string, offerId: string) =>
+    (driverId: string, offerId: string, input: AcceptDriverOfferInput) =>
       runSerializedActionMutation({
         mutation: (baseState) =>
-          acceptDriverOffer(baseState, driverId, offerId, new Date().toISOString()),
+          acceptDriverOffer(
+            baseState,
+            driverId,
+            offerId,
+            new Date().toISOString(),
+            input,
+          ),
         infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
       }),
     [runSerializedActionMutation],

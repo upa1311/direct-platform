@@ -109,12 +109,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * позиция или выбранные записи, v16 — оперативные статусы и подтверждаемая
  * вручную зона водителя, v17 — предложения заказов водителям по зоне,
  * v18 — append-only журнал шагов доставки назначенного водителя,
- * v19 — неизменяемый наличный снимок будущего заказа PLATFORM_DRIVER),
+ * v19 — неизменяемый наличный снимок будущего заказа PLATFORM_DRIVER,
+ * v20 — подтверждение денежного запаса водителя в предложении наличного заказа),
  * поэтому состояние прежней версии безопасно принимается и доводится
  * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -908,20 +909,27 @@ function isValidIso(value: unknown): value is string {
 }
 
 /**
- * Нормализация предложений заказов водителям (v17). Состояние до v17 поля не
- * имеет — безопасный пустой список. Выдуманные предложения из старых заказов НЕ
- * восстанавливаются и во время миграции НЕ создаются: это делает доменный
- * reconciliation уже после загрузки. Сохраняем только структурно целую запись,
- * ссылающуюся на существующие заказ и водителя, с валидным окном времени.
+ * Нормализация предложений заказов водителям (v17; наличное подтверждение — v20).
+ * Состояние до v17 поля не имеет — безопасный пустой список. Выдуманные
+ * предложения из старых заказов НЕ восстанавливаются. Сохраняем только структурно
+ * целую запись, ссылающуюся на существующие заказ и водителя, с валидным окном.
+ *
+ * cashReserveConfirmedAt (v20) сохраняется ТОЛЬКО если: исходная схема ≥ 20,
+ * строка — валидный ISO, offer.status === ACCEPTED, связанный заказ —
+ * PLATFORM_DRIVER + CASH с валидным cash snapshot. Иначе null. timestamp НЕ
+ * реконструируется из resolvedAt, и старое ACCEPTED cash offer не считается
+ * автоматически подтвердившим запас.
  */
 function normalizeDriverOffers(
   value: unknown,
-  orderIds: ReadonlySet<string>,
+  orders: readonly Order[],
   driverIds: ReadonlySet<string>,
+  sourceSchemaVersion: number,
 ): DriverOffer[] {
   if (!Array.isArray(value)) {
     return [];
   }
+  const ordersById = new Map(orders.map((order) => [order.id, order]));
   const seenIds = new Set<string>();
   const result: DriverOffer[] = [];
   for (const raw of value) {
@@ -929,7 +937,7 @@ function normalizeDriverOffers(
     const { id, orderId, driverId, status, offeredAt, expiresAt, resolvedAt } =
       raw;
     if (typeof id !== "string" || seenIds.has(id)) continue;
-    if (typeof orderId !== "string" || !orderIds.has(orderId)) continue;
+    if (typeof orderId !== "string" || !ordersById.has(orderId)) continue;
     if (typeof driverId !== "string" || !driverIds.has(driverId)) continue;
     if (typeof status !== "string" || !DRIVER_OFFER_STATUSES.has(status)) {
       continue;
@@ -937,6 +945,21 @@ function normalizeDriverOffers(
     if (!isValidIso(offeredAt) || !isValidIso(expiresAt)) continue;
     if (Date.parse(expiresAt) <= Date.parse(offeredAt)) continue;
     if (resolvedAt !== null && !isValidIso(resolvedAt)) continue;
+
+    const order = ordersById.get(orderId);
+    const orderIsNativeCash =
+      order !== undefined &&
+      order.deliveryMode === "PLATFORM_DRIVER" &&
+      order.paymentMethod === "CASH" &&
+      order.financials.platformDriverCash != null;
+    const cashReserveConfirmedAt =
+      sourceSchemaVersion >= 20 &&
+      status === "ACCEPTED" &&
+      orderIsNativeCash &&
+      isValidIso(raw.cashReserveConfirmedAt)
+        ? (raw.cashReserveConfirmedAt as string)
+        : null;
+
     seenIds.add(id);
     result.push({
       id,
@@ -946,6 +969,7 @@ function normalizeDriverOffers(
       offeredAt,
       expiresAt,
       resolvedAt: resolvedAt === null ? null : (resolvedAt as string),
+      cashReserveConfirmedAt,
     });
   }
   return result;
@@ -1275,7 +1299,14 @@ export function normalizePrototypeState(
       ...(isRecord(state.platformSettings)
         ? state.platformSettings
         : defaults.platformSettings),
-      platformDriverCashEnabled: false,
+      // Флаг наличных сохраняется как есть (осознанно включается отдельным
+      // решением/тестом); отсутствующее или нелогическое значение — fail-closed
+      // false. createDefaultState по-прежнему создаёт его выключенным.
+      platformDriverCashEnabled:
+        isRecord(state.platformSettings) &&
+        typeof state.platformSettings.platformDriverCashEnabled === "boolean"
+          ? state.platformSettings.platformDriverCashEnabled
+          : false,
     },
     zones: Array.isArray(state.zones) ? state.zones : defaults.zones,
     tariffs: isRecord(state.tariffs) ? state.tariffs : defaults.tariffs,
@@ -1297,8 +1328,9 @@ export function normalizePrototypeState(
     // до v17/v18 получает пустой список.
     driverOffers: normalizeDriverOffers(
       state.driverOffers,
-      normalizedOrderIds,
+      normalizedOrders,
       normalizedDriverIds,
+      sourceSchemaVersion,
     ),
     driverDeliveryEvents: normalizeDriverDeliveryEvents(
       state.driverDeliveryEvents,

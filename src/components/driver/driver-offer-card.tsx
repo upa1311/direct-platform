@@ -15,6 +15,7 @@ export function DriverOfferCard({
   zoneName,
   restaurantTimeZone,
   disabled,
+  cashHandoffCents,
   onAccept,
   onDecline,
 }: {
@@ -23,9 +24,12 @@ export function DriverOfferCard({
   zoneName: (zoneId: ZoneId | null) => string;
   restaurantTimeZone: string;
   disabled: boolean;
-  onAccept: () => void;
+  /** Сумма к передаче ресторану из cash snapshot, либо null для онлайн-заказа. */
+  cashHandoffCents: number | null;
+  onAccept: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onDecline: () => void;
 }) {
+  const isCash = cashHandoffCents !== null;
   const readiness =
     order.status === "READY"
       ? "Готовность: Готов"
@@ -45,6 +49,18 @@ export function DriverOfferCard({
           )}
         </span>
       </div>
+
+      {/* Наличный заказ: заметный признак и точная сумма к передаче ресторану
+          (из валидного cash snapshot заказа). */}
+      {isCash ? (
+        <div className={styles.cashOfferBadge}>
+          <span className={styles.cashOfferTag}>Наличные</span>
+          <span className={styles.cashOfferAmount}>
+            Нужно иметь при себе:{" "}
+            {formatMoney(cashHandoffCents, order.financials.currencyCode)}
+          </span>
+        </div>
+      ) : null}
 
       <div className={styles.offerSection}>
         <span className={styles.offerSectionLabel}>Забрать</span>
@@ -70,7 +86,9 @@ export function DriverOfferCard({
 
       <div className={styles.offerSection}>
         <span className={styles.offerSectionValue}>{readiness}</span>
-        <span className={styles.offerSectionValue}>Оплата онлайн</span>
+        <span className={styles.offerSectionValue}>
+          {isCash ? "Оплата наличными" : "Оплата онлайн"}
+        </span>
       </div>
 
       <div className={styles.offerMetaRow}>

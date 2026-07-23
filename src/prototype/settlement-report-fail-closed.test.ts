@@ -603,7 +603,7 @@ test("34: подпись архивных данных не изменилась
 });
 
 test("35: версия схемы актуальна", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 19);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 20);
 });
 
 test("36: нормальный отчёт остаётся успешным и не мутирует state", () => {

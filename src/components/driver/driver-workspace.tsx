@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { usePrototype } from "@/prototype/prototype-provider";
-import { formatMoney, getDriverActiveOrder } from "@/prototype/selectors";
+import {
+  formatMoney,
+  getDriverActiveOrder,
+  getPlatformDriverCashSnapshot,
+} from "@/prototype/selectors";
 import {
   getOpenDriverOffersForDriver,
   getOrderForOffer,
@@ -15,6 +19,7 @@ import {
 import { useNowMs } from "@/components/util/use-now";
 import type {
   DeliveryAddress,
+  DriverOffer,
   DriverProfile,
   Order,
   Zone,
@@ -777,16 +782,56 @@ function NewOffersSection({
   zoneName: (zoneId: ZoneId | null) => string;
 }) {
   const { state, driverAcceptOffer, driverDeclineOffer } = usePrototype();
-  const { pending, error, run } = useAction();
+  const { pending, error, clearError, run } = useAction();
 
   const offers = nowMs > 0 ? getOpenDriverOffersForDriver(state, driver.id, nowMs) : [];
 
-  // После принятия НЕ переходим на отдельный маршрут: предложение исчезает из
-  // «Новые», заказ появляется в «В работе», счётчики обновляются сами.
-  const accept = (offerId: string) =>
-    run(() => driverAcceptOffer(driver.id, offerId));
+  // Открытое подтверждение наличных: id предложения + сумма к ресторану из
+  // валидного cash snapshot заказа. Сумма не пересчитывается в UI.
+  const [cashConfirm, setCashConfirm] = useState<{
+    offerId: string;
+    handoffCents: number;
+    currencyCode: string;
+  } | null>(null);
+  const cashTriggerRef = useRef<HTMLButtonElement>(null);
+
   const decline = (offerId: string) =>
-    run(() => driverDeclineOffer(driver.id, offerId));
+    void run(() => driverDeclineOffer(driver.id, offerId));
+
+  // Онлайн — принять сразу (one-tap, без подтверждения). Наличные — первое
+  // нажатие открывает лист подтверждения, а не назначает заказ.
+  const handleAccept =
+    (offer: DriverOffer, order: Order, cashHandoffCents: number | null) =>
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (cashHandoffCents !== null) {
+        cashTriggerRef.current = event.currentTarget;
+        setCashConfirm({
+          offerId: offer.id,
+          handoffCents: cashHandoffCents,
+          currencyCode: order.financials.currencyCode,
+        });
+      } else {
+        void run(() =>
+          driverAcceptOffer(driver.id, offer.id, { cashReserveConfirmed: false }),
+        );
+      }
+    };
+
+  // Только главная кнопка листа принимает наличный заказ с подтверждением.
+  const confirmCash = async () => {
+    if (cashConfirm === null) return;
+    const result = await run(() =>
+      driverAcceptOffer(driver.id, cashConfirm.offerId, {
+        cashReserveConfirmed: true,
+      }),
+    );
+    if (result.ok) setCashConfirm(null);
+  };
+
+  const closeCash = () => {
+    setCashConfirm(null);
+    clearError();
+  };
 
   if (offers.length === 0) {
     return (
@@ -802,6 +847,11 @@ function NewOffersSection({
         {offers.map((offer) => {
           const order = getOrderForOffer(state, offer);
           if (order === null) return null;
+          // Наличное предложение — только при валидном cash snapshot заказа.
+          const cashSnapshot = getPlatformDriverCashSnapshot(order);
+          const cashHandoffCents = cashSnapshot
+            ? cashSnapshot.restaurantHandoffCents
+            : null;
           return (
             <li key={offer.id}>
               <DriverOfferCard
@@ -810,14 +860,59 @@ function NewOffersSection({
                 zoneName={zoneName}
                 restaurantTimeZone={restaurantTimeZoneOf(state, order)}
                 disabled={pending}
-                onAccept={() => accept(offer.id)}
+                cashHandoffCents={cashHandoffCents}
+                onAccept={handleAccept(offer, order, cashHandoffCents)}
                 onDecline={() => decline(offer.id)}
               />
             </li>
           );
         })}
       </ul>
-      {error ? (
+
+      {/* Обязательное подтверждение денежного запаса перед принятием наличного
+          заказа. Тот же overlay-лист, что и в quick controls. */}
+      <DriverControlSheet
+        open={cashConfirm !== null}
+        title="Подтвердите наличные"
+        onClose={closeCash}
+        triggerRef={cashTriggerRef}
+      >
+        {cashConfirm !== null ? (
+          <>
+            <p className={styles.cashSheetText}>
+              Для получения заказа у вас должно быть при себе{" "}
+              {formatMoney(cashConfirm.handoffCents, cashConfirm.currencyCode)}{" "}
+              наличными. Эту сумму нужно будет передать ресторану.
+            </p>
+            <div className={styles.cashConfirmActions}>
+              <button
+                type="button"
+                className={`${styles.primaryButton} ${styles.cashConfirmPrimary}`}
+                disabled={pending}
+                onClick={() => void confirmCash()}
+              >
+                У меня есть эта сумма
+              </button>
+              <button
+                type="button"
+                className={`${styles.secondaryButton} ${styles.cashConfirmSecondary}`}
+                disabled={pending}
+                onClick={closeCash}
+              >
+                Отмена
+              </button>
+            </div>
+            {error ? (
+              <p className={styles.error} role="alert">
+                {error}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+      </DriverControlSheet>
+
+      {/* Ошибка вне листа (онлайн-принятие / отказ). */}
+      {error && cashConfirm === null ? (
         <p className={styles.error} role="alert">
           {error}
         </p>
@@ -1119,7 +1214,9 @@ function OrderMeta({ order }: { order: Order }) {
         <span className={styles.detailRowValue}>Заказ принят</span>
       </div>
       <div className={styles.metaRow}>
-        <span className={styles.detailRowValue}>Оплата онлайн</span>
+        <span className={styles.detailRowValue}>
+          {order.paymentMethod === "CASH" ? "Оплата: наличными" : "Оплата онлайн"}
+        </span>
         <span className={styles.detailRowValue}>
           Выплата:{" "}
           {formatMoney(

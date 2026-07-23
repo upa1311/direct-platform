@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 19 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 20 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -612,6 +612,14 @@ export interface DriverOffer {
   expiresAt: string;
   /** Момент принятия, отказа, истечения либо отмены; у OPEN — null. */
   resolvedAt: string | null;
+  /**
+   * Момент подтверждения водителем денежного запаса при принятии наличного
+   * заказа (v20). null — подтверждения не было (все OPEN-предложения, любой
+   * онлайн-заказ, а также отказ/истечение/отмена). ISO-строка — запас
+   * подтверждён атомарно вместе с принятием наличного предложения. Сумма здесь
+   * НЕ хранится: она уже есть в неизменяемом cash snapshot заказа.
+   */
+  cashReserveConfirmedAt: string | null;
 }
 
 /**
