@@ -18,6 +18,7 @@ import type {
   OrderStatus,
   PaymentMethod,
   PickupPaymentMethod,
+  PlatformDriverCashSnapshot,
   Promotion,
   PrototypeState,
   PublicationStatus,
@@ -46,6 +47,7 @@ import {
   resolveDeliveryMode,
   shouldApplySmallOrderFee,
 } from "./pricing-engine";
+import { resolvePlatformDriverCashSnapshot } from "./platform-driver-cash";
 
 export type CatalogSort =
   | "RECOMMENDED"
@@ -2750,6 +2752,36 @@ export function restaurantWorkspaceRoleLabel(
   if (role === "OPERATOR") return "Оператор заказов";
   if (role === "COMBINED") return "Общий экран";
   return null;
+}
+
+// --- Наличный снимок водителя Direct (v19) ------------------------------------
+
+/**
+ * Строгий снимок будущего наличного потока заказа PLATFORM_DRIVER. Чистый
+ * селектор: заказ не мутирует и снимок не создаёт. Возвращает null, если
+ * deliveryMode не PLATFORM_DRIVER, paymentMethod не CASH, снимок отсутствует,
+ * не проходит проверку или расходится с неизменяемыми financials заказа.
+ */
+export function getPlatformDriverCashSnapshot(
+  order: Order,
+): PlatformDriverCashSnapshot | null {
+  return resolvePlatformDriverCashSnapshot({
+    deliveryMode: order.deliveryMode,
+    paymentMethod: order.paymentMethod,
+    amounts: {
+      customerTotalCents: order.financials.customerTotalCents,
+      restaurantPayoutBeforeBankFeeCents:
+        order.financials.restaurantPayoutBeforeBankFeeCents,
+      driverPayoutCents: order.financials.driverPayoutCents,
+      platformGrossRevenueCents: order.financials.platformGrossRevenueCents,
+    },
+    candidate: order.financials.platformDriverCash ?? null,
+  });
+}
+
+/** Есть ли у заказа валидный наличный снимок водителя Direct. */
+export function hasValidPlatformDriverCashSnapshot(order: Order): boolean {
+  return getPlatformDriverCashSnapshot(order) !== null;
 }
 
 export { TEST_RESTAURANT_ID };

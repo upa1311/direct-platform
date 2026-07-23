@@ -672,6 +672,10 @@ export function createOrderFromCart(
         : {}),
       financialRule,
       financialCollectionMode,
+      // v19: обычное оформление создаёт только существующие способы оплаты,
+      // поэтому наличный снимок водителя Direct у новых заказов всегда null.
+      // Валидный объект появится только у будущих PLATFORM_DRIVER + CASH.
+      platformDriverCash: null,
     },
     history: [
       {

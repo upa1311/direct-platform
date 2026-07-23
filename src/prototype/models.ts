@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 18 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 19 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -710,6 +710,43 @@ export interface RestaurantDeliverySnapshot {
   freeDeliveryApplied: boolean;
 }
 
+/**
+ * Неизменяемый снимок будущего НАЛИЧНОГО потока заказа PLATFORM_DRIVER (v19).
+ * Описывает только физическое движение денег «клиент → водитель → ресторан /
+ * Direct / заработок водителя». Это НЕ банковский расчёт: без bank fee, без
+ * комиссий эквайринга, без timestamps передачи. Суммы — проекция уже
+ * рассчитанных канонических financials под понятными cash-названиями; ничего
+ * не пересчитывается. Обязательное равенство:
+ *   customerCollectionCents === restaurantHandoffCents + driverEarningCents
+ *     + directReceivableFromDriverCents.
+ */
+export interface PlatformDriverCashSnapshot {
+  /**
+   * Полная сумма, которую водитель должен получить от клиента.
+   * Источник: financials.customerTotalCents.
+   */
+  customerCollectionCents: number;
+
+  /**
+   * Точная сумма, которую водитель должен передать ресторану.
+   * Это одновременно необходимый денежный запас водителя до получения заказа.
+   * Источник: financials.restaurantPayoutBeforeBankFeeCents.
+   */
+  restaurantHandoffCents: number;
+
+  /**
+   * Заработок водителя за доставку.
+   * Источник: financials.driverPayoutCents.
+   */
+  driverEarningCents: number;
+
+  /**
+   * Сумма, которую водитель после завершения наличного заказа должен Direct.
+   * Источник: financials.platformGrossRevenueCents.
+   */
+  directReceivableFromDriverCents: number;
+}
+
 export interface FinancialSnapshot {
   currencyCode: CurrencyCode;
   deliveryMode: DeliveryMode;
@@ -765,6 +802,13 @@ export interface FinancialSnapshot {
    * снимка НЕ получает текущую настройку ресторана задним числом.
    */
   financialCollectionMode?: RestaurantFinancialCollectionMode;
+  /**
+   * Снимок будущего наличного потока водителя Direct (v19). Заполняется только
+   * для PLATFORM_DRIVER + CASH и только если совпадает с каноническими суммами
+   * заказа; во всех остальных случаях null. Optional только для чтения
+   * legacy-состояний: старый CASH-заказ задним числом снимок не получает.
+   */
+  platformDriverCash?: PlatformDriverCashSnapshot | null;
 }
 
 export interface OrderHistoryEvent {

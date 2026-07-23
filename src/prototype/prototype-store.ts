@@ -18,6 +18,7 @@ import {
   type MenuPortion,
   type Order,
   type OrderItemSnapshot,
+  type PaymentMethod,
   type PrototypeState,
   type RestaurantDeliveryProvider,
   type WeeklySchedule,
@@ -40,6 +41,7 @@ import {
 } from "./money-movement-snapshot";
 import { validateRestaurantSettlementRecord } from "./restaurant-settlement-integrity";
 import { validateFinancialRuleSnapshot } from "./financial-rule";
+import { resolvePlatformDriverCashSnapshot } from "./platform-driver-cash";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
@@ -106,12 +108,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * v14 — детали исполнения закрытого расчёта, v15 — область расчёта: полная
  * позиция или выбранные записи, v16 — оперативные статусы и подтверждаемая
  * вручную зона водителя, v17 — предложения заказов водителям по зоне,
- * v18 — append-only журнал шагов доставки назначенного водителя),
+ * v18 — append-only журнал шагов доставки назначенного водителя,
+ * v19 — неизменяемый наличный снимок будущего заказа PLATFORM_DRIVER),
  * поэтому состояние прежней версии безопасно принимается и доводится
  * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -194,6 +197,7 @@ function normalizeOrderItem(value: unknown): OrderItemSnapshot {
 function normalizeFinancials(
   value: unknown,
   deliveryMode: DeliveryMode,
+  paymentMethod: PaymentMethod,
   movementContext: MoneyMovementRecoveryContext,
 ): FinancialSnapshot {
   const raw = isRecord(value) ? value : {};
@@ -289,6 +293,22 @@ function normalizeFinancials(
     raw.financialCollectionMode === "MIXED_COLLECTION"
       ? raw.financialCollectionMode
       : null;
+  // v19: наличный снимок водителя Direct. Строгая проверка по deliveryMode,
+  // paymentMethod и КАНОНИЧЕСКИМ суммам снимка. Старый CASH-заказ задним числом
+  // снимок не получает: при любом расхождении или не-CASH/не-PLATFORM_DRIVER —
+  // null (даже если повреждённое состояние содержит объект). Ничего не
+  // реконструируем из старых financials.
+  const platformDriverCash = resolvePlatformDriverCashSnapshot({
+    deliveryMode,
+    paymentMethod,
+    amounts: {
+      customerTotalCents: base.customerTotalCents,
+      restaurantPayoutBeforeBankFeeCents: base.restaurantPayoutBeforeBankFeeCents,
+      driverPayoutCents: base.driverPayoutCents,
+      platformGrossRevenueCents: base.platformGrossRevenueCents,
+    },
+    candidate: isRecord(raw.platformDriverCash) ? raw.platformDriverCash : null,
+  });
   return {
     ...base,
     moneyMovementStatus: recovered.moneyMovementStatus,
@@ -299,6 +319,7 @@ function normalizeFinancials(
     ...(storedCollectionMode
       ? { financialCollectionMode: storedCollectionMode }
       : {}),
+    platformDriverCash,
   };
 }
 
@@ -403,6 +424,16 @@ function normalizeOrder(
       ? raw.pickupNoShowAt
       : null;
 
+  // Итоговый способ оплаты (legacy CASH → ONLINE): служит и полю заказа, и
+  // строгой проверке наличного снимка v19 в normalizeFinancials.
+  const paymentMethod: PaymentMethod = wasCashOrder
+    ? "ONLINE"
+    : raw.paymentMethod === "PAY_AT_RESTAURANT"
+      ? "PAY_AT_RESTAURANT"
+      : raw.paymentMethod === "CASH_TO_RESTAURANT_COURIER"
+        ? "CASH_TO_RESTAURANT_COURIER"
+        : "ONLINE";
+
   return {
     id: str(raw.id, ""),
     publicNumber: str(raw.publicNumber, ""),
@@ -426,13 +457,7 @@ function normalizeOrder(
           ? (raw.address as unknown as Order["address"])
           : null,
     deliveryMode,
-    paymentMethod: wasCashOrder
-      ? "ONLINE"
-      : raw.paymentMethod === "PAY_AT_RESTAURANT"
-        ? "PAY_AT_RESTAURANT"
-        : raw.paymentMethod === "CASH_TO_RESTAURANT_COURIER"
-          ? "CASH_TO_RESTAURANT_COURIER"
-          : "ONLINE",
+    paymentMethod,
     paymentStatus: wasCashOrder
       ? safeStatus === "AWAITING_PAYMENT"
         ? "AWAITING_PAYMENT"
@@ -470,7 +495,7 @@ function normalizeOrder(
     driverAssignedAt:
       typeof raw.driverAssignedAt === "string" ? raw.driverAssignedAt : null,
     items: Array.isArray(raw.items) ? raw.items.map(normalizeOrderItem) : [],
-    financials: normalizeFinancials(raw.financials, deliveryMode, {
+    financials: normalizeFinancials(raw.financials, deliveryMode, paymentMethod, {
       pickupPaidWith,
       // Самовывоз фактически оплачен/выдан: клиент уже платил на точке, и
       // отсутствие сохранённого способа оплаты — повод для REVIEW, а не для
