@@ -1148,13 +1148,23 @@ function normalizePlatformDriverCashEvents(
     const arriving = deliveryEvent(ev.orderId, ev.driverId, "ARRIVING_TO_CUSTOMER");
     const delivered = deliveryEvent(ev.orderId, ev.driverId, "ORDER_DELIVERED");
     if (!picked || !arriving || !delivered) continue;
-    if (!isValidIso(arriving.occurredAt) || !isValidIso(delivered.occurredAt)) {
+    if (
+      !isValidIso(picked.occurredAt) ||
+      !isValidIso(arriving.occurredAt) ||
+      !isValidIso(delivered.occurredAt)
+    ) {
       continue;
     }
     if (ev.occurredAt !== delivered.occurredAt) continue;
     const at = Date.parse(ev.occurredAt);
+    const pickedMs = Date.parse(picked.occurredAt);
+    const arrivingMs = Date.parse(arriving.occurredAt);
+    // Получение заказа не может быть позже подъезда к клиенту, а получение
+    // денег — раньше подтверждения ресторана, получения заказа или подъезда.
+    if (pickedMs > arrivingMs) continue;
     if (at < Date.parse(confirm.occurredAt)) continue;
-    if (at < Date.parse(arriving.occurredAt)) continue;
+    if (at < pickedMs) continue;
+    if (at < arrivingMs) continue;
     seenIds.add(ev.id);
     collectedOrders.add(ev.orderId);
     kept.push(ev);

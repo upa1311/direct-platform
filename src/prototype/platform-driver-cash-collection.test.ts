@@ -16,7 +16,10 @@ import {
   restaurantCashReceiptEventId,
 } from "./platform-driver-cash-handoff.ts";
 import { markDriverDeliveredOrder } from "./driver-delivery.ts";
-import { markOrderDeliveredByDriverWithResult } from "./actions.ts";
+import {
+  applyDriverDeliveredOrder,
+  markOrderDeliveredByDriverWithResult,
+} from "./actions.ts";
 
 /**
  * CASH DIRECT — часть 4: получение полной суммы наличными от клиента и
@@ -720,4 +723,295 @@ test("114–117: sheet-кнопки 52/44px, используется общий
   assert.ok(WORKSPACE.includes("DriverControlSheet"));
   // Второго overlay-движка нет: sheetBackdrop живёт только в общем компоненте.
   assert.ok(!WORKSPACE.includes("sheetBackdrop"));
+});
+
+// =============================================================================
+// REPAIR: prepared-completion validator, pickup в COLLECTED и хронология pickup
+// =============================================================================
+
+/** Подготовленное (ещё не финализированное) наличное завершение. */
+const preparedState = (over: Opts = {}) =>
+  cashState({ paymentStatus: "PAID", paidAt: T6, collected: true, ...over });
+
+/** Добавляет driver delivery событие (для дублей/повреждений). */
+function withDeliveryEvent(
+  s: PrototypeState,
+  ev: Record<string, unknown>,
+): PrototypeState {
+  return {
+    ...s,
+    driverDeliveryEvents: [
+      ...s.driverDeliveryEvents,
+      ev as unknown as PrototypeState["driverDeliveryEvents"][number],
+    ],
+  };
+}
+
+/** Переписывает driver delivery события состояния. */
+function mapDelivery(
+  s: PrototypeState,
+  fn: (e: PrototypeState["driverDeliveryEvents"][number]) => unknown | null,
+): PrototypeState {
+  return {
+    ...s,
+    driverDeliveryEvents: s.driverDeliveryEvents
+      .map((e) => fn(e))
+      .filter((e) => e !== null) as PrototypeState["driverDeliveryEvents"],
+  };
+}
+
+// --- r1–r8: COLLECTED требует pickup и его хронологию -------------------------
+
+test("r1: завершённый CASH без ORDER_PICKED_UP → REVIEW_REQUIRED", () => {
+  const done = complete(cashState()).state;
+  const noPickup = mapDelivery(done, (e) =>
+    e.type === "ORDER_PICKED_UP" ? null : e,
+  );
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(noPickup, theOrder(noPickup)).status,
+    "REVIEW_REQUIRED",
+  );
+});
+
+test("r2: два runtime ORDER_PICKED_UP → REVIEW_REQUIRED", () => {
+  const done = complete(cashState()).state;
+  const dup = withDeliveryEvent(done, {
+    id: "de-2-dup",
+    orderId: ORDER,
+    driverId: DRIVER,
+    type: "ORDER_PICKED_UP",
+    occurredAt: T4,
+    orderStatusBefore: "READY",
+    orderStatusAfter: "OUT_FOR_DELIVERY",
+  });
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(dup, theOrder(dup)).status,
+    "REVIEW_REQUIRED",
+  );
+});
+
+test("r3: получение денег раньше pickup → REVIEW_REQUIRED", () => {
+  const done = complete(cashState()).state;
+  const late = mapDelivery(done, (e) =>
+    e.type === "ORDER_PICKED_UP"
+      ? { ...e, occurredAt: "2026-07-22T23:00:00.000Z" }
+      : e,
+  );
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(late, theOrder(late)).status,
+    "REVIEW_REQUIRED",
+  );
+});
+
+test("r4: pickup позже arriving → REVIEW_REQUIRED", () => {
+  const done = complete(cashState()).state;
+  const broken = mapDelivery(done, (e) =>
+    e.type === "ORDER_PICKED_UP"
+      ? { ...e, occurredAt: T5 }
+      : e.type === "ARRIVING_TO_CUSTOMER"
+        ? { ...e, occurredAt: T4 }
+        : e,
+  );
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(broken, theOrder(broken)).status,
+    "REVIEW_REQUIRED",
+  );
+});
+
+test("r5/r6: равное время pickup и согласованный state → COLLECTED", () => {
+  const equal = complete(cashState({ arrivingAt: T6 })).state;
+  const sameMs = mapDelivery(equal, (e) =>
+    e.type === "ORDER_PICKED_UP" ? { ...e, occurredAt: T6 } : e,
+  );
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(sameMs, theOrder(sameMs)).status,
+    "COLLECTED",
+  );
+  const normal = complete(cashState()).state;
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(normal, theOrder(normal)).status,
+    "COLLECTED",
+  );
+});
+
+test("r7/r8: ACTION_REQUIRED и ONLINE NOT_APPLICABLE не регрессируют", () => {
+  const active = cashState();
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(active, theOrder(active)).status,
+    "ACTION_REQUIRED",
+  );
+  // Отсутствие pickup на раннем этапе не превращает заказ в REVIEW.
+  const early = mapDelivery(active, (e) =>
+    e.type === "ORDER_PICKED_UP" ? null : e,
+  );
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(early, theOrder(early)).status,
+    "ACTION_REQUIRED",
+  );
+  const online = cashState({ paymentMethod: "ONLINE", paymentStatus: "PAID", paidAt: T0 });
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(online, theOrder(online)).status,
+    "NOT_APPLICABLE",
+  );
+});
+
+// --- r9–r17: normalizer pickup chronology -------------------------------------
+
+test("r9–r12: schema 22 удаляет collection без/с некорректным pickup", () => {
+  const done = complete(cashState()).state;
+  const reparse = (
+    fn: (e: PrototypeState["driverDeliveryEvents"][number]) => unknown | null,
+  ) => {
+    const parsed = parseStoredState(
+      JSON.stringify({ ...mapDelivery(done, fn), schemaVersion: 22 }),
+    );
+    assert.ok(parsed);
+    return collectionCount(parsed);
+  };
+  assert.equal(reparse((e) => (e.type === "ORDER_PICKED_UP" ? null : e)), 0); // r9
+  assert.equal(
+    reparse((e) =>
+      e.type === "ORDER_PICKED_UP" ? { ...e, occurredAt: "не-дата" } : e,
+    ),
+    0,
+  ); // r10
+  assert.equal(
+    reparse((e) =>
+      e.type === "ORDER_PICKED_UP"
+        ? { ...e, occurredAt: "2026-07-22T23:00:00.000Z" }
+        : e,
+    ),
+    0,
+  ); // r11
+  assert.equal(
+    reparse((e) =>
+      e.type === "ORDER_PICKED_UP"
+        ? { ...e, occurredAt: T5 }
+        : e.type === "ARRIVING_TO_CUSTOMER"
+          ? { ...e, occurredAt: T4 }
+          : e,
+    ),
+    0,
+  ); // r12
+});
+
+test("r13/r14: равное и более позднее время collection сохраняются", () => {
+  const equal = complete(cashState({ arrivingAt: T6 })).state;
+  const sameMs = mapDelivery(equal, (e) =>
+    e.type === "ORDER_PICKED_UP" ? { ...e, occurredAt: T6 } : e,
+  );
+  const p1 = parseStoredState(JSON.stringify({ ...sameMs, schemaVersion: 22 }));
+  assert.ok(p1);
+  assert.equal(collectionCount(p1), 1);
+
+  const later = complete(cashState()).state;
+  const p2 = parseStoredState(JSON.stringify({ ...later, schemaVersion: 22 }));
+  assert.ok(p2);
+  assert.equal(collectionCount(p2), 1);
+});
+
+test("r15–r17: после parse COLLECTED, канонический порядок, идемпотентность", () => {
+  const done = complete(cashState()).state;
+  const p1 = parseStoredState(JSON.stringify(done));
+  assert.ok(p1);
+  assert.equal(
+    getPlatformDriverCustomerCashCollectionView(p1, p1.orders[0]).status,
+    "COLLECTED",
+  );
+  assert.deepEqual(
+    p1.platformDriverCashEvents.map((e) => e.type),
+    [
+      "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF",
+      "RESTAURANT_CONFIRMED_CASH_RECEIPT",
+      "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION",
+    ],
+  );
+  const p2 = parseStoredState(JSON.stringify(p1));
+  assert.ok(p2);
+  assert.deepEqual(p2.platformDriverCashEvents, p1.platformDriverCashEvents);
+});
+
+// --- r18–r30: прямые вызовы applyDriverDeliveredOrder -------------------------
+
+const applyDirect = (s: PrototypeState, now = T6) =>
+  applyDriverDeliveredOrder(s, theOrder(s), now);
+
+test("r18/r26/r27: PAID + paidAt без collection event → fail, ничего не меняется", () => {
+  const s = cashState({ paymentStatus: "PAID", paidAt: T6, collected: false });
+  const r = applyDirect(s);
+  assert.equal(r.ok, false);
+  assert.equal(theOrder(s).status, "ARRIVING");
+  assert.equal(s.drivers.find((d) => d.id === DRIVER)?.status, "BUSY_DIRECT");
+});
+
+test("r19: collection без подтверждения ресторана → fail", () => {
+  assert.equal(applyDirect(preparedState({ confirmed: false })).ok, false);
+});
+
+test("r20: collection с неправильной суммой → fail", () => {
+  const s = preparedState();
+  const wrong: PrototypeState = {
+    ...s,
+    platformDriverCashEvents: s.platformDriverCashEvents.map((e) =>
+      e.type === "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION"
+        ? { ...e, amountCents: 999 }
+        : e,
+    ),
+  };
+  assert.equal(applyDirect(wrong).ok, false);
+});
+
+test("r21/r22: collection без pickup или без arriving → fail", () => {
+  assert.equal(applyDirect(preparedState({ pickedUp: false })).ok, false);
+  assert.equal(applyDirect(preparedState({ arriving: false })).ok, false);
+});
+
+test("r23: collection раньше pickup → fail с chronology-ошибкой", () => {
+  const late = mapDelivery(preparedState(), (e) =>
+    e.type === "ORDER_PICKED_UP"
+      ? { ...e, occurredAt: "2026-07-22T23:00:00.000Z" }
+      : e,
+  );
+  const r = applyDirect(late);
+  assert.equal(r.ok, false);
+  assert.equal(
+    r.ok === false ? r.error : "",
+    "Некорректное время подтверждения получения наличных.",
+  );
+});
+
+test("r24/r28/r29: валидное prepared состояние → success без accounting/settlements", () => {
+  const s = preparedState();
+  const r = applyDirect(s);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.state.orders[0].status, "DELIVERED");
+  assert.equal(
+    r.state.drivers.find((d) => d.id === DRIVER)?.status,
+    "ZONE_CONFIRMATION_REQUIRED",
+  );
+  assert.equal(r.state.restaurantAccountingEntries.length, 0);
+  assert.equal(r.state.settlements.length, 0);
+  // Helper сам ORDER_DELIVERED не добавляет — это делает driver lifecycle action.
+  assert.equal(
+    r.state.driverDeliveryEvents.filter((e) => e.type === "ORDER_DELIVERED").length,
+    0,
+  );
+});
+
+test("r25: при fail исходное состояние не мутируется", () => {
+  const s = preparedState({ pickedUp: false });
+  const before = JSON.stringify(s);
+  assert.equal(applyDirect(s).ok, false);
+  assert.equal(JSON.stringify(s), before);
+});
+
+test("r30: ONLINE прямой helper идёт прежним accounting-путём", () => {
+  const online = cashState({ paymentMethod: "ONLINE", paymentStatus: "PAID", paidAt: T0 });
+  const r = applyDriverDeliveredOrder(online, theOrder(online), T6);
+  assert.equal(r.ok, false);
+  assert.equal(
+    r.ok === false ? r.error : "",
+    "Неизвестный статус движения денег заказа.",
+  );
 });

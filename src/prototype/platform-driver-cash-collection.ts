@@ -64,6 +64,102 @@ function deliveryEvents(
   );
 }
 
+/** Ошибки проверки подготовленного наличного завершения. */
+const CASH_REVIEW_ERROR = "Данные наличной доставки требуют проверки Direct.";
+const CASH_CHRONOLOGY_ERROR =
+  "Некорректное время подтверждения получения наличных.";
+
+export type PreparedCashCompletionValidation =
+  | { ok: true; collectionEvent: PlatformDriverCashEvent }
+  | { ok: false; error: string };
+
+/**
+ * Проверка ПОДГОТОВЛЕННОГО (ещё не финализированного) наличного завершения.
+ *
+ * Отличается от COLLECTED-селектора: на этом этапе заказ ещё ARRIVING и события
+ * ORDER_DELIVERED ещё нет — их добавят канонический завершитель и driver action.
+ * Зато уже обязаны существовать все доказательства: валидный snapshot,
+ * подтверждённый cash offer, подтверждённая рестораном передача, полный рабочий
+ * путь водителя (получение заказа и подъезд), ровно одно событие получения денег
+ * с точной суммой и согласованным временем.
+ *
+ * Ничего не чинит и не реконструирует; исключений не бросает.
+ */
+export function validatePreparedPlatformDriverCashCompletion(
+  state: PrototypeState,
+  order: Order,
+  nowIso: string,
+): PreparedCashCompletionValidation {
+  const invalid = { ok: false as const, error: CASH_REVIEW_ERROR };
+
+  if (order.deliveryMode !== "PLATFORM_DRIVER") return invalid;
+  if (order.paymentMethod !== "CASH") return invalid;
+  if (order.status !== "ARRIVING") return invalid;
+  const driverId = order.assignedDriverId;
+  if (driverId === null) return invalid;
+  if (order.paymentStatus !== "PAID") return invalid;
+  if (!isValidIso(order.paidAt)) return invalid;
+  if (!isValidIso(nowIso)) return invalid;
+  if (order.paidAt !== nowIso) return invalid;
+
+  const snapshot = getPlatformDriverCashSnapshot(order);
+  if (snapshot === null) return invalid;
+
+  // Подтверждённый наличный offer этого водителя.
+  const offer = state.driverOffers.find(
+    (o) =>
+      o.orderId === order.id &&
+      o.driverId === driverId &&
+      o.status === "ACCEPTED",
+  );
+  if (!offer || !isValidIso(offer.cashReserveConfirmedAt)) return invalid;
+
+  // Подтверждённая рестораном передача наличных.
+  const handoff = getPlatformDriverCashHandoffView(state, order);
+  if (handoff.status !== "CONFIRMED") return invalid;
+  if (!isValidIso(handoff.restaurantConfirmedAt)) return invalid;
+
+  // Ровно одно событие получения денег от клиента.
+  const events = collectionEvents(state, order.id);
+  if (events.length !== 1) return invalid;
+  const event = events[0];
+  if (event.id !== customerCashCollectionEventId(order.id)) return invalid;
+  if (event.driverId !== driverId) return invalid;
+  if (event.restaurantId !== order.restaurant.id) return invalid;
+  if (event.actor !== "DRIVER") return invalid;
+  if (event.restaurantWorkspaceRole !== null) return invalid;
+  if (event.amountCents !== snapshot.customerCollectionCents) return invalid;
+  if (!isValidIso(event.occurredAt)) return invalid;
+  if (event.occurredAt !== order.paidAt) return invalid;
+  if (event.occurredAt !== nowIso) return invalid;
+
+  // Полный рабочий путь водителя; завершения ещё быть не должно.
+  const picked = deliveryEvents(state, order.id, driverId, "ORDER_PICKED_UP");
+  const arriving = deliveryEvents(state, order.id, driverId, "ARRIVING_TO_CUSTOMER");
+  const delivered = deliveryEvents(state, order.id, driverId, "ORDER_DELIVERED");
+  if (picked.length !== 1 || arriving.length !== 1) return invalid;
+  if (delivered.length !== 0) return invalid;
+  if (!isValidIso(picked[0].occurredAt) || !isValidIso(arriving[0].occurredAt)) {
+    return invalid;
+  }
+
+  // Хронология: получение денег не раньше передачи ресторану, получения заказа
+  // и подъезда; получение заказа не позже подъезда. Равное время разрешено.
+  const at = Date.parse(event.occurredAt);
+  const pickedMs = Date.parse(picked[0].occurredAt);
+  const arrivingMs = Date.parse(arriving[0].occurredAt);
+  if (pickedMs > arrivingMs) return { ok: false, error: CASH_CHRONOLOGY_ERROR };
+  if (
+    at < Date.parse(handoff.restaurantConfirmedAt) ||
+    at < pickedMs ||
+    at < arrivingMs
+  ) {
+    return { ok: false, error: CASH_CHRONOLOGY_ERROR };
+  }
+
+  return { ok: true, collectionEvent: event };
+}
+
 /**
  * Состояние получения денег от клиента. Ничего не мутирует и не реконструирует.
  */
@@ -94,6 +190,7 @@ export function getPlatformDriverCustomerCashCollectionView(
   if (!isValidIso(handoff.restaurantConfirmedAt)) return review;
 
   const amountCents = snapshot.customerCollectionCents;
+  const picked = deliveryEvents(state, order.id, driverId, "ORDER_PICKED_UP");
   const arriving = deliveryEvents(state, order.id, driverId, "ARRIVING_TO_CUSTOMER");
   const delivered = deliveryEvents(state, order.id, driverId, "ORDER_DELIVERED");
 
@@ -117,14 +214,28 @@ export function getPlatformDriverCustomerCashCollectionView(
   if (event.restaurantId !== order.restaurant.id) return review;
   if (!isValidIso(event.occurredAt)) return review;
   if (event.occurredAt !== order.paidAt) return review;
-  if (delivered.length !== 1) return review;
+  // Рабочий путь водителя должен быть пройден полностью и без дублей: ровно по
+  // одному получению заказа, подъезду и завершению.
+  if (picked.length !== 1 || arriving.length !== 1 || delivered.length !== 1) {
+    return review;
+  }
   if (delivered[0].occurredAt !== event.occurredAt) return review;
-  if (arriving.length < 1) return review;
-  if (!isValidIso(arriving[0].occurredAt)) return review;
-  // Хронология: получение денег не раньше подтверждения ресторана и подъезда.
+  if (
+    !isValidIso(picked[0].occurredAt) ||
+    !isValidIso(arriving[0].occurredAt) ||
+    !isValidIso(delivered[0].occurredAt)
+  ) {
+    return review;
+  }
+  // Хронология: получение заказа не позже подъезда; получение денег не раньше
+  // подтверждения ресторана, получения заказа и подъезда. Равное время можно.
   const at = Date.parse(event.occurredAt);
+  const pickedMs = Date.parse(picked[0].occurredAt);
+  const arrivingMs = Date.parse(arriving[0].occurredAt);
+  if (pickedMs > arrivingMs) return review;
   if (at < Date.parse(handoff.restaurantConfirmedAt)) return review;
-  if (at < Date.parse(arriving[0].occurredAt)) return review;
+  if (at < pickedMs) return review;
+  if (at < arrivingMs) return review;
 
   return { status: "COLLECTED", amountCents, collectedAt: event.occurredAt };
 }

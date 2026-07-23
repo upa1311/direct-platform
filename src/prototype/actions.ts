@@ -102,6 +102,7 @@ import {
   validateMenuItemSubmissionDraft,
 } from "./menu-catalog";
 import { computeCompletedOrderAccounting } from "./restaurant-accounting";
+import { validatePreparedPlatformDriverCashCompletion } from "./platform-driver-cash-collection";
 
 export interface ActionResult<T> {
   state: PrototypeState;
@@ -4512,15 +4513,18 @@ export function applyDriverDeliveredOrder(
   // задолженность водителя (directReceivableFromDriverCents) останется в снимке
   // и станет отдельным driver cash ledger в следующем микробатче.
   if (order.paymentMethod === "CASH") {
-    // Fail-closed: наличное завершение допустимо только после фактического
-    // получения денег от клиента (paymentStatus/paidAt уже проставлены вызвавшей
-    // атомарной мутацией). Иначе заказ не завершается.
-    if (
-      updatedOrder.paymentStatus !== "PAID" ||
-      typeof updatedOrder.paidAt !== "string" ||
-      Number.isNaN(Date.parse(updatedOrder.paidAt))
-    ) {
-      return { ok: false, error: "Данные наличной доставки требуют проверки Direct." };
+    // Fail-closed: paymentStatus/paidAt недостаточно. Даже при прямом вызове
+    // этого экспортируемого helper'а требуется ПОЛНЫЙ набор доказательств
+    // подготовленного наличного завершения: валидный snapshot, подтверждённый
+    // cash offer, подтверждённая рестораном передача, получение заказа и
+    // подъезд, ровно одно событие получения денег с точной суммой и временем.
+    const validation = validatePreparedPlatformDriverCashCompletion(
+      state,
+      order,
+      nowIso,
+    );
+    if (!validation.ok) {
+      return { ok: false, error: validation.error };
     }
     return {
       ok: true,
