@@ -340,10 +340,97 @@ test("32/33: повторное confirmation fail-closed, второго соб�
 test("34: report и confirmation имеют разные event id", () => {
   assert.notEqual(driverCashHandoffReportEventId(ORDER), restaurantCashReceiptEventId(ORDER));
 });
-test("35: confirmation occurredAt не раньше report (view REVIEW при нарушении)", () => {
-  const s = cashState({ arrived: true, reported: true, confirmed: true });
-  // Валидное confirmation после report → CONFIRMED.
-  assert.equal(getPlatformDriverCashHandoffView(s, theOrder(s)).status, "CONFIRMED");
+// --- 35 + хронология подтверждения (repair) -----------------------------------
+
+/** Состояние с driver report в T2 (10:06) — база для chronology-тестов. */
+const reportedState = () => cashState({ arrived: true, reported: true });
+
+test("35a: confirmation раньше report — fail-closed с точной ошибкой", () => {
+  const s = reportedState(); // report.occurredAt === T2 (10:06)
+  const before = JSON.stringify(s);
+  const r = confirmRestaurantDriverCashReceipt(s, REST, ORDER, "COMBINED", T1); // 10:05
+  assert.equal(r.result.ok, false);
+  assert.equal(r.result.error, "Некорректное время подтверждения получения наличных.");
+  assert.equal(r.result.orderId, null);
+  // Тот же объект state, revision не растёт, состояние не мутировано.
+  assert.equal(r.state, s);
+  assert.equal(r.state.revision, s.revision);
+  assert.equal(JSON.stringify(s), before);
+});
+
+test("35b: при ошибке confirmation нет, driver report остаётся ровно один", () => {
+  const s = reportedState();
+  const r = confirmRestaurantDriverCashReceipt(s, REST, ORDER, "COMBINED", T1);
+  const events = r.state.platformDriverCashEvents;
+  assert.equal(
+    events.filter((e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT").length,
+    0,
+  );
+  assert.equal(
+    events.filter((e) => e.type === "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF").length,
+    1,
+  );
+});
+
+test("35c: при ошибке заказ, financials, paymentStatus, paidAt и учёт не меняются", () => {
+  const s = reportedState();
+  const beforeOrder = theOrder(s);
+  const r = confirmRestaurantDriverCashReceipt(s, REST, ORDER, "COMBINED", T1);
+  const afterOrder = theOrder(r.state);
+  assert.deepEqual(afterOrder, beforeOrder);
+  assert.deepEqual(afterOrder.financials, beforeOrder.financials);
+  assert.equal(afterOrder.paymentStatus, "CASH_ON_DELIVERY");
+  assert.equal(afterOrder.paidAt ?? null, beforeOrder.paidAt ?? null);
+  assert.deepEqual(r.state.restaurantAccountingEntries, s.restaurantAccountingEntries);
+  assert.deepEqual(r.state.settlements, s.settlements);
+});
+
+test("35d: равное время разрешено (та же миллисекунда) → CONFIRMED", () => {
+  const s = reportedState(); // report T2
+  const r = confirmRestaurantDriverCashReceipt(s, REST, ORDER, "COMBINED", T2);
+  assert.equal(r.result.ok, true);
+  const ev = r.state.platformDriverCashEvents.find(
+    (e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT",
+  );
+  assert.ok(ev);
+  assert.equal(ev.occurredAt, T2);
+  assert.equal(getPlatformDriverCashHandoffView(r.state, theOrder(r.state)).status, "CONFIRMED");
+});
+
+test("35e: позднее время разрешено → CONFIRMED без изменений поведения", () => {
+  const s = reportedState(); // report T2
+  const r = confirmRestaurantDriverCashReceipt(s, REST, ORDER, "COMBINED", T3);
+  assert.equal(r.result.ok, true);
+  const ev = r.state.platformDriverCashEvents.find(
+    (e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT",
+  );
+  assert.ok(ev);
+  assert.equal(ev.occurredAt, T3);
+  assert.equal(ev.amountCents, 600);
+  assert.equal(getPlatformDriverCashHandoffView(r.state, theOrder(r.state)).status, "CONFIRMED");
+});
+
+test("35f: повреждённый report.occurredAt — fail-closed без исключения", () => {
+  const base = reportedState();
+  // Вручную повреждённый runtime-state (normalizer такой уже удалил бы).
+  const broken: PrototypeState = {
+    ...base,
+    platformDriverCashEvents: base.platformDriverCashEvents.map((e) =>
+      e.type === "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF"
+        ? { ...e, occurredAt: "не-дата" }
+        : e,
+    ),
+  };
+  const r = confirmRestaurantDriverCashReceipt(broken, REST, ORDER, "COMBINED", T3);
+  assert.equal(r.result.ok, false);
+  assert.equal(r.result.error, "Данные передачи наличных требуют проверки Direct.");
+  assert.equal(r.state, broken);
+  assert.equal(
+    r.state.platformDriverCashEvents.filter(
+      (e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT",
+    ).length,
+    0,
+  );
 });
 
 // --- view / has-confirmed -----------------------------------------------------
@@ -543,6 +630,24 @@ test("61: confirmation раньше report удаляется", () => {
   ]).platformDriverCashEvents;
   assert.equal(kept.filter((e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT").length, 0);
 });
+test("61b: равное время confirmation === report сохраняется", () => {
+  const kept = persist(21, [
+    reportRaw({ occurredAt: T2 }),
+    confirmRaw({ occurredAt: T2 }),
+  ]).platformDriverCashEvents;
+  assert.equal(kept.filter((e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT").length, 1);
+});
+
+test("61c: позднее время confirmation > report сохраняется", () => {
+  const kept = persist(21, [
+    reportRaw({ occurredAt: T2 }),
+    confirmRaw({ occurredAt: T3 }),
+  ]).platformDriverCashEvents;
+  const conf = kept.find((e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT");
+  assert.ok(conf);
+  assert.equal(conf.occurredAt, T3);
+});
+
 test("62/63: дубль report/confirmation — первый валидный сохраняется", () => {
   const kept = persist(21, [
     reportRaw(),

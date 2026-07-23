@@ -332,6 +332,19 @@ export function confirmRestaurantDriverCashReceipt(
     return fail(state, "Получение наличных уже подтверждено.");
   }
 
+  // Хронология: подтверждение не может произойти раньше заявления водителя.
+  // Без этой проверки action создал бы событие, которое нормализатор при
+  // следующей загрузке удалит, — успешное действие «исчезало» бы после refresh.
+  // Защита живёт и здесь (до записи), и в normalizePlatformDriverCashEvents.
+  const reportMs = Date.parse(report.occurredAt);
+  if (Number.isNaN(reportMs)) {
+    // Повреждённый runtime-report: не достраиваем и не чиним.
+    return fail(state, "Данные передачи наличных требуют проверки Direct.");
+  }
+  if (Date.parse(nowIso) < reportMs) {
+    return fail(state, "Некорректное время подтверждения получения наличных.");
+  }
+
   // Право подтверждения — доменная проверка (UI не доверяем). KITCHEN запрещён.
   const workflowMode = restaurant.orderWorkflowMode;
   if (
