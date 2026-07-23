@@ -45,6 +45,26 @@ const SOUND = readFileSync(
 );
 const CSS = readFileSync("src/app/driver/driver.module.css", "utf8");
 const DELIVERY = readFileSync("src/prototype/driver-delivery.ts", "utf8");
+const SHEET = readFileSync(
+  "src/components/driver/driver-control-sheet.tsx",
+  "utf8",
+);
+
+/** Тело @media-блока по его условию (первое вхождение, со сбалансированными {}). */
+function mediaBlock(condition: string): string {
+  const start = CSS.indexOf(`@media ${condition}`);
+  assert.notEqual(start, -1, `@media ${condition} не найден`);
+  const open = CSS.indexOf("{", start);
+  let depth = 0;
+  for (let i = open; i < CSS.length; i += 1) {
+    if (CSS[i] === "{") depth += 1;
+    else if (CSS[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return CSS.slice(open + 1, i);
+    }
+  }
+  throw new Error(`@media ${condition} не закрыт`);
+}
 
 /** Тело CSS-правила `selector { ... }` (первое вхождение). */
 function cssRule(selector: string): string {
@@ -366,4 +386,161 @@ test("форма входа доступна: label, autocomplete, tel, role=ale
   assert.ok(WORKSPACE.includes('role="alert"'));
   assert.ok(WORKSPACE.includes('type="submit"'));
   assert.ok(WORKSPACE.includes("onSubmit={submit}"));
+});
+
+// --- Устойчивая мобильная верхняя панель (harden) -----------------------------
+
+test("h1: статусная кнопка оборачивает текст в quickButtonText", () => {
+  // Голого текста внутри статусной кнопки нет — только span quickButtonText.
+  assert.ok(WORKSPACE.includes("styles.quickButtonText"));
+  const online = WORKSPACE.indexOf('? "Онлайн" : "Пауза"');
+  assert.notEqual(online, -1);
+  const before = WORKSPACE.slice(online - 120, online);
+  assert.ok(before.includes("quickButtonText"), "Онлайн/Пауза внутри quickButtonText");
+});
+
+test("h2: OFFLINE — короткая подпись «В сеть»", () => {
+  assert.ok(WORKSPACE.includes(">В сеть</span>"));
+});
+
+test("h3: OFFLINE сохраняет полный aria-label «Выйти онлайн»", () => {
+  assert.ok(WORKSPACE.includes('aria-label="Выйти онлайн"'));
+  assert.ok(WORKSPACE.includes(">Выйти онлайн</span>"));
+});
+
+test("h4: ZONE_CONFIRMATION_REQUIRED — короткая подпись «Подтвердить»", () => {
+  assert.ok(WORKSPACE.includes(">Подтвердить</span>"));
+});
+
+test("h5: подтверждение зоны — полный aria-label «Подтвердить текущую зону»", () => {
+  assert.ok(WORKSPACE.includes('aria-label="Подтвердить текущую зону"'));
+});
+
+test("h6: телефонный @media — две minmax-колонки и 44px звук", () => {
+  // Порог 440px покрывает границы 390 и 430px без обрезания подписей.
+  const block = mediaBlock("(max-width: 440px)");
+  assert.ok(
+    block.includes("minmax(92px, 1fr) minmax(92px, 1fr) 44px"),
+    "две колонки ≥92px + 44px звук",
+  );
+});
+
+test("h7: телефонный @media — padding кнопок не больше 8px", () => {
+  const block = mediaBlock("(max-width: 440px)");
+  assert.ok(block.includes("padding-inline: 8px"));
+  assert.ok(block.includes("font-size: 14px"));
+  // Короткая подпись включается, полная скрывается.
+  assert.ok(block.includes(".mobileControlLabel"));
+  assert.ok(block.includes(".regularControlLabel"));
+});
+
+test("h8: статусное меню — overlay-лист, а не flow-блок", () => {
+  // Старый flow-класс quickMenu удалён; статус открывает DriverControlSheet.
+  assert.ok(!WORKSPACE.includes("styles.quickMenu"));
+  assert.ok(!CSS.includes(".quickMenu"));
+  assert.ok(WORKSPACE.includes("DriverControlSheet"));
+  assert.ok(WORKSPACE.includes('open={openMenu === "status"}'));
+});
+
+test("h9: control sheet использует position fixed", () => {
+  assert.ok(cssRule(".controlSheet").includes("position: fixed"));
+  assert.ok(SHEET.includes("position: fixed") === false, "позиция задаётся в CSS");
+});
+
+test("h10: control sheet использует safe-area снизу", () => {
+  assert.ok(cssRule(".controlSheet").includes("env(safe-area-inset-bottom)"));
+});
+
+test("h11: присутствует backdrop поверх контента", () => {
+  const rule = cssRule(".sheetBackdrop");
+  assert.ok(rule.includes("position: fixed"));
+  assert.ok(rule.includes("inset: 0"));
+  assert.ok(SHEET.includes("styles.sheetBackdrop"));
+  assert.ok(SHEET.includes("onClick={onClose}"));
+});
+
+test("h12: Escape закрывает лист", () => {
+  assert.ok(SHEET.includes('"Escape"'));
+  assert.ok(SHEET.includes("onClose()"));
+});
+
+test("h13: фокус возвращается на кнопку-триггер", () => {
+  assert.ok(SHEET.includes("triggerRef.current?.focus()"));
+  // aria-modal на мобильном dialog.
+  assert.ok(SHEET.includes('aria-modal="true"'));
+  assert.ok(SHEET.includes('role="dialog"'));
+});
+
+test("h14: единый zone picker для обоих сценариев (без дублирования списка)", () => {
+  assert.ok(WORKSPACE.includes("function ZoneOptions"));
+  assert.ok(WORKSPACE.includes("<ZoneOptions"));
+  // Список зон строится ровно один раз — в общем ZoneOptions.
+  assert.equal(count(WORKSPACE, "zones.map("), 1);
+});
+
+test("h15: выбор зоны в OFFLINE меняет только zoneDraft", () => {
+  const cz = WORKSPACE.slice(
+    WORKSPACE.indexOf("const chooseZone"),
+    WORKSPACE.indexOf("const chooseZone") + 700,
+  );
+  assert.ok(cz.includes('status === "OFFLINE"'));
+  const draft = cz.indexOf("setZoneDraft(zoneId)");
+  const change = cz.indexOf("driverChangeZone");
+  assert.ok(draft !== -1 && change !== -1);
+  assert.ok(draft < change, "OFFLINE-ветка (только черновик) раньше смены зоны");
+});
+
+test("h16: AVAILABLE/PAUSED выбор зоны вызывает driverChangeZone", () => {
+  assert.ok(WORKSPACE.includes("driverChangeZone(driver.id, zoneId)"));
+  assert.ok(WORKSPACE.includes("runAndCloseSheet"));
+});
+
+test("h17: при ошибке лист не закрывается (закрытие только при ok)", () => {
+  assert.ok(WORKSPACE.includes("if (result.ok) setOpenMenu(null)"));
+});
+
+test("h18: zoneConfirmActions — одна колонка", () => {
+  assert.ok(cssRule(".zoneConfirmActions").includes("grid-template-columns: 1fr"));
+});
+
+test("h19: кнопки подтверждения зоны — width 100%", () => {
+  const rule = cssRule(".zoneConfirmButton");
+  assert.ok(rule.includes("width: 100%"));
+  assert.ok(rule.includes("white-space: normal"));
+});
+
+test("h20: главная кнопка подтверждения зоны — min-height 52px", () => {
+  const rule = cssRule(".zoneConfirmPrimary");
+  assert.ok(rule.includes("min-height: 52px"));
+  assert.ok(rule.includes("font-size: 16px"));
+});
+
+test("h21: «Выбрать другую зону» открывает лист, а не inline-список", () => {
+  assert.ok(WORKSPACE.includes("Выбрана: "));
+  assert.ok(WORKSPACE.includes('onClick={() => setOpenMenu("zone")}'));
+});
+
+test("h22: ровно один колокольчик в quick controls", () => {
+  assert.equal(count(WORKSPACE, "soundIconButton"), 1);
+});
+
+test("h23: lifecycle-кнопки и прогресс 2×2 не ухудшены", () => {
+  const life = cssRule(".stageCard .primaryButton");
+  assert.ok(life.includes("width: 100%"));
+  assert.ok(life.includes("min-height: 52px"));
+  const prog = cssRule(".progress");
+  assert.ok(prog.includes("grid-template-columns: 1fr 1fr"));
+});
+
+test("h24: schema остаётся 18; наличные выключены", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 18);
+  assert.equal(
+    createDefaultState().platformSettings.platformDriverCashEnabled,
+    false,
+  );
+});
+
+test("h25: нет двойного слова «Водитель Водитель»", () => {
+  assert.ok(!WORKSPACE.includes("Водитель Водитель"));
+  assert.ok(!SHEET.includes("Водитель Водитель"));
 });

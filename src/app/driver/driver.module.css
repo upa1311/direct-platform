@@ -106,6 +106,28 @@
   min-width: 0;
 }
 
+/* Подтверждение зоны: полноширинные кнопки в одну колонку — без мелких
+   кусков рядом. Главная кнопка выше и крупнее вторичных. */
+.zoneConfirmActions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.zoneConfirmButton {
+  width: 100%;
+  min-height: 48px;
+  white-space: normal;
+  text-align: center;
+  padding-inline: 12px;
+}
+
+.zoneConfirmPrimary {
+  min-height: 52px;
+  font-size: 16px;
+  font-weight: 750;
+}
+
 /* --- Меню «⋯» аккаунта справа сверху --------------------------------------- */
 
 .overflowWrap {
@@ -166,9 +188,12 @@
 
 .quickControls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
+  /* Две текстовые ячейки не тоньше 92 px + фиксированные 44 px под звук:
+     строка «статус · зона · звук» гарантированно помещается на 360 px. */
+  grid-template-columns: minmax(92px, 1fr) minmax(92px, 1fr) 44px;
   gap: 8px;
   width: 100%;
+  min-width: 0;
 }
 
 .quickButton {
@@ -217,6 +242,16 @@
   min-width: 0;
 }
 
+/* Адаптивные подписи: по умолчанию (широкий экран) — полная подпись.
+   Короткая включается media query на телефоне. Никакого JS-замера viewport. */
+.mobileControlLabel {
+  display: none;
+}
+
+.regularControlLabel {
+  display: inline;
+}
+
 /* Квадратная кнопка звука — третья ячейка сетки. */
 .soundIconButton {
   width: 44px;
@@ -236,19 +271,81 @@
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
 
-/* Раскрываемое меню действий / список зон под верхней строкой. */
-.quickMenu {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
+/* --- Overlay-лист управления (статус / зона) ------------------------------ */
+
+/* Полупрозрачная подложка: закрывает лист по нажатию, перекрывает контент. */
+.sheetBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.32);
 }
 
-.quickMenuItem {
+/* Телефон: нижний sheet поверх залипшего заголовка. Широкий экран ниже
+   превращает его в компактный центрированный диалог. */
+.controlSheet {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 50;
+  max-height: min(70vh, 420px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 16px;
+  background: var(--kds-surface, #fff);
+  box-shadow: 0 -6px 28px rgba(0, 0, 0, 0.22);
+}
+
+.sheetHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sheetTitle {
+  font-size: 15px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.sheetClose {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.sheetBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sheetOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sheetOption {
   width: 100%;
   text-align: left;
-  min-height: 44px;
-  padding: 10px 12px;
+  min-height: 48px;
+  padding: 12px 14px;
   border: 1px solid var(--kds-border, #cfd5d1);
   border-radius: 10px;
   background: transparent;
@@ -258,14 +355,31 @@
   cursor: pointer;
 }
 
-.quickMenuItem:hover {
+.sheetOption:hover {
   border-color: var(--kds-border-strong, #aeb7b1);
 }
 
-.quickMenuItemActive {
+.sheetOption:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sheetOptionActive {
   border-color: currentColor;
   font-weight: 700;
   background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+/* Широкий экран: компактный центрированный диалог вместо нижнего листа. */
+@media (min-width: 521px) {
+  .controlSheet {
+    left: 50%;
+    right: auto;
+    top: 88px;
+    bottom: auto;
+    transform: translateX(-50%);
+    width: min(360px, calc(100vw - 32px));
+  }
 }
 
 .driverName {
@@ -622,6 +736,35 @@
 .callNumber {
   font-size: 13px;
   color: var(--kds-muted, #66706a);
+}
+
+/* --- Телефон: короткие подписи и плотная верхняя строка -------------------
+   Порог 440 px покрывает все телефонные ширины приёмки (360–430) с запасом на
+   округление device-pixel (окно 430 px даёт CSS-ширину ~430.4). Раздел 4
+   допускает полные подписи «от 391 px», но не требует их, поэтому короткие
+   подписи на всех телефонах — валидны и исключают обрезание полных подписей
+   («Выйти онлайн», «Подтвердить зону») на границах 390 и 430 px.
+   Полные подписи включаются на планшете/десктопе (≥441 px). */
+@media (max-width: 440px) {
+  .quickControls {
+    /* Две ячейки ≥92 px + 44 px звук: 92+92+44+2×6 gap = 240 px < 300 px. */
+    grid-template-columns: minmax(92px, 1fr) minmax(92px, 1fr) 44px;
+    gap: 6px;
+  }
+
+  .quickButton {
+    padding-inline: 8px;
+    font-size: 14px;
+  }
+
+  /* Короткая подпись видна, полная скрыта. */
+  .mobileControlLabel {
+    display: inline;
+  }
+
+  .regularControlLabel {
+    display: none;
+  }
 }
 
 /* --- Мобильные размеры: крупные touch-цели -------------------------------- */
