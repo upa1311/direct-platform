@@ -233,6 +233,51 @@ function rawOrderWith(
   };
 }
 
+// Полноценный PLATFORM_DRIVER + CASH заказ (native schema 19) для persistence.
+const NATIVE_PAID_AT = "2026-07-20T10:00:00.000Z";
+const NATIVE_READY_AT = "2026-07-20T10:30:00.000Z";
+const NATIVE_KITCHEN_AT = "2026-07-20T10:05:00.000Z";
+const NATIVE_DRIVER_AT = "2026-07-20T10:06:00.000Z";
+
+function nativeCashRaw(over: {
+  candidate?: unknown;
+  amounts?: Partial<PlatformDriverCashAmountsInput>;
+}): Record<string, unknown> {
+  const amounts = { ...OK_AMOUNTS, ...(over.amounts ?? {}) };
+  return {
+    id: "o-cash",
+    publicNumber: "C-1",
+    deliveryMode: "PLATFORM_DRIVER",
+    paymentMethod: "CASH",
+    paymentStatus: "CASH_ON_DELIVERY",
+    status: "PREPARING",
+    paidAt: NATIVE_PAID_AT,
+    expectedReadyAt: NATIVE_READY_AT,
+    preparationMinutes: 30,
+    kitchenStartedAt: NATIVE_KITCHEN_AT,
+    assignedDriverId: "driver-1",
+    driverAssignedAt: NATIVE_DRIVER_AT,
+    address: {
+      street: "ул. Пушкина",
+      house: "1",
+      apartment: "",
+      entrance: "",
+      floor: "",
+      comment: "",
+      zoneId: "zone-1",
+    },
+    financials: {
+      customerTotalCents: amounts.customerTotalCents,
+      restaurantPayoutBeforeBankFeeCents:
+        amounts.restaurantPayoutBeforeBankFeeCents,
+      driverPayoutCents: amounts.driverPayoutCents,
+      platformGrossRevenueCents: amounts.platformGrossRevenueCents,
+      customerZoneId: "zone-1",
+      platformDriverCash: over.candidate === undefined ? OK_SNAPSHOT : over.candidate,
+    },
+  };
+}
+
 test("17: schema 18 → platformDriverCash null", () => {
   const order = normalizeStoredOrder(
     rawOrderWith("PLATFORM_DRIVER", "ONLINE", OK_SNAPSHOT),
@@ -358,25 +403,36 @@ test("27: несовпадение direct receivable → null", () => {
   assert.equal(resolved, null);
 });
 
-test("28: нормализация идемпотентна", () => {
+test("28: нормализация идемпотентна (native CASH сохраняется, legacy коэрцится)", () => {
   const base = createDefaultState();
+  // Native schema 19 CASH: снимок и способ оплаты СОХРАНЯЮТСЯ round-trip.
   const s1 = parseStoredState(
     JSON.stringify({
       ...base,
       schemaVersion: 19,
-      orders: [rawOrderWith("PLATFORM_DRIVER", "CASH", OK_SNAPSHOT)],
+      orders: [nativeCashRaw({})],
     }),
   );
   assert.ok(s1);
   const s2 = parseStoredState(JSON.stringify(s1));
   assert.ok(s2);
-  assert.deepEqual(
-    s2.orders[0].financials.platformDriverCash,
-    s1.orders[0].financials.platformDriverCash,
+  assert.deepEqual(s2.orders[0], s1.orders[0]);
+  assert.equal(s1.orders[0].paymentMethod, "CASH");
+  assert.deepEqual(s1.orders[0].financials.platformDriverCash, OK_SNAPSHOT);
+
+  // Legacy schema <19 CASH: коэрцится в ONLINE, снимок null.
+  const legacy = parseStoredState(
+    JSON.stringify({ ...base, schemaVersion: 18, orders: [nativeCashRaw({})] }),
   );
-  // Через продукт наличные выключены: CASH коэрцится в ONLINE → снимок null.
-  assert.equal(s1.orders[0].financials.platformDriverCash, null);
-  assert.equal(s1.orders[0].paymentMethod, "ONLINE");
+  assert.ok(legacy);
+  assert.equal(legacy.orders[0].paymentMethod, "ONLINE");
+  assert.equal(legacy.orders[0].financials.platformDriverCash, null);
+
+  // Product checkout по-прежнему не создаёт CASH-заказов (наличные выключены).
+  assert.equal(
+    createDefaultState().platformSettings.platformDriverCashEnabled,
+    false,
+  );
 });
 
 // --- Селектор -----------------------------------------------------------------
@@ -409,6 +465,134 @@ test("селектор: расхождение с financials → null", () => {
 
 test("селектор: отсутствующий снимок → null", () => {
   assert.equal(getPlatformDriverCashSnapshot(cashOrder({ candidate: null })), null);
+});
+
+// --- Persistence: native schema 19 CASH vs legacy CASH (через parseStoredState)
+// Настоящий persistence-тест: не только чистый resolver, а полный round-trip
+// сериализованного состояния.
+
+/** Один заказ из parseStoredState для заданной исходной схемы. */
+function persistNative(
+  schemaVersion: number,
+  over: Parameters<typeof nativeCashRaw>[0] = {},
+): Order {
+  const base = createDefaultState();
+  const parsed = parseStoredState(
+    JSON.stringify({ ...base, schemaVersion, orders: [nativeCashRaw(over)] }),
+  );
+  assert.ok(parsed, "состояние должно парситься");
+  return parsed.orders[0];
+}
+
+test("P1: schema 19 PLATFORM_DRIVER CASH сохраняет paymentMethod CASH", () => {
+  assert.equal(persistNative(19).paymentMethod, "CASH");
+});
+
+test("P2: сохраняет paymentStatus CASH_ON_DELIVERY", () => {
+  assert.equal(persistNative(19).paymentStatus, "CASH_ON_DELIVERY");
+});
+
+test("P3: сохраняет валидный platformDriverCash", () => {
+  assert.deepEqual(persistNative(19).financials.platformDriverCash, OK_SNAPSHOT);
+});
+
+test("P4: сохраняет order.status PREPARING", () => {
+  assert.equal(persistNative(19).status, "PREPARING");
+});
+
+test("P5: сохраняет expectedReadyAt", () => {
+  assert.equal(persistNative(19).expectedReadyAt, NATIVE_READY_AT);
+});
+
+test("P6: сохраняет paidAt без legacy-перезаписи", () => {
+  assert.equal(persistNative(19).paidAt, NATIVE_PAID_AT);
+});
+
+test("P7: сохраняет assignedDriverId", () => {
+  assert.equal(persistNative(19).assignedDriverId, "driver-1");
+});
+
+test("P8: сохраняет driverAssignedAt", () => {
+  assert.equal(persistNative(19).driverAssignedAt, NATIVE_DRIVER_AT);
+});
+
+test("P9: serialize → parse → serialize → parse идемпотентен", () => {
+  const base = createDefaultState();
+  const s1 = parseStoredState(
+    JSON.stringify({ ...base, schemaVersion: 19, orders: [nativeCashRaw({})] }),
+  );
+  assert.ok(s1);
+  const s2 = parseStoredState(JSON.stringify(s1));
+  assert.ok(s2);
+  assert.deepEqual(s2.orders[0], s1.orders[0]);
+});
+
+test("P10: schema 19 CASH без snapshot остаётся CASH, snapshot null", () => {
+  const order = persistNative(19, { candidate: null });
+  assert.equal(order.paymentMethod, "CASH");
+  assert.equal(order.financials.platformDriverCash, null);
+});
+
+test("P11: schema 19 CASH с повреждённым snapshot остаётся CASH, snapshot null", () => {
+  const order = persistNative(19, { candidate: { customerCollectionCents: "1000" } });
+  assert.equal(order.paymentMethod, "CASH");
+  assert.equal(order.financials.platformDriverCash, null);
+});
+
+test("P12: schema 19 CASH с расхождением на 1 цент остаётся CASH, snapshot null", () => {
+  const order = persistNative(19, {
+    candidate: { ...OK_SNAPSHOT, directReceivableFromDriverCents: 99 },
+    amounts: { platformGrossRevenueCents: 100 },
+  });
+  assert.equal(order.paymentMethod, "CASH");
+  assert.equal(order.financials.platformDriverCash, null);
+});
+
+test("P13: schema 18 legacy CASH становится ONLINE", () => {
+  assert.equal(persistNative(18).paymentMethod, "ONLINE");
+});
+
+test("P14: schema 18 legacy CASH получает snapshot null", () => {
+  assert.equal(persistNative(18).financials.platformDriverCash, null);
+});
+
+test("P15: schema 18 не реконструирует snapshot из совпадающих financials", () => {
+  // Даже с валидным совпадающим объектом legacy-заказ не сохраняет снимок.
+  const order = persistNative(18, { candidate: OK_SNAPSHOT });
+  assert.equal(order.financials.platformDriverCash, null);
+});
+
+test("P16: schema 19 ONLINE с cash snapshot получает snapshot null", () => {
+  const order = normalizeStoredOrder(
+    rawOrderWith("PLATFORM_DRIVER", "ONLINE", OK_SNAPSHOT),
+    19,
+  );
+  assert.equal(order.paymentMethod, "ONLINE");
+  assert.equal(order.financials.platformDriverCash, null);
+});
+
+test("P17: PICKUP не получает platform driver cash snapshot", () => {
+  const order = normalizeStoredOrder(
+    rawOrderWith("PICKUP", "CASH", OK_SNAPSHOT),
+    19,
+  );
+  assert.equal(order.financials.platformDriverCash, null);
+});
+
+test("P18: RESTAURANT_DELIVERY не получает platform driver cash snapshot", () => {
+  const order = normalizeStoredOrder(
+    rawOrderWith("RESTAURANT_DELIVERY", "CASH", OK_SNAPSHOT),
+    19,
+  );
+  assert.equal(order.financials.platformDriverCash, null);
+});
+
+test("P19: обычный новый ONLINE order создаётся с platformDriverCash null", () => {
+  const order = normalizeStoredOrder(
+    rawOrderWith("PLATFORM_DRIVER", "ONLINE", null),
+    19,
+  );
+  assert.equal(order.financials.platformDriverCash, null);
 });
 
 // --- 29–40: регрессии («наличные остаются выключенными») ----------------------

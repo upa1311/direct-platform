@@ -373,14 +373,30 @@ function normalizeKitchenStartedAt(
 function normalizeOrder(
   value: unknown,
   restaurants: PrototypeState["restaurants"],
+  sourceSchemaVersion: number,
 ): Order {
   const raw = isRecord(value) ? value : {};
   const deliveryMode = normalizeDeliveryMode(raw.deliveryMode);
-  const wasCashOrder =
-    raw.paymentMethod === "CASH" || raw.paymentStatus === "CASH_ON_DELIVERY";
+  // v19: разделяем два несмешиваемых понятия наличных.
+  //  - Native: заказ, СОХРАНЁННЫЙ уже схемой 19 как PLATFORM_DRIVER + CASH.
+  //    Это легитимные данные — их нельзя маскировать под ONLINE. paymentMethod,
+  //    статусы, paidAt, snapshot сохраняются как есть.
+  //  - Legacy/прочий CASH: любой CASH из схемы < 19 (или CASH вне native-случая).
+  //    К нему применяется прежняя безопасная миграция: CASH → ONLINE, снимок
+  //    null. Наличные при этом не активируются и задним числом не строятся.
+  const isNativePlatformDriverCashOrder =
+    sourceSchemaVersion >= 19 &&
+    deliveryMode === "PLATFORM_DRIVER" &&
+    raw.paymentMethod === "CASH";
+  const coerceCashToOnline =
+    !isNativePlatformDriverCashOrder &&
+    (raw.paymentMethod === "CASH" ||
+      raw.paymentStatus === "CASH_ON_DELIVERY");
   const rawStatus = str(raw.status, "RESTAURANT_REVIEW") as Order["status"];
+  // Legacy safety (PREPARING/READY → AWAITING_PAYMENT) — только для коэрцируемого
+  // CASH. Native-заказ схемы 19 сохраняет свой статус.
   const safeStatus =
-    wasCashOrder && (rawStatus === "PREPARING" || rawStatus === "READY")
+    coerceCashToOnline && (rawStatus === "PREPARING" || rawStatus === "READY")
       ? "AWAITING_PAYMENT"
       : rawStatus;
   const history = Array.isArray(raw.history)
@@ -424,15 +440,19 @@ function normalizeOrder(
       ? raw.pickupNoShowAt
       : null;
 
-  // Итоговый способ оплаты (legacy CASH → ONLINE): служит и полю заказа, и
+  // Итоговый способ оплаты: native schema 19 PLATFORM_DRIVER CASH сохраняет
+  // CASH; коэрцируемый (legacy/прочий) CASH мигрирует в ONLINE по прежнему
+  // правилу; остальные известные способы — как есть. Служит и полю заказа, и
   // строгой проверке наличного снимка v19 в normalizeFinancials.
-  const paymentMethod: PaymentMethod = wasCashOrder
-    ? "ONLINE"
-    : raw.paymentMethod === "PAY_AT_RESTAURANT"
-      ? "PAY_AT_RESTAURANT"
-      : raw.paymentMethod === "CASH_TO_RESTAURANT_COURIER"
-        ? "CASH_TO_RESTAURANT_COURIER"
-        : "ONLINE";
+  const paymentMethod: PaymentMethod = isNativePlatformDriverCashOrder
+    ? "CASH"
+    : coerceCashToOnline
+      ? "ONLINE"
+      : raw.paymentMethod === "PAY_AT_RESTAURANT"
+        ? "PAY_AT_RESTAURANT"
+        : raw.paymentMethod === "CASH_TO_RESTAURANT_COURIER"
+          ? "CASH_TO_RESTAURANT_COURIER"
+          : "ONLINE";
 
   return {
     id: str(raw.id, ""),
@@ -458,12 +478,15 @@ function normalizeOrder(
           : null,
     deliveryMode,
     paymentMethod,
-    paymentStatus: wasCashOrder
+    // Legacy safety-переписи paymentStatus/paidAt — только для коэрцируемого
+    // CASH. Native schema 19 CASH сохраняет валидный сохранённый paymentStatus
+    // (в т.ч. CASH_ON_DELIVERY) и paidAt без legacy-обнуления.
+    paymentStatus: coerceCashToOnline
       ? safeStatus === "AWAITING_PAYMENT"
         ? "AWAITING_PAYMENT"
         : "NOT_STARTED"
       : (str(raw.paymentStatus, "NOT_STARTED") as Order["paymentStatus"]),
-    paidAt: wasCashOrder
+    paidAt: coerceCashToOnline
       ? null
       : typeof raw.paidAt === "string"
         ? raw.paidAt
@@ -474,7 +497,7 @@ function normalizeOrder(
         ? raw.preparationMinutes
         : null,
     expectedReadyAt:
-      wasCashOrder
+      coerceCashToOnline
         ? null
         : typeof raw.expectedReadyAt === "string"
           ? raw.expectedReadyAt
@@ -1235,7 +1258,9 @@ export function normalizePrototypeState(
   const normalizedSettlements = normalizeSettlements(state.settlements);
   const normalizedDrivers = normalizeDrivers(state.drivers, defaults.drivers);
   const normalizedOrders = Array.isArray(state.orders)
-    ? state.orders.map((order) => normalizeOrder(order, restaurants))
+    ? state.orders.map((order) =>
+        normalizeOrder(order, restaurants, sourceSchemaVersion),
+      )
     : [];
   const normalizedOrderIds = new Set(
     normalizedOrders.map((order) => order.id),
@@ -1345,9 +1370,11 @@ export function upgradeToV6(raw: unknown): PrototypeState {
       ? (source.drivers as PrototypeState["drivers"])
       : defaults.drivers,
     cart: normalizeCart(source.cart, defaults.cart),
+    // upgradeToV6 обрабатывает только очень старые версии (v2–v6) — все < 19,
+    // поэтому их CASH-заказы классифицируются как legacy (коэрцируются в ONLINE).
     orders: Array.isArray(source.orders)
       ? (source.orders as unknown[]).map((order) =>
-          normalizeOrder(order, upgradeRestaurants),
+          normalizeOrder(order, upgradeRestaurants, num(source.schemaVersion, 0)),
         )
       : [],
     settlements: [],
