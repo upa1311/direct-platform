@@ -136,10 +136,23 @@ test("35: есть «Выйти из аккаунта»", () => {
   assert.ok(WORKSPACE.includes("Выйти из аккаунта"));
 });
 
-test("36: есть управление статусом и зоной", () => {
-  for (const label of ["Выйти онлайн", "Пауза", "Изменить зону", "Выйти из сети", "Возобновить"]) {
+test("36: есть компактная верхняя панель статуса и зоны", () => {
+  // v18 UI: одна строка «статус · зона · звук», действия — в компактных меню.
+  assert.ok(WORKSPACE.includes("DriverQuickControls"));
+  assert.ok(WORKSPACE.includes("quickControls"));
+  for (const label of [
+    "Выйти онлайн",
+    "Онлайн",
+    "Пауза",
+    "Возобновить",
+    "Поставить на паузу",
+    "Выйти из сети",
+  ]) {
     assert.ok(WORKSPACE.includes(label), label);
   }
+  // Отдельной большой карточки со статусом и «Изменить зону» больше нет.
+  assert.ok(!WORKSPACE.includes("Изменить зону"));
+  assert.ok(!WORKSPACE.includes("StatusZoneControl"));
 });
 
 test("37: нет большой route-card навигации", () => {

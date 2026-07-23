@@ -160,15 +160,15 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
     <>
       <ProfileLine driver={driver} zoneName={zoneName} />
 
-      <StatusZoneControl driver={driver} zoneName={zoneName} />
+      {/* Компактная верхняя панель: статус, зона, колокольчик — в одной строке. */}
+      <DriverQuickControls driver={driver} zoneName={zoneName} />
 
-      {/* Рабочая панель в стиле кухни: компактные счётчики + один колокольчик. */}
+      {/* Счётчики сразу под панелью. Колокольчик один — он в панели выше. */}
       <div className={styles.workBar}>
         <div className={styles.workCounters}>
           <span className={styles.workCount}>Новые — {newCount}</span>
           <span className={styles.workCount}>В работе — {workCount}</span>
         </div>
-        <DriverOfferSoundButton />
       </div>
 
       <NewOffersSection driver={driver} nowMs={nowMs} zoneName={zoneName} />
@@ -178,7 +178,7 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
   );
 }
 
-/** Компактная строка профиля: имя без «Водитель» и короткий статус·зона. */
+/** Компактная строка профиля: имя без «Водитель», короткий статус·зона и «⋯». */
 function ProfileLine({
   driver,
   zoneName,
@@ -194,20 +194,42 @@ function ProfileLine({
           {statusZoneSummary(driver, zoneName)}
         </span>
       </div>
-      <LogoutButton />
+      <ProfileMenu />
     </section>
   );
 }
 
-function LogoutButton() {
+/** Меню «⋯» справа сверху: содержит «Выйти из аккаунта» (это не «Выйти из сети»). */
+function ProfileMenu() {
+  const [open, setOpen] = useState(false);
   return (
-    <button
-      type="button"
-      className={styles.linkButton}
-      onClick={() => clearAuthenticatedDriverId()}
-    >
-      Выйти из аккаунта
-    </button>
+    <div className={styles.overflowWrap}>
+      <button
+        type="button"
+        className={styles.overflowButton}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Меню аккаунта"
+        onClick={() => setOpen((v) => !v)}
+      >
+        ⋯
+      </button>
+      {open ? (
+        <div className={styles.overflowMenu} role="menu">
+          <button
+            type="button"
+            className={styles.overflowMenuItem}
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              clearAuthenticatedDriverId();
+            }}
+          >
+            Выйти из аккаунта
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -255,7 +277,7 @@ function useAction(): {
   return { pending, error, run };
 }
 
-function StatusZoneControl({
+function DriverQuickControls({
   driver,
   zoneName,
 }: {
@@ -273,174 +295,238 @@ function StatusZoneControl({
   } = usePrototype();
   const { pending, error, run } = useAction();
   const zones = state.zones;
+  const status = driver.status;
+
+  // Черновик зоны нужен в OFFLINE (до выхода онлайн) и при подтверждении зоны.
   const [zoneDraft, setZoneDraft] = useState<ZoneId>(
     driver.suggestedZoneId ?? driver.currentZoneId ?? zones[0]?.id ?? "zone-1",
   );
-  // Раскрытие ручного выбора зоны при подтверждении.
-  const [pickingZone, setPickingZone] = useState(driver.suggestedZoneId === null);
-
-  const status = driver.status;
-
-  const zoneSelect = (
-    <label className={styles.zoneField}>
-      <span>Текущая зона</span>
-      <select
-        className={styles.zoneSelect}
-        value={zoneDraft}
-        disabled={pending}
-        onChange={(e) => setZoneDraft(e.target.value as ZoneId)}
-      >
-        {zones.map((zone) => (
-          <option key={zone.id} value={zone.id}>
-            {zone.name}
-          </option>
-        ))}
-      </select>
-    </label>
+  // Что раскрыто под верхней строкой: меню статуса, список зон или ничего.
+  const [openMenu, setOpenMenu] = useState<"status" | "zone" | null>(null);
+  // Блок подтверждения зоны (обязательное действие) раскрыт по умолчанию.
+  const [confirmOpen, setConfirmOpen] = useState(true);
+  const [confirmPicking, setConfirmPicking] = useState(
+    driver.suggestedZoneId === null,
   );
 
+  const runAndClose = (
+    action: () => Promise<{ ok: boolean; error: string | null }>,
+  ) => {
+    setOpenMenu(null);
+    return run(action);
+  };
+
+  // Подпись кнопки статуса и её поведение зависят от статуса.
+  const statusButton = () => {
+    if (status === "OFFLINE") {
+      return (
+        <button
+          type="button"
+          className={styles.quickButton}
+          disabled={pending}
+          onClick={() => runAndClose(() => driverGoOnline(driver.id, zoneDraft))}
+        >
+          Выйти онлайн
+        </button>
+      );
+    }
+    if (status === "BUSY_DIRECT") {
+      return (
+        <button type="button" className={styles.quickButton} disabled>
+          В работе
+        </button>
+      );
+    }
+    if (status === "ZONE_CONFIRMATION_REQUIRED") {
+      return (
+        <button
+          type="button"
+          className={styles.quickButton}
+          aria-expanded={confirmOpen}
+          onClick={() => setConfirmOpen((v) => !v)}
+        >
+          Подтвердить зону
+        </button>
+      );
+    }
+    // AVAILABLE / PAUSED — открывают компактное меню действий.
+    return (
+      <button
+        type="button"
+        className={styles.quickButton}
+        aria-haspopup="menu"
+        aria-expanded={openMenu === "status"}
+        disabled={pending}
+        onClick={() => setOpenMenu((m) => (m === "status" ? null : "status"))}
+      >
+        {status === "AVAILABLE" ? "Онлайн" : "Пауза"}
+      </button>
+    );
+  };
+
+  // Зона на кнопке: черновик в OFFLINE, иначе текущая/предложенная.
+  const shownZone =
+    status === "OFFLINE"
+      ? zoneDraft
+      : driver.currentZoneId ?? driver.suggestedZoneId ?? zoneDraft;
+  const zoneDisabled =
+    status === "BUSY_DIRECT" || status === "ZONE_CONFIRMATION_REQUIRED";
+
+  const chooseZone = (zoneId: ZoneId) => {
+    setOpenMenu(null);
+    if (status === "OFFLINE") {
+      // Только черновик — применится при «Выйти онлайн».
+      setZoneDraft(zoneId);
+    } else {
+      void run(() => driverChangeZone(driver.id, zoneId));
+    }
+  };
+
   return (
-    <section className={styles.statusCard} aria-label="Статус и зона">
-      {status === "OFFLINE" ? (
-        <>
-          <span className={styles.statusValue}>Не в сети</span>
-          <span className={styles.statusHint}>
-            Выберите текущую зону, чтобы получать новые заказы.
-          </span>
-          {zoneSelect}
-          <div className={styles.actions}>
-            <button
-              type="button"
-              className={styles.primaryButton}
-              disabled={pending}
-              onClick={() => run(() => driverGoOnline(driver.id, zoneDraft))}
-            >
-              Выйти онлайн
-            </button>
-          </div>
-        </>
+    <section aria-label="Управление сменой">
+      <div className={styles.quickControls}>
+        {statusButton()}
+
+        <button
+          type="button"
+          className={styles.quickButton}
+          aria-haspopup="menu"
+          aria-expanded={openMenu === "zone"}
+          disabled={pending || zoneDisabled}
+          onClick={() => setOpenMenu((m) => (m === "zone" ? null : "zone"))}
+        >
+          <span className={styles.quickButtonText}>{zoneName(shownZone)}</span>
+          <span aria-hidden="true">&#9662;</span>
+        </button>
+
+        <DriverOfferSoundButton iconOnly />
+      </div>
+
+      {/* Меню действий статуса (AVAILABLE/PAUSED). */}
+      {openMenu === "status" && status === "AVAILABLE" ? (
+        <div className={styles.quickMenu} role="menu">
+          <button
+            type="button"
+            className={styles.quickMenuItem}
+            role="menuitem"
+            disabled={pending}
+            onClick={() => runAndClose(() => driverPause(driver.id))}
+          >
+            Поставить на паузу
+          </button>
+          <button
+            type="button"
+            className={styles.quickMenuItem}
+            role="menuitem"
+            disabled={pending}
+            onClick={() => runAndClose(() => driverGoOffline(driver.id))}
+          >
+            Выйти из сети
+          </button>
+        </div>
       ) : null}
 
-      {status === "AVAILABLE" ? (
-        <>
-          <span className={styles.statusValue}>
-            Онлайн · {zoneName(driver.currentZoneId)}
-          </span>
-          {zoneSelect}
-          <div className={styles.actions}>
-            <button
-              type="button"
-              className={styles.primaryButton}
-              disabled={pending}
-              onClick={() => run(() => driverPause(driver.id))}
-            >
-              Пауза
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={pending}
-              onClick={() => run(() => driverChangeZone(driver.id, zoneDraft))}
-            >
-              Изменить зону
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={pending}
-              onClick={() => run(() => driverGoOffline(driver.id))}
-            >
-              Выйти из сети
-            </button>
-          </div>
-        </>
+      {openMenu === "status" && status === "PAUSED" ? (
+        <div className={styles.quickMenu} role="menu">
+          <button
+            type="button"
+            className={styles.quickMenuItem}
+            role="menuitem"
+            disabled={pending}
+            onClick={() => runAndClose(() => driverResume(driver.id))}
+          >
+            Возобновить
+          </button>
+          <button
+            type="button"
+            className={styles.quickMenuItem}
+            role="menuitem"
+            disabled={pending}
+            onClick={() => runAndClose(() => driverGoOffline(driver.id))}
+          >
+            Выйти из сети
+          </button>
+        </div>
       ) : null}
 
-      {status === "PAUSED" ? (
-        <>
-          <span className={styles.statusValue}>
-            Пауза · {zoneName(driver.currentZoneId)}
-          </span>
-          <span className={styles.statusHint}>
-            Новые заказы временно не поступают.
-          </span>
-          {zoneSelect}
-          <div className={styles.actions}>
+      {/* Список зон. */}
+      {openMenu === "zone" ? (
+        <div className={styles.quickMenu} role="menu">
+          {zones.map((zone) => (
             <button
+              key={zone.id}
               type="button"
-              className={styles.primaryButton}
+              className={styles.quickMenuItem}
+              role="menuitem"
               disabled={pending}
-              onClick={() => run(() => driverResume(driver.id))}
+              onClick={() => chooseZone(zone.id)}
             >
-              Возобновить
+              {zone.name}
             </button>
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={pending}
-              onClick={() => run(() => driverChangeZone(driver.id, zoneDraft))}
-            >
-              Изменить зону
-            </button>
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={pending}
-              onClick={() => run(() => driverGoOffline(driver.id))}
-            >
-              Выйти из сети
-            </button>
-          </div>
-        </>
+          ))}
+        </div>
       ) : null}
 
-      {status === "BUSY_DIRECT" ? (
-        <span className={styles.statusValue}>Выполняет заказ Direct</span>
-      ) : null}
-
-      {status === "ZONE_CONFIRMATION_REQUIRED" ? (
+      {/* Обязательное подтверждение зоны — компактным блоком под строкой. */}
+      {status === "ZONE_CONFIRMATION_REQUIRED" && confirmOpen ? (
         <div className={styles.zoneConfirm}>
-          <span className={styles.statusValue}>Подтвердите текущую зону</span>
           {driver.suggestedZoneId !== null ? (
             <span className={styles.statusHint}>
               Заказ был завершён в зоне: {zoneName(driver.suggestedZoneId)}
             </span>
           ) : null}
 
-          {pickingZone ? zoneSelect : null}
+          {confirmPicking || driver.suggestedZoneId === null ? (
+            <div className={styles.quickMenu} role="menu">
+              {zones.map((zone) => (
+                <button
+                  key={zone.id}
+                  type="button"
+                  className={
+                    zone.id === zoneDraft
+                      ? `${styles.quickMenuItem} ${styles.quickMenuItemActive}`
+                      : styles.quickMenuItem
+                  }
+                  role="menuitemradio"
+                  aria-checked={zone.id === zoneDraft}
+                  disabled={pending}
+                  onClick={() => setZoneDraft(zone.id)}
+                >
+                  {zone.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           <div className={styles.actions}>
-            {!pickingZone && driver.suggestedZoneId !== null ? (
-              <button
-                type="button"
-                className={styles.primaryButton}
-                disabled={pending}
-                onClick={() =>
-                  run(() =>
-                    driverConfirmZone(
-                      driver.id,
-                      driver.suggestedZoneId as ZoneId,
-                      "AVAILABLE",
-                    ),
-                  )
-                }
-              >
-                Да, я в {zoneName(driver.suggestedZoneId)}
-              </button>
-            ) : null}
-
-            {!pickingZone && driver.suggestedZoneId !== null ? (
-              <button
-                type="button"
-                className={styles.secondaryButton}
-                disabled={pending}
-                onClick={() => setPickingZone(true)}
-              >
-                Выбрать другую зону
-              </button>
-            ) : null}
-
-            {pickingZone ? (
+            {!confirmPicking && driver.suggestedZoneId !== null ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.primaryButton}
+                  disabled={pending}
+                  onClick={() =>
+                    run(() =>
+                      driverConfirmZone(
+                        driver.id,
+                        driver.suggestedZoneId as ZoneId,
+                        "AVAILABLE",
+                      ),
+                    )
+                  }
+                >
+                  Да, я в {zoneName(driver.suggestedZoneId)}
+                </button>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  disabled={pending}
+                  onClick={() => setConfirmPicking(true)}
+                >
+                  Выбрать другую зону
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
                 className={styles.primaryButton}
@@ -451,7 +537,7 @@ function StatusZoneControl({
               >
                 Подтвердить и искать заказы
               </button>
-            ) : null}
+            )}
 
             <button
               type="button"
@@ -461,7 +547,9 @@ function StatusZoneControl({
                 run(() =>
                   driverConfirmZone(
                     driver.id,
-                    pickingZone ? zoneDraft : (driver.suggestedZoneId ?? zoneDraft),
+                    confirmPicking || driver.suggestedZoneId === null
+                      ? zoneDraft
+                      : (driver.suggestedZoneId ?? zoneDraft),
                     "PAUSED",
                   ),
                 )

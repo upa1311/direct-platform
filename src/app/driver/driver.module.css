@@ -69,10 +69,9 @@
 
 .profileLine {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 4px 12px;
+  gap: 4px 8px;
 }
 
 .profileText {
@@ -109,6 +108,154 @@
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+}
+
+/* --- Меню «⋯» аккаунта справа сверху --------------------------------------- */
+
+.overflowWrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.overflowButton {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.overflowMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  min-width: 180px;
+  max-width: min(240px, calc(100vw - 32px));
+  padding: 6px;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 10px;
+  background: var(--kds-surface, #fff);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+}
+
+.overflowMenuItem {
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.overflowMenuItem:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+/* --- Компактная верхняя панель (статус · зона · звук) ---------------------- */
+
+.quickControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
+  gap: 8px;
+  width: 100%;
+}
+
+.quickButton {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 10px;
+  background: var(--kds-surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.quickButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.quickButtonText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Квадратная кнопка звука — третья ячейка сетки. */
+.soundIconButton {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 10px;
+  background: var(--kds-surface, #fff);
+  color: inherit;
+  cursor: pointer;
+}
+
+.soundIconButton[aria-pressed="true"] {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+/* Раскрываемое меню действий / список зон под верхней строкой. */
+.quickMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.quickMenuItem {
+  width: 100%;
+  text-align: left;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.quickMenuItem:hover {
+  border-color: var(--kds-border-strong, #aeb7b1);
+}
+
+.quickMenuItemActive {
+  border-color: currentColor;
+  font-weight: 700;
+  background: color-mix(in srgb, currentColor 8%, transparent);
 }
 
 /* --- Выбор демо-водителя (legacy, не используется) ------------------------- */
@@ -458,21 +605,30 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-wrap: wrap;
+  /* Ровная сетка 2×2 на телефоне — без непредсказуемого flex-wrap. */
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
 
 .progressStep {
-  flex: 1 1 auto;
-  min-width: max-content;
+  min-width: 0;
   text-align: center;
-  padding: 6px 10px;
+  padding: 8px 10px;
   border: 1px solid var(--kds-border, #cfd5d1);
   border-radius: 8px;
   font-size: 12px;
   color: var(--kds-muted, #66706a);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* На широких экранах прогресс умещается в один ряд из четырёх шагов. */
+@media (min-width: 640px) {
+  .progress {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 
 .progressStepActive {
@@ -529,4 +685,13 @@
 .phoneLink {
   color: inherit;
   font-weight: 600;
+}
+
+/* --- Мобильные lifecycle-кнопки: крупная одна главная кнопка на этап -------- */
+@media (max-width: 520px) {
+  .stageCard .primaryButton {
+    width: 100%;
+    min-height: 50px;
+    font-size: 16px;
+  }
 }

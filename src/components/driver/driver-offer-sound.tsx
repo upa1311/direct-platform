@@ -179,9 +179,42 @@ export function DriverOfferSoundPlayer() {
  * по жесту пользователя (browser autoplay policy). При блокировке браузером
  * показывает подсказку под кнопкой.
  */
-export function DriverOfferSoundButton() {
+export function DriverOfferSoundButton({
+  iconOnly = false,
+}: {
+  /** Только иконка (квадратная кнопка 44×44) — для компактной верхней панели. */
+  iconOnly?: boolean;
+}) {
   const { soundEnabled, soundBlocked, enableSound, disableSound } =
     useDriverOfferSoundPreference();
+  const label = soundEnabled ? "Выключить звук" : "Включить звук";
+  const icon = soundEnabled ? (
+    <BellRing size={18} aria-hidden="true" />
+  ) : (
+    <BellOff size={18} aria-hidden="true" />
+  );
+
+  if (iconOnly) {
+    // Иконка-квадрат: подсказка о блокировке браузером — через title (aria-label
+    // остаётся строго «Включить/Выключить звук»).
+    return (
+      <button
+        type="button"
+        className={styles.soundIconButton}
+        onClick={soundEnabled ? disableSound : () => void enableSound()}
+        aria-pressed={soundEnabled}
+        aria-label={label}
+        title={
+          soundBlocked
+            ? "Браузер не разрешил включить звук. Нажмите ещё раз."
+            : label
+        }
+      >
+        {icon}
+      </button>
+    );
+  }
+
   return (
     <div className={styles.soundControl}>
       <button
@@ -189,14 +222,10 @@ export function DriverOfferSoundButton() {
         className={styles.soundButton}
         onClick={soundEnabled ? disableSound : () => void enableSound()}
         aria-pressed={soundEnabled}
-        title={soundEnabled ? "Выключить звук" : "Включить звук"}
-        aria-label={soundEnabled ? "Выключить звук" : "Включить звук"}
+        title={label}
+        aria-label={label}
       >
-        {soundEnabled ? (
-          <BellRing size={16} aria-hidden="true" />
-        ) : (
-          <BellOff size={16} aria-hidden="true" />
-        )}
+        {icon}
         {soundEnabled ? "Звук включён" : "Включить звук"}
       </button>
       {soundBlocked ? (
