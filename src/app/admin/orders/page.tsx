@@ -454,7 +454,6 @@ function OrderActions({ order }: { order: Order }) {
     markOutForDelivery,
     markArriving,
     markDelivered,
-    markDeliveredByDriver,
     cancelOrderByAdmin,
     setPreparationMinutes,
   } = usePrototype();
@@ -703,42 +702,18 @@ function OrderActions({ order }: { order: Order }) {
       {shouldShowDriverAssignment(order) ? (
         <DriverAssignment order={order} />
       ) : null}
-      {isPlatform && order.assignedDriverId && order.status === "READY" ? (
-        <button
-          className={flowStyles.primaryButton}
-          type="button"
-          disabled={actionPending}
-          onClick={() =>
-            void doLifecycle(() => markOutForDelivery(order.id, "ADMIN"))
-          }
-        >
-          Водитель выехал
-        </button>
-      ) : null}
-      {isPlatform && order.status === "OUT_FOR_DELIVERY" ? (
-        <button
-          className={flowStyles.primaryButton}
-          type="button"
-          disabled={actionPending}
-          onClick={() =>
-            void doLifecycle(() => markArriving(order.id, "ADMIN"))
-          }
-        >
-          Водитель скоро будет
-        </button>
-      ) : null}
+      {/* v18: курьерские этапы заказа Direct (выехал / скоро будет / доставлен)
+          отмечает сам назначенный водитель в своём кабинете. Администратор их
+          не двигает; на исключительный случай остаётся «Исправить статус» с
+          обязательной причиной. */}
       {isPlatform &&
-      (order.status === "OUT_FOR_DELIVERY" || order.status === "ARRIVING") ? (
-        <button
-          className={flowStyles.primaryButton}
-          type="button"
-          disabled={actionPending}
-          onClick={() =>
-            void doLifecycle(() => markDeliveredByDriver(order.id))
-          }
-        >
-          Отметить доставленным
-        </button>
+      order.assignedDriverId &&
+      (order.status === "READY" ||
+        order.status === "OUT_FOR_DELIVERY" ||
+        order.status === "ARRIVING") ? (
+        <p className={flowStyles.prototypeNote}>
+          Этапы доставки отмечает назначенный водитель Direct.
+        </p>
       ) : null}
 
       {order.status !== "RESTAURANT_REVIEW" && actionError ? (

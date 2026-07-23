@@ -4,10 +4,13 @@ import {
   type Cart,
   type DaySchedule,
   type DeliveryMode,
+  type DriverDeliveryEvent,
+  type DriverDeliveryEventType,
   type DriverOffer,
   type DriverOfferStatus,
   type DriverStatus,
   type FinancialSnapshot,
+  type OrderStatus,
   type MenuItemSubmission,
   type MenuItemSubmissionReviewEntry,
   type MenuItemSubmissionVariant,
@@ -102,12 +105,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * финансового правила заказа, v13 — финансовый режим получения платежей,
  * v14 — детали исполнения закрытого расчёта, v15 — область расчёта: полная
  * позиция или выбранные записи, v16 — оперативные статусы и подтверждаемая
- * вручную зона водителя, v17 — предложения заказов водителям по зоне),
+ * вручную зона водителя, v17 — предложения заказов водителям по зоне,
+ * v18 — append-only журнал шагов доставки назначенного водителя),
  * поэтому состояние прежней версии безопасно принимается и доводится
  * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -899,6 +903,90 @@ function normalizeDriverOffers(
   return result;
 }
 
+const DRIVER_DELIVERY_EVENT_TYPES: ReadonlySet<string> =
+  new Set<DriverDeliveryEventType>([
+    "ARRIVED_AT_RESTAURANT",
+    "ORDER_PICKED_UP",
+    "ARRIVING_TO_CUSTOMER",
+    "ORDER_DELIVERED",
+  ]);
+
+const ORDER_STATUSES: ReadonlySet<string> = new Set<OrderStatus>([
+  "RESTAURANT_REVIEW",
+  "AWAITING_PAYMENT",
+  "PREPARING",
+  "READY",
+  "READY_FOR_PICKUP",
+  "PICKED_UP",
+  "OUT_FOR_DELIVERY",
+  "ARRIVING",
+  "DELIVERED",
+  "CANCELED",
+]);
+
+/**
+ * Нормализация журнала шагов доставки (v18). Состояние до v18 поля не имеет —
+ * пустой список; журнал НЕ реконструируется из order.history. Сохраняется
+ * первая структурно целая запись со ссылками на существующие заказ и водителя,
+ * известным типом, валидной датой и известными статусами. Отбрасываются:
+ * повторный id, повторное сочетание orderId+driverId+type, событие
+ * несуществующего заказа/водителя, неизвестный тип, повреждённая дата,
+ * неизвестные статусы. Порядок сохраняется.
+ */
+function normalizeDriverDeliveryEvents(
+  value: unknown,
+  orderIds: ReadonlySet<string>,
+  driverIds: ReadonlySet<string>,
+): DriverDeliveryEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seenIds = new Set<string>();
+  const seenPairs = new Set<string>();
+  const result: DriverDeliveryEvent[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    const {
+      id,
+      orderId,
+      driverId,
+      type,
+      occurredAt,
+      orderStatusBefore,
+      orderStatusAfter,
+    } = raw;
+    if (typeof id !== "string" || id === "" || seenIds.has(id)) continue;
+    if (typeof orderId !== "string" || !orderIds.has(orderId)) continue;
+    if (typeof driverId !== "string" || !driverIds.has(driverId)) continue;
+    if (typeof type !== "string" || !DRIVER_DELIVERY_EVENT_TYPES.has(type)) {
+      continue;
+    }
+    if (!isValidIso(occurredAt)) continue;
+    if (
+      typeof orderStatusBefore !== "string" ||
+      !ORDER_STATUSES.has(orderStatusBefore) ||
+      typeof orderStatusAfter !== "string" ||
+      !ORDER_STATUSES.has(orderStatusAfter)
+    ) {
+      continue;
+    }
+    const pairKey = `${orderId} ${driverId} ${type}`;
+    if (seenPairs.has(pairKey)) continue;
+    seenIds.add(id);
+    seenPairs.add(pairKey);
+    result.push({
+      id,
+      orderId,
+      driverId,
+      type: type as DriverDeliveryEventType,
+      occurredAt,
+      orderStatusBefore: orderStatusBefore as OrderStatus,
+      orderStatusAfter: orderStatusAfter as OrderStatus,
+    });
+  }
+  return result;
+}
+
 function normalizeSettlements(value: unknown): PrototypeState["settlements"] {
   if (!Array.isArray(value)) {
     return [];
@@ -1124,6 +1212,12 @@ export function normalizePrototypeState(
   const normalizedOrders = Array.isArray(state.orders)
     ? state.orders.map((order) => normalizeOrder(order, restaurants))
     : [];
+  const normalizedOrderIds = new Set(
+    normalizedOrders.map((order) => order.id),
+  );
+  const normalizedDriverIds = new Set(
+    normalizedDrivers.map((driver) => driver.id),
+  );
   return {
     ...state,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
@@ -1148,13 +1242,18 @@ export function normalizePrototypeState(
       : defaults.promotions,
     customer: normalizeCustomer(state.customer, defaults.customer),
     drivers: normalizedDrivers,
-    // Предложения нормализуем после заказов и водителей: запись без
-    // существующего заказа или водителя не сохраняется. Состояние до v17
-    // получает пустой список.
+    // Предложения и журнал доставки нормализуем после заказов и водителей:
+    // запись без существующего заказа или водителя не сохраняется. Состояние
+    // до v17/v18 получает пустой список.
     driverOffers: normalizeDriverOffers(
       state.driverOffers,
-      new Set(normalizedOrders.map((order) => order.id)),
-      new Set(normalizedDrivers.map((driver) => driver.id)),
+      normalizedOrderIds,
+      normalizedDriverIds,
+    ),
+    driverDeliveryEvents: normalizeDriverDeliveryEvents(
+      state.driverDeliveryEvents,
+      normalizedOrderIds,
+      normalizedDriverIds,
     ),
     cart: normalizeCart(state.cart, defaults.cart),
     orders: normalizedOrders,

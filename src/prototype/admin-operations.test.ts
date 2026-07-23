@@ -14,7 +14,6 @@ import {
   issuePickupWithoutCode,
   markOrderArriving,
   markOrderDelivered,
-  markOrderDeliveredByDriver,
   markOrderOutForDelivery,
   markOrderReady,
   reassignDriverForOrder,
@@ -24,6 +23,28 @@ import {
   updateCartAddress,
   updateRestaurant,
 } from "./actions.ts";
+import {
+  markDriverArrivedAtRestaurant,
+  markDriverArrivingToCustomer,
+  markDriverDeliveredOrder,
+  markDriverPickedUpOrder,
+} from "./driver-delivery.ts";
+
+/**
+ * v18: назначенный водитель Direct сам ведёт курьерские этапы. Гоняем заказ по
+ * рабочему пути водителя (прибытие → получение → подъезд → доставка).
+ */
+function driveDeliveredByDriver(
+  state: PrototypeState,
+  orderId: string,
+  driverId: string,
+): PrototypeState {
+  let s = markDriverArrivedAtRestaurant(state, driverId, orderId, "2026-07-22T12:00:00.000Z").state;
+  s = markDriverPickedUpOrder(s, driverId, orderId, "2026-07-22T12:01:00.000Z").state;
+  s = markDriverArrivingToCustomer(s, driverId, orderId, "2026-07-22T12:02:00.000Z").state;
+  s = markDriverDeliveredOrder(s, driverId, orderId, "2026-07-22T12:03:00.000Z").state;
+  return s;
+}
 import {
   canPlacePrototypeOrder,
   getDriverById,
@@ -202,9 +223,8 @@ test("переназначение освобождает старого вод�
 test("завершение заказа освобождает водителя", () => {
   const { state, orderId } = makePlatformOrderReady();
   const assigned = assignDriverToOrder(state, orderId, "driver-1");
-  // READY → OUT_FOR_DELIVERY (с водителем) → доставлен.
-  const out = markOrderOutForDelivery(assigned.state, orderId, "ADMIN");
-  const delivered = markOrderDeliveredByDriver(out, orderId);
+  // Курьерские этапы ведёт сам водитель: прибытие → получение → подъезд → доставка.
+  const delivered = driveDeliveredByDriver(assigned.state, orderId, "driver-1");
   assert.equal(
     delivered.orders.find((o) => o.id === orderId)?.status,
     "DELIVERED",

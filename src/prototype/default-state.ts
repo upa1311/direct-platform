@@ -579,6 +579,8 @@ export function createDefaultState(): PrototypeState {
     ],
     // Предложения создаёт доменный reconciliation после загрузки, а не seed.
     driverOffers: [],
+    // Append-only журнал шагов доставки — создаётся действиями водителя.
+    driverDeliveryEvents: [],
     cart: createEmptyCart(),
     orders: [],
     settlements: [],

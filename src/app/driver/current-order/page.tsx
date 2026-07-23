@@ -1,18 +1,26 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import kds from "@/components/kitchen/kitchen.module.css";
 import { usePrototype } from "@/prototype/prototype-provider";
 import { formatMoney, getDriverActiveOrder } from "@/prototype/selectors";
+import {
+  resolveDriverDeliveryStage,
+  type DriverDeliveryStage,
+} from "@/prototype/driver-delivery";
 import type { DeliveryAddress, Order, ZoneId } from "@/prototype/models";
 import { useSelectedDriverId } from "@/components/driver/driver-session";
 import styles from "../driver.module.css";
 
 /**
- * Read-only текущий заказ водителя. Маршрут доставки в этом микробатче НЕ
- * реализуется: страница только показывает назначенный заказ. Полный адрес и
- * телефон уже можно показать — заказ назначен именно этому водителю.
+ * Рабочий экран текущего заказа водителя. Этап определяется доменным
+ * resolveDriverDeliveryStage по статусу заказа и append-only журналу, а не
+ * состоянием React. Полные данные заказа показываются только водителю, которому
+ * заказ назначен. Одна главная кнопка на этап; после доставки — редирект на
+ * /driver для ручного подтверждения зоны.
  */
 export default function DriverCurrentOrderPage() {
   const { state, isHydrated } = usePrototype();
@@ -22,7 +30,12 @@ export default function DriverCurrentOrderPage() {
     selectedDriverId !== null
       ? state.drivers.find((d) => d.id === selectedDriverId) ?? null
       : null;
-  const order = driver ? getDriverActiveOrder(state, driver.id) : null;
+  // Приватность: показываем заказ только если он назначен ИМЕННО этому водителю.
+  const activeOrder = driver ? getDriverActiveOrder(state, driver.id) : null;
+  const order =
+    activeOrder && activeOrder.assignedDriverId === selectedDriverId
+      ? activeOrder
+      : null;
 
   const zoneName = (zoneId: ZoneId | null): string =>
     state.zones.find((z) => z.id === zoneId)?.name ?? "—";
@@ -48,14 +61,223 @@ export default function DriverCurrentOrderPage() {
             Текущего заказа нет. После принятия предложения заказ появится здесь.
           </div>
         ) : (
-          <CurrentOrder order={order} zoneName={zoneName} />
+          <CurrentOrder
+            driverId={driver.id}
+            order={order}
+            stage={resolveDriverDeliveryStage(state, driver.id, order.id)}
+            zoneName={zoneName}
+          />
         )}
       </div>
     </div>
   );
 }
 
+/** Опорные точки маршрута для компактного прогресса. */
+const PROGRESS_STEPS = ["Ресторан", "Получение", "Клиент", "Доставка"] as const;
+
+/** Индекс активного шага прогресса по этапу (для подсветки). */
+function activeStepIndex(stage: DriverDeliveryStage): number {
+  switch (stage) {
+    case "GO_TO_RESTAURANT":
+    case "WAITING_AT_RESTAURANT":
+      return 0;
+    case "READY_TO_PICK_UP":
+      return 1;
+    case "GO_TO_CUSTOMER":
+      return 2;
+    case "ARRIVING_TO_CUSTOMER":
+      return 3;
+    default:
+      return -1;
+  }
+}
+
 function CurrentOrder({
+  driverId,
+  order,
+  stage,
+  zoneName,
+}: {
+  driverId: string;
+  order: Order;
+  stage: DriverDeliveryStage;
+  zoneName: (zoneId: ZoneId | null) => string;
+}) {
+  const {
+    driverArriveAtRestaurant,
+    driverPickUpOrder,
+    driverMarkArriving,
+    driverCompleteDelivery,
+  } = usePrototype();
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Блокировка повторного клика; без optimistic update — ждём serialized мутацию
+  // и переключаем этап только по подтверждённому успеху.
+  const run = async (
+    action: () => Promise<{ ok: boolean; error: string | null }>,
+    redirectToOverview = false,
+  ) => {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    const result = await action();
+    setPending(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    if (redirectToOverview) {
+      router.push("/driver");
+    }
+  };
+
+  const activeIndex = activeStepIndex(stage);
+
+  return (
+    <>
+      {/* Компактный прогресс: без крупного stepper и enum-значений. */}
+      <ol className={styles.progress} aria-label="Этапы доставки">
+        {PROGRESS_STEPS.map((label, index) => (
+          <li
+            key={label}
+            className={
+              index === activeIndex
+                ? `${styles.progressStep} ${styles.progressStepActive}`
+                : styles.progressStep
+            }
+            aria-current={index === activeIndex ? "step" : undefined}
+          >
+            {label}
+          </li>
+        ))}
+      </ol>
+
+      <StagePanel
+        stage={stage}
+        pending={pending}
+        onArrive={() =>
+          run(() => driverArriveAtRestaurant(driverId, order.id))
+        }
+        onPickUp={() => run(() => driverPickUpOrder(driverId, order.id))}
+        onArriving={() => run(() => driverMarkArriving(driverId, order.id))}
+        onDeliver={() =>
+          run(() => driverCompleteDelivery(driverId, order.id), true)
+        }
+      />
+
+      {error ? (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      <OrderDetails order={order} zoneName={zoneName} />
+    </>
+  );
+}
+
+function StagePanel({
+  stage,
+  pending,
+  onArrive,
+  onPickUp,
+  onArriving,
+  onDeliver,
+}: {
+  stage: DriverDeliveryStage;
+  pending: boolean;
+  onArrive: () => void;
+  onPickUp: () => void;
+  onArriving: () => void;
+  onDeliver: () => void;
+}) {
+  switch (stage) {
+    case "GO_TO_RESTAURANT":
+      return (
+        <StageCard title="Следующий шаг" hint="Доберитесь до ресторана и подтвердите прибытие.">
+          <MainButton label="Я в ресторане" pending={pending} onClick={onArrive} />
+        </StageCard>
+      );
+    case "WAITING_AT_RESTAURANT":
+      return (
+        <StageCard title="Вы в ресторане" hint="Заказ ещё готовится. Ожидаем готовность заказа.">
+          {null}
+        </StageCard>
+      );
+    case "READY_TO_PICK_UP":
+      return (
+        <StageCard title="Заказ готов" hint="Проверьте заказ и заберите его у ресторана.">
+          <MainButton label="Заказ получен" pending={pending} onClick={onPickUp} />
+        </StageCard>
+      );
+    case "GO_TO_CUSTOMER":
+      return (
+        <StageCard title="Доставьте заказ клиенту">
+          <MainButton label="Я подъезжаю" pending={pending} onClick={onArriving} />
+        </StageCard>
+      );
+    case "ARRIVING_TO_CUSTOMER":
+      return (
+        <StageCard
+          title="Вы подъезжаете к клиенту"
+          hint="Свяжитесь с клиентом при необходимости."
+        >
+          <MainButton label="Заказ доставлен" pending={pending} onClick={onDeliver} />
+        </StageCard>
+      );
+    default:
+      return (
+        <div className={styles.notice} role="status">
+          Этап заказа требует проверки Direct. Не выполняйте следующий переход,
+          пока данные не будут проверены.
+        </div>
+      );
+  }
+}
+
+function StageCard({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className={styles.stageCard}>
+      <span className={styles.stageTitle}>{title}</span>
+      {hint ? <span className={styles.stageHint}>{hint}</span> : null}
+      {children}
+    </div>
+  );
+}
+
+function MainButton({
+  label,
+  pending,
+  onClick,
+}: {
+  label: string;
+  pending: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={styles.primaryButton}
+      disabled={pending}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
+function OrderDetails({
   order,
   zoneName,
 }: {

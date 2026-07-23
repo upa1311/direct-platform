@@ -25,6 +25,11 @@ import {
   type RestaurantFormInput,
 } from "./actions.ts";
 import {
+  markDriverArrivedAtRestaurant,
+  markDriverDeliveredOrder,
+  markDriverPickedUpOrder,
+} from "./driver-delivery.ts";
+import {
   getDriverById,
   getEffectiveDeliverySettings,
   getRestaurant,
@@ -221,12 +226,16 @@ test("PREPARING нельзя сразу завершить как DELIVERED", ()
 test("завершение доставки требует назначенного водителя", () => {
   const { state, orderId } = makePlatformReady();
   const assigned = assignDriverToOrder(state, orderId, "driver-1");
-  const out = markOrderOutForDelivery(assigned.state, orderId, "ADMIN");
-  const removed = unassignDriverFromOrder(out, orderId, "Водитель заболел");
-  // Теперь заказ в OUT, но без водителя — завершить нельзя.
-  const next = markOrderDeliveredByDriver(removed.state, orderId);
+  // Водитель довёл заказ до OUT_FOR_DELIVERY своими действиями.
+  const arrived = markDriverArrivedAtRestaurant(assigned.state, "driver-1", orderId, "2026-07-22T12:00:00.000Z");
+  const picked = markDriverPickedUpOrder(arrived.state, "driver-1", orderId, "2026-07-22T12:01:00.000Z");
+  assert.equal(orderOf(picked.state, orderId).status, "OUT_FOR_DELIVERY");
+  // Назначение снято — водителя у заказа больше нет, завершить нельзя.
+  const removed = unassignDriverFromOrder(picked.state, orderId, "Водитель заболел");
+  const next = markDriverDeliveredOrder(removed.state, "driver-1", orderId, "2026-07-22T12:02:00.000Z");
+  assert.equal(next.result.ok, false);
   assert.equal(
-    next.orders.find((o) => o.id === orderId)?.status,
+    orderOf(next.state, orderId).status,
     "OUT_FOR_DELIVERY",
   );
 });

@@ -126,21 +126,21 @@ const offerFor = (state: PrototypeState, orderId: string, driverId: string) =>
 
 // --- 1–9: schema и нормализация ------------------------------------------------
 
-test("1: схема прототипа равна 17", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 17);
+test("1: схема прототипа равна 18", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 18);
 });
 
-test("2: нормализатор принимает схемы 7–17", () => {
+test("2: нормализатор принимает схемы 7–18", () => {
   const base = createDefaultState();
-  for (let version = 7; version <= 17; version += 1) {
+  for (let version = 7; version <= 18; version += 1) {
     const parsed = parseStoredState(
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version}`);
-    assert.equal(parsed.schemaVersion, 17);
+    assert.equal(parsed.schemaVersion, 18);
   }
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 18 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 19 })),
     null,
   );
 });
@@ -914,19 +914,13 @@ test("83–86: countdown, «Принять заказ», «Отказаться�
   assert.ok(!OFFERS_PAGE.includes("Причина отказа"));
 });
 
-test("87–89: current-order показывает назначенный заказ, полный адрес/телефон, без lifecycle-кнопок", () => {
+test("87–89: current-order показывает назначенный заказ, полный адрес/телефон", () => {
+  // v18: страница стала рабочим экраном этапов; читаемость приватных данных и
+  // источник заказа проверяются здесь, кнопки этапов — в driver-delivery.test.
   assert.ok(!CURRENT_PAGE.includes("SectionPanel"));
   assert.ok(CURRENT_PAGE.includes("getDriverActiveOrder"));
   assert.ok(CURRENT_PAGE.includes("tel:"));
   assert.ok(CURRENT_PAGE.includes("formatCustomerAddress"));
-  for (const forbidden of [
-    "Я в ресторане",
-    "Заказ получен",
-    "Я подъезжаю",
-    "Заказ доставлен",
-  ]) {
-    assert.ok(!CURRENT_PAGE.includes(forbidden), `current: ${forbidden}`);
-  }
 });
 
 test("90: сырые статусы предложений в UI не печатаются", () => {

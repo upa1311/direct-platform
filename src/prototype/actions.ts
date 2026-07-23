@@ -2532,6 +2532,13 @@ function advanceCourierStatusWithResult(
   ) {
     return fail("Неподдерживаемый способ получения заказа.");
   }
+  // v18: курьерские этапы заказа PLATFORM_DRIVER (выехал/подъезжает/доставлен)
+  // отмечает только назначенный водитель Direct через identity-aware действия
+  // (driver-delivery.ts). Обычные ресторанские/административные переходы их не
+  // двигают; для аварийных случаев остаётся correctOrderStatus с причиной.
+  if (targetOrder.deliveryMode === "PLATFORM_DRIVER") {
+    return fail("Этот этап отмечает назначенный водитель Direct.");
+  }
   // Этап 4: передача заказа курьеру/водителю — зона оператора/общего экрана.
   const guard = checkRestaurantWorkspace(
     state,
@@ -2546,18 +2553,13 @@ function advanceCourierStatusWithResult(
   if (targetOrder.status !== fromStatus) {
     return fail(wrongStatusError(targetOrder.status, fromStatus));
   }
-  if (
-    requireDriverForPlatform &&
-    targetOrder.deliveryMode === "PLATFORM_DRIVER" &&
-    !targetOrder.assignedDriverId
-  ) {
-    return fail("Для заказа не назначен водитель.");
-  }
+  // v18: сюда доходит только RESTAURANT_DELIVERY (PLATFORM_DRIVER отсечён выше и
+  // движется identity-aware действиями водителя), поэтому платформенная ветка
+  // сообщения и проверка назначенного водителя больше не нужны.
+  void requireDriverForPlatform;
+  void platformMessage;
   const now = new Date().toISOString();
-  const message =
-    targetOrder.deliveryMode === "PLATFORM_DRIVER"
-      ? platformMessage
-      : restaurantMessage;
+  const message = restaurantMessage;
   const nextState = replaceOrder(
     state,
     orderId,
@@ -4465,9 +4467,78 @@ export function unassignDriverFromOrder(
 }
 
 /**
+ * Единственный канонический завершитель доставки водителем Direct
+ * (ARRIVING/OUT_FOR_DELIVERY → DELIVERED). Возвращает НЕ финализированное
+ * состояние (без bump ревизии), чтобы вызывающий мог в той же мутации добавить
+ * свои поля (например, событие журнала) и финализировать один раз.
+ *
+ * Обязательства признаются ТОЛЬКО из канонического движения денег снимка через
+ * computeCompletedOrderAccounting — формулы не копируются; при противоречии
+ * существующим записям — fail-closed до мутации. Назначенный водитель уходит на
+ * подтверждение зоны с предложенной зоной клиента (не становится доступным).
+ */
+export function applyDriverDeliveredOrder(
+  state: PrototypeState,
+  order: Order,
+  nowIso: string,
+):
+  | { ok: true; state: PrototypeState }
+  | { ok: false; error: string } {
+  const updatedOrder: Order = {
+    ...order,
+    status: "DELIVERED",
+    updatedAt: nowIso,
+    history: [
+      ...order.history,
+      {
+        id: `${order.id}-history-${order.history.length + 1}`,
+        occurredAt: nowIso,
+        actor: "SYSTEM",
+        type: "STATUS",
+        fromStatus: order.status,
+        toStatus: "DELIVERED",
+        message: "Заказ доставлен водителем Direct.",
+      },
+    ],
+  };
+  const accounting = computeCompletedOrderAccounting(
+    updatedOrder,
+    state.restaurantAccountingEntries,
+  );
+  if (!accounting.ok) {
+    return {
+      ok: false,
+      error: accounting.error ?? "Не удалось признать обязательства заказа.",
+    };
+  }
+  return {
+    ok: true,
+    state: {
+      ...state,
+      orders: state.orders.map((o) => (o.id === order.id ? updatedOrder : o)),
+      drivers: releaseAssignedDriver(
+        state,
+        order.assignedDriverId,
+        order.id,
+        order.financials.customerZoneId,
+      ),
+      restaurantAccountingEntries: [
+        ...state.restaurantAccountingEntries,
+        ...accounting.entries,
+      ],
+    },
+  };
+}
+
+/**
  * Завершение доставки заказа водителем Direct (PLATFORM_DRIVER). Оплата уже
  * ONLINE (PAID), поэтому финансы и settlement не затрагиваются; назначенный
  * водитель освобождается.
+ *
+ * v18: рабочий путь водителя идёт через identity-aware markDriverDeliveredOrder
+ * (см. driver-delivery.ts). Эта функция остаётся каноническим завершителем и
+ * переиспользует общий applyDriverDeliveredOrder; в UI напрямую она больше не
+ * доступна (провайдерский driverless-обход убран).
  */
 export function markOrderDeliveredByDriverWithResult(
   state: PrototypeState,
@@ -4503,54 +4574,14 @@ export function markOrderDeliveredByDriverWithResult(
     return fail("Заказ ещё не готов к этому переходу.");
   }
   const now = new Date().toISOString();
-  const updatedOrder: Order = {
-    ...order,
-    status: "DELIVERED",
-    updatedAt: now,
-    history: [
-      ...order.history,
-      adminHistoryEvent(
-        order,
-        1,
-        now,
-        "STATUS",
-        order.status,
-        "DELIVERED",
-        "Заказ доставлен водителем Direct.",
-      ),
-    ],
-  };
-  // Двусторонний журнал: обязательства ТОЛЬКО из канонического движения денег
-  // снимка; противоречие существующим записям — fail-closed до мутации.
-  const accounting = computeCompletedOrderAccounting(
-    updatedOrder,
-    state.restaurantAccountingEntries,
-  );
-  if (!accounting.ok) {
-    return fail(accounting.error ?? "Не удалось признать обязательства заказа.");
+  const completion = applyDriverDeliveredOrder(state, order, now);
+  if (!completion.ok) {
+    return fail(completion.error);
   }
-  const nextState = finalizeMutation(
-    state,
-    {
-      ...state,
-      orders: state.orders.map((o) => (o.id === orderId ? updatedOrder : o)),
-      // Заказ доставлен — водитель почти наверняка находится в зоне клиента,
-      // поэтому она ПРЕДЛАГАЕТСЯ для подтверждения, но доступным водитель не
-      // становится, пока не подтвердит зону сам.
-      drivers: releaseAssignedDriver(
-        state,
-        order.assignedDriverId,
-        order.id,
-        order.financials.customerZoneId,
-      ),
-      restaurantAccountingEntries: [
-        ...state.restaurantAccountingEntries,
-        ...accounting.entries,
-      ],
-    },
-    now,
-  );
-  return { state: nextState, result: { ok: true, error: null } };
+  return {
+    state: finalizeMutation(state, completion.state, now),
+    result: { ok: true, error: null },
+  };
 }
 
 /** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */

@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 17 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 18 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -614,6 +614,32 @@ export interface DriverOffer {
   resolvedAt: string | null;
 }
 
+/**
+ * Тип шага рабочего пути назначенного водителя (v18). Только опорные точки
+ * маршрута; произвольных сообщений и промежуточных статусов нет.
+ */
+export type DriverDeliveryEventType =
+  | "ARRIVED_AT_RESTAURANT"
+  | "ORDER_PICKED_UP"
+  | "ARRIVING_TO_CUSTOMER"
+  | "ORDER_DELIVERED";
+
+/**
+ * Append-only запись действия водителя по назначенному заказу. Хранит только
+ * связь и переход статуса — без адреса, клиента, телефона, денег, GPS,
+ * комментария и произвольного текста. На сочетание orderId+driverId+type
+ * допускается ровно одна запись за весь lifecycle заказа.
+ */
+export interface DriverDeliveryEvent {
+  id: string;
+  orderId: string;
+  driverId: string;
+  type: DriverDeliveryEventType;
+  occurredAt: string;
+  orderStatusBefore: OrderStatus;
+  orderStatusAfter: OrderStatus;
+}
+
 export interface CartItem {
   menuItemId: string;
   variantId: string | null;
@@ -943,6 +969,8 @@ export interface PrototypeState {
   drivers: DriverProfile[];
   /** Активные и исторические предложения заказов водителям (v17). */
   driverOffers: DriverOffer[];
+  /** Append-only журнал шагов доставки назначенных водителей (v18). */
+  driverDeliveryEvents: DriverDeliveryEvent[];
   cart: Cart;
   orders: Order[];
   settlements: SettlementEntry[];

@@ -41,7 +41,6 @@ import {
   resumeDriver,
   type DriverActionResult,
   markOrderArrivingWithResult,
-  markOrderDeliveredByDriverWithResult,
   markOrderDeliveredWithResult,
   markOrderOutForDeliveryWithResult,
   markOrderReadyWithResult,
@@ -107,6 +106,13 @@ import {
   type DriverOfferActionResult,
   type ReconcileDriverOffersResult,
 } from "./driver-offers";
+import {
+  markDriverArrivedAtRestaurant,
+  markDriverArrivingToCustomer,
+  markDriverDeliveredOrder,
+  markDriverPickedUpOrder,
+  type DriverDeliveryActionResult,
+} from "./driver-delivery";
 import {
   resolveRestaurantAccountingEntry,
   type RestaurantAccountingOutcome,
@@ -381,7 +387,27 @@ export interface PrototypeContextValue {
     actor?: OrderActionActor,
     workspaceRole?: RestaurantWorkspaceRole,
   ) => MutationAckPromise;
-  markDeliveredByDriver: (orderId: string) => MutationAckPromise;
+  /**
+   * Рабочий путь назначенного водителя Direct (v18). Идентичность водителя
+   * проверяется доменом на свежем state; identity-less завершение по одному
+   * orderId в API провайдера намеренно отсутствует.
+   */
+  driverArriveAtRestaurant: (
+    driverId: string,
+    orderId: string,
+  ) => Promise<DriverDeliveryActionResult>;
+  driverPickUpOrder: (
+    driverId: string,
+    orderId: string,
+  ) => Promise<DriverDeliveryActionResult>;
+  driverMarkArriving: (
+    driverId: string,
+    orderId: string,
+  ) => Promise<DriverDeliveryActionResult>;
+  driverCompleteDelivery: (
+    driverId: string,
+    orderId: string,
+  ) => Promise<DriverDeliveryActionResult>;
   setPreparationMinutes: (orderId: string, minutes: number) => MutationAckPromise;
   setRestaurantAccepting: (
     restaurantId: string,
@@ -1554,13 +1580,66 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedResultMutation],
   );
 
-  const markDeliveredByDriver = useCallback(
-    (orderId: string) =>
-      runSerializedResultMutation({
+  // v18: рабочие переходы водителя. Момент времени создаётся ВНУТРИ мутации над
+  // свежим state; идентичность проверяет домен, а не React.
+  const driverArriveAtRestaurant = useCallback(
+    (driverId: string, orderId: string) =>
+      runSerializedActionMutation({
         mutation: (baseState) =>
-          markOrderDeliveredByDriverWithResult(baseState, orderId),
+          markDriverArrivedAtRestaurant(
+            baseState,
+            driverId,
+            orderId,
+            new Date().toISOString(),
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
       }),
-    [runSerializedResultMutation],
+    [runSerializedActionMutation],
+  );
+
+  const driverPickUpOrder = useCallback(
+    (driverId: string, orderId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          markDriverPickedUpOrder(
+            baseState,
+            driverId,
+            orderId,
+            new Date().toISOString(),
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const driverMarkArriving = useCallback(
+    (driverId: string, orderId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          markDriverArrivingToCustomer(
+            baseState,
+            driverId,
+            orderId,
+            new Date().toISOString(),
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const driverCompleteDelivery = useCallback(
+    (driverId: string, orderId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          markDriverDeliveredOrder(
+            baseState,
+            driverId,
+            orderId,
+            new Date().toISOString(),
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
+      }),
+    [runSerializedActionMutation],
   );
 
   const setPreparationMinutes = useCallback(
@@ -1864,7 +1943,10 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       markOutForDelivery,
       markArriving,
       markDelivered,
-      markDeliveredByDriver,
+      driverArriveAtRestaurant,
+      driverPickUpOrder,
+      driverMarkArriving,
+      driverCompleteDelivery,
       setPreparationMinutes,
       setRestaurantAccepting,
       setRestaurantWorkflow,
@@ -1936,7 +2018,10 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       markOutForDelivery,
       markArriving,
       markDelivered,
-      markDeliveredByDriver,
+      driverArriveAtRestaurant,
+      driverPickUpOrder,
+      driverMarkArriving,
+      driverCompleteDelivery,
       setPreparationMinutes,
       setRestaurantAccepting,
       setRestaurantWorkflow,

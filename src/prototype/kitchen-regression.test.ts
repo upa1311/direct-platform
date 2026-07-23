@@ -23,6 +23,10 @@ import {
   updateCartAddress,
   RESTAURANT_RESPONSE_TIMEOUT_MS,
 } from "./actions.ts";
+import {
+  markDriverArrivedAtRestaurant,
+  markDriverPickedUpOrder,
+} from "./driver-delivery.ts";
 import { getPickupNoShowEligibleAtIso } from "./selectors.ts";
 import type {
   Order,
@@ -458,15 +462,17 @@ test("Regression 5: PLATFORM_DRIVER — оплата, приготовление
   assert.equal(ready.state.settlements.length, 0);
   assert.equal(financialsWithoutMovement(readyOrder), baseFinancials);
 
-  // Без назначенного водителя выезд невозможен.
+  // v18: курьерский этап заказа Direct отмечает сам водитель. Ресторанский
+  // переход отклоняется и без водителя, и после назначения.
   expectRejected(ready.state, markOrderOutForDeliveryWithResult(ready.state, orderId, "RESTAURANT", "COMBINED"), orderId);
-  // Назначение — административное действие; после него переход разрешён.
   const assigned = assignDriverToOrder(ready.state, orderId, "driver-1");
   assert.equal(assigned.result.ok, true);
-  assert.equal(
-    markOrderOutForDeliveryWithResult(assigned.state, orderId, "RESTAURANT", "COMBINED").result.ok,
-    true,
-  );
+  expectRejected(assigned.state, markOrderOutForDeliveryWithResult(assigned.state, orderId, "RESTAURANT", "COMBINED"), orderId);
+  // Водитель забирает заказ сам: READY → OUT_FOR_DELIVERY через identity-aware поток.
+  const arrived = markDriverArrivedAtRestaurant(assigned.state, "driver-1", orderId, "2026-07-22T12:00:00.000Z");
+  const picked = markDriverPickedUpOrder(arrived.state, "driver-1", orderId, "2026-07-22T12:01:00.000Z");
+  assert.equal(picked.result.ok, true, picked.result.error ?? "");
+  assert.equal(getOrder(picked.state, orderId).status, "OUT_FOR_DELIVERY");
 });
 
 test("Regression 6: ETA — корректировка не трогает статус, финансы и оплату", () => {
