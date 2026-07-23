@@ -479,8 +479,10 @@ function DriverQuickControls({
         </button>
       );
     }
-    // AVAILABLE / PAUSED — открывают overlay-лист действий. Онлайн-статус
-    // выделен зелёным, пауза — красным, чтобы состояние читалось с одного взгляда.
+    // AVAILABLE / PAUSED — показывают текущее состояние полной подписью и по
+    // нажатию открывают overlay-лист действий. Онлайн выделен зелёным, пауза —
+    // красным, чтобы состояние читалось с одного взгляда. Подпись статуса не
+    // сокращается: при нехватке места ужимается только название зоны.
     return (
       <button
         type="button"
@@ -496,8 +498,8 @@ function DriverQuickControls({
         disabled={pending}
         onClick={() => setOpenMenu((m) => (m === "status" ? null : "status"))}
       >
-        <span className={styles.quickButtonText}>
-          {status === "AVAILABLE" ? "Онлайн" : "Пауза"}
+        <span className={styles.quickButtonStatusText}>
+          {status === "AVAILABLE" ? "Сейчас онлайн" : "Сейчас на паузе"}
         </span>
       </button>
     );
@@ -615,7 +617,7 @@ function DriverQuickControls({
               disabled={pending}
               onClick={() => void runAndCloseSheet(() => driverResume(driver.id))}
             >
-              Возобновить
+              Возобновить поиск заказов
             </button>
           ) : null}
           <button

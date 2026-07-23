@@ -390,13 +390,13 @@ test("форма входа доступна: label, autocomplete, tel, role=ale
 
 // --- Устойчивая мобильная верхняя панель (harden) -----------------------------
 
-test("h1: статусная кнопка оборачивает текст в quickButtonText", () => {
-  // Голого текста внутри статусной кнопки нет — только span quickButtonText.
+test("h1: статусная кнопка оборачивает подпись в span", () => {
+  // Голого текста внутри статусной кнопки нет — подпись в span.
   assert.ok(WORKSPACE.includes("styles.quickButtonText"));
-  const online = WORKSPACE.indexOf('? "Онлайн" : "Пауза"');
-  assert.notEqual(online, -1);
-  const before = WORKSPACE.slice(online - 120, online);
-  assert.ok(before.includes("quickButtonText"), "Онлайн/Пауза внутри quickButtonText");
+  const idx = WORKSPACE.indexOf('? "Сейчас онлайн" : "Сейчас на паузе"');
+  assert.notEqual(idx, -1);
+  const before = WORKSPACE.slice(idx - 140, idx);
+  assert.ok(before.includes("quickButtonStatusText"), "подпись статуса в span");
 });
 
 test("h2: OFFLINE — короткая подпись «В сеть»", () => {
@@ -416,13 +416,10 @@ test("h5: подтверждение зоны — полный aria-label «По
   assert.ok(WORKSPACE.includes('aria-label="Подтвердить текущую зону"'));
 });
 
-test("h6: телефонный @media — две minmax-колонки и 44px звук", () => {
+test("h6: телефонный @media — статус по контенту, зона ужимается, 44px звук", () => {
   // Порог 440px покрывает границы 390 и 430px без обрезания подписей.
   const block = mediaBlock("(max-width: 440px)");
-  assert.ok(
-    block.includes("minmax(92px, 1fr) minmax(92px, 1fr) 44px"),
-    "две колонки ≥92px + 44px звук",
-  );
+  assert.ok(block.includes("auto minmax(0, 1fr) 44px"), "auto-статус, remainder-зона, 44px звук");
 });
 
 test("h7: телефонный @media — padding кнопок не больше 8px", () => {
@@ -543,4 +540,60 @@ test("h24: schema остаётся 18; наличные выключены", () 
 test("h25: нет двойного слова «Водитель Водитель»", () => {
   assert.ok(!WORKSPACE.includes("Водитель Водитель"));
   assert.ok(!SHEET.includes("Водитель Водитель"));
+});
+
+// --- Полные подписи текущего состояния (продуктовое уточнение) ----------------
+
+/** Тело функции statusButton (подпись и поведение кнопки статуса). */
+function statusButtonBody(): string {
+  const start = WORKSPACE.indexOf("const statusButton = ()");
+  assert.notEqual(start, -1, "statusButton не найден");
+  // До начала следующего объявления (shownZone) — тело хелпера целиком.
+  const end = WORKSPACE.indexOf("const shownZone", start);
+  assert.notEqual(end, -1);
+  return WORKSPACE.slice(start, end);
+}
+
+test("s1: AVAILABLE — видимая подпись «Сейчас онлайн»", () => {
+  assert.ok(WORKSPACE.includes("Сейчас онлайн"));
+  assert.ok(statusButtonBody().includes('"Сейчас онлайн"'));
+});
+
+test("s2: PAUSED — видимая подпись «Сейчас на паузе»", () => {
+  assert.ok(WORKSPACE.includes("Сейчас на паузе"));
+  assert.ok(statusButtonBody().includes('"Сейчас на паузе"'));
+});
+
+test("s3: в status trigger нет одиночных подписей «Онлайн» / «Пауза»", () => {
+  const body = statusButtonBody();
+  // Точные строковые литералы «Онлайн» и «Пауза» как подпись кнопки — исчезли.
+  assert.ok(!body.includes('"Онлайн"'), 'нет литерала "Онлайн" в статус-кнопке');
+  assert.ok(!body.includes('"Пауза"'), 'нет литерала "Пауза" в статус-кнопке');
+  // Подпись показывается спец-классом без ellipsis.
+  assert.ok(body.includes("quickButtonStatusText"));
+});
+
+test("s4: статус-подпись без ellipsis, зона может ужиматься", () => {
+  const rule = cssRule(".quickButtonStatusText");
+  assert.ok(rule.includes("white-space: nowrap"));
+  assert.ok(!rule.includes("text-overflow: ellipsis"), "статус не обрезается");
+  // Зона — обычный quickButtonText с ellipsis (её сокращать разрешено).
+  assert.ok(cssRule(".quickButtonText").includes("text-overflow: ellipsis"));
+});
+
+test("s5: мобильная сетка — статус по контенту (без обрезки), зона гибкая", () => {
+  const block = mediaBlock("(max-width: 440px)");
+  // Статус-колонка `auto` = по контенту → подпись целиком; зона = remainder.
+  assert.ok(block.includes("grid-template-columns: auto minmax(0, 1fr) 44px"));
+});
+
+test("s6: меню PAUSED — «Возобновить поиск заказов»", () => {
+  assert.ok(WORKSPACE.includes("Возобновить поиск заказов"));
+});
+
+test("s7: меню статуса — пауза/возобновление и общий выход из сети", () => {
+  assert.ok(WORKSPACE.includes("Поставить на паузу"));
+  assert.ok(WORKSPACE.includes("Возобновить поиск заказов"));
+  // «Выйти из сети» — один общий пункт листа для обоих статусов.
+  assert.ok(WORKSPACE.includes("Выйти из сети"));
 });
