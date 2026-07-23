@@ -250,6 +250,12 @@
   min-width: 0;
 }
 
+/* Иконки внутри quick-кнопки (локация зоны, каретка) не сжимаются и остаются
+   видимыми, даже если название зоны приходится ужать. */
+.quickButtonIcon {
+  flex: 0 0 auto;
+}
+
 /* Адаптивные подписи: по умолчанию (широкий экран) — полная подпись.
    Короткая включается media query на телефоне. Никакого JS-замера viewport. */
 .mobileControlLabel {
@@ -295,7 +301,9 @@
   position: fixed;
   left: 12px;
   right: 12px;
-  bottom: calc(12px + env(safe-area-inset-bottom));
+  /* Не прилипает к самому низу: приподнят над safe-area, читается как активное
+     меню. Высота ограничена ниже, за экран не вылезает. */
+  bottom: calc(7vh + env(safe-area-inset-bottom));
   z-index: 50;
   max-height: min(70vh, 420px);
   overflow-y: auto;
@@ -391,9 +399,19 @@
 }
 
 .driverName {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 18px;
   font-weight: 750;
   overflow-wrap: anywhere;
+}
+
+/* Значок роли водителя — компактный, выровнен с текстом, не сжимается. */
+.driverNameIcon {
+  flex: 0 0 auto;
+  color: var(--kds-muted, #66706a);
 }
 
 .statusValue {
@@ -781,6 +799,16 @@
 
 /* --- Мобильные размеры: крупные touch-цели -------------------------------- */
 @media (max-width: 520px) {
+  /* Плотнее сверху: полезный контент (профиль/quick controls) поднимается
+     ближе к верхней навигации. Верхний отступ формируют общий shell и экран
+     (их трогать нельзя — они общие для всех кабинетов), поэтому подтягиваем
+     только контейнер водителя отрицательным margin. Без «слипания». */
+  .container {
+    padding-top: 0;
+    margin-top: -24px;
+    gap: 12px;
+  }
+
   /* Одна крупная главная кнопка на этап, вверху активного заказа. */
   .stageCard .primaryButton {
     width: 100%;

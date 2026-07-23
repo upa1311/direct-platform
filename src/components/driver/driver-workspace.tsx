@@ -27,7 +27,7 @@ import {
   useAuthenticatedDriverId,
   writeAuthenticatedDriverId,
 } from "./driver-session";
-import { BellOff, BellRing } from "lucide-react";
+import { BellOff, BellRing, Car, MapPin } from "lucide-react";
 
 import { useDriverOfferSoundPreference } from "./driver-offer-sound";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
@@ -194,7 +194,10 @@ function ProfileLine({
   return (
     <section className={styles.profileLine} aria-label="Профиль водителя">
       <div className={styles.profileText}>
-        <span className={styles.driverName}>{getDriverDisplayName(driver)}</span>
+        <span className={styles.driverName}>
+          <Car size={18} aria-hidden="true" className={styles.driverNameIcon} />
+          Водитель {getDriverDisplayName(driver)}
+        </span>
         <span className={styles.statusValue}>
           {statusZoneSummary(driver, zoneName)}
         </span>
@@ -557,8 +560,11 @@ function DriverQuickControls({
           disabled={pending || zoneDisabled}
           onClick={() => setOpenMenu((m) => (m === "zone" ? null : "zone"))}
         >
+          <MapPin size={16} aria-hidden="true" className={styles.quickButtonIcon} />
           <span className={styles.quickButtonText}>{zoneLabel}</span>
-          <span aria-hidden="true">&#9662;</span>
+          <span aria-hidden="true" className={styles.quickButtonIcon}>
+            &#9662;
+          </span>
         </button>
 
         <button
