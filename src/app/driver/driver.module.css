@@ -196,6 +196,20 @@
   cursor: not-allowed;
 }
 
+/* Онлайн-статус — зелёная кнопка: «в сети» видно сразу. */
+.quickButtonOnline {
+  border-color: var(--kds-success, #1f6b45);
+  background: var(--kds-success, #1f6b45);
+  color: #ffffff;
+}
+
+/* Пауза — красная кнопка: перерыв читается сразу. */
+.quickButtonPaused {
+  border-color: var(--kds-danger, #a8322d);
+  background: var(--kds-danger, #a8322d);
+  color: #ffffff;
+}
+
 .quickButtonText {
   overflow: hidden;
   text-overflow: ellipsis;

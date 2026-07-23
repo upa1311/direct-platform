@@ -427,11 +427,16 @@ function DriverQuickControls({
         </button>
       );
     }
-    // AVAILABLE / PAUSED — открывают компактное меню действий.
+    // AVAILABLE / PAUSED — открывают компактное меню действий. Онлайн-статус
+    // выделен зелёным, чтобы «в сети» читалось с одного взгляда.
     return (
       <button
         type="button"
-        className={styles.quickButton}
+        className={
+          status === "AVAILABLE"
+            ? `${styles.quickButton} ${styles.quickButtonOnline}`
+            : `${styles.quickButton} ${styles.quickButtonPaused}`
+        }
         aria-haspopup="menu"
         aria-expanded={openMenu === "status"}
         aria-controls={STATUS_MENU_ID}
