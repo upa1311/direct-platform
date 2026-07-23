@@ -9,10 +9,12 @@ import styles from "./driver.module.css";
  * «Текущий заказ» больше нет.
  */
 export default function DriverPage() {
+  // Заголовок «Заказы» уже есть в верхней навигации — второй крупный h1 на
+  // телефоне только съедал бы высоту. Рабочий контент начинается сразу с
+  // профиля/quick controls (до входа — с заголовка формы «Вход водителя»).
   return (
     <div className={kds.screen}>
       <div className={styles.container}>
-        <h1 className={styles.pageTitle}>Заказы</h1>
         <DriverWorkspace />
       </div>
     </div>

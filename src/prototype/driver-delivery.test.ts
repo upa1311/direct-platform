@@ -547,6 +547,50 @@ test("42: неверный статус водителя даёт REVIEW_REQUIRE
   assert.equal(resolveDriverDeliveryStage(notBusy, D1, orderId), "REVIEW_REQUIRED");
 });
 
+// --- history-сообщения: без двойного «Водитель» -------------------------------
+
+/** Последнее сообщение истории заказа. */
+function lastHistoryMessage(state: PrototypeState, orderId: string): string {
+  const h = orderOf(state, orderId).history;
+  return h[h.length - 1].message;
+}
+
+test("history: прибытие — «Водитель Пётр прибыл в ресторан.» без дубля", () => {
+  const { state, orderId } = assignedState();
+  const arrived = markDriverArrivedAtRestaurant(state, D1, orderId, T(0)).state;
+  assert.equal(
+    lastHistoryMessage(arrived, orderId),
+    "Водитель Пётр прибыл в ресторан.",
+  );
+});
+
+test("history: получение — «Водитель Пётр получил заказ в ресторане.»", () => {
+  const { state, orderId } = assignedState();
+  let s = markDriverArrivedAtRestaurant(state, D1, orderId, T(0)).state;
+  s = markDriverPickedUpOrder(s, D1, orderId, T(1)).state;
+  assert.equal(
+    lastHistoryMessage(s, orderId),
+    "Водитель Пётр получил заказ в ресторане.",
+  );
+});
+
+test("history: подъезд — «Водитель Пётр подъезжает к клиенту.»", () => {
+  const { state, orderId } = assignedState();
+  const s = toArriving(state, orderId);
+  assert.equal(
+    lastHistoryMessage(s, orderId),
+    "Водитель Пётр подъезжает к клиенту.",
+  );
+});
+
+test("history: нигде нет двойного слова «Водитель Водитель»", () => {
+  const { state, orderId } = assignedState();
+  const s = toArriving(state, orderId);
+  for (const event of orderOf(s, orderId).history) {
+    assert.ok(!event.message.includes("Водитель Водитель"), event.message);
+  }
+});
+
 // --- 43–46: обход lifecycle ---------------------------------------------------
 
 test("43: ресторан не может двигать PLATFORM_DRIVER по курьерским этапам", () => {

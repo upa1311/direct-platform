@@ -7,6 +7,8 @@
   flex-direction: column;
   gap: 16px;
   padding: 16px;
+  /* Safe area: последняя кнопка не под нижней панелью Safari/Chrome. */
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
   max-width: 720px;
   margin: 0 auto;
   width: 100%;
@@ -17,12 +19,6 @@
   font-size: 16px;
   font-weight: 700;
   margin: 4px 0 0;
-}
-
-.pageTitle {
-  font-size: 20px;
-  font-weight: 750;
-  margin: 0;
 }
 
 /* --- Вход водителя --------------------------------------------------------- */
@@ -53,7 +49,7 @@
 }
 
 .textInput {
-  height: 40px;
+  min-height: 48px;
   max-width: 100%;
   box-sizing: border-box;
   padding: 0 12px;
@@ -258,65 +254,6 @@
   background: color-mix(in srgb, currentColor 8%, transparent);
 }
 
-/* --- Выбор демо-водителя (legacy, не используется) ------------------------- */
-
-.pickerLabel {
-  font-size: 13px;
-  color: var(--kds-muted, #66706a);
-}
-
-.driverList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.driverPick {
-  width: 100%;
-  text-align: left;
-  padding: 12px 14px;
-  border: 1px solid var(--kds-border, #cfd5d1);
-  border-radius: 10px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.driverPick:hover {
-  border-color: var(--kds-border-strong, #aeb7b1);
-}
-
-.driverPickName {
-  font-size: 15px;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
-
-.driverPickMeta {
-  font-size: 12px;
-  color: var(--kds-muted, #66706a);
-}
-
-/* --- Карточка текущего состояния ------------------------------------------ */
-
-.statusCard {
-  border: 1px solid var(--kds-border, #cfd5d1);
-  border-radius: 12px;
-  padding: 16px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
 .driverName {
   font-size: 18px;
   font-weight: 750;
@@ -335,17 +272,7 @@
   color: var(--kds-muted, #66706a);
 }
 
-.metaLine {
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
 /* Допуск к наличным — спокойная строка состояния, а не кнопка. */
-.cashLine {
-  font-size: 13px;
-  color: var(--kds-muted, #66706a);
-}
-
 /* --- Действия -------------------------------------------------------------- */
 
 .actions {
@@ -401,27 +328,6 @@
 
 /* --- Выбор зоны ------------------------------------------------------------ */
 
-.zoneField {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-  min-width: 0;
-}
-
-.zoneSelect {
-  height: 40px;
-  max-width: 260px;
-  padding: 0 10px;
-  border: 1px solid var(--kds-border-strong, #aeb7b1);
-  border-radius: 7px;
-  background: var(--kds-surface, #fff);
-  color: inherit;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 650;
-}
-
 /* --- Служебные блоки ------------------------------------------------------- */
 
 .notice {
@@ -468,23 +374,6 @@
 /* --- Предложения заказов --------------------------------------------------- */
 
 /* Компактная строка-уведомление о новом предложении на «Обзоре». */
-.offerBanner {
-  border: 1px solid var(--kds-border, #cfd5d1);
-  border-left: 4px solid currentColor;
-  border-radius: 10px;
-  padding: 10px 14px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-}
-
-.offerBannerText {
-  font-size: 14px;
-  font-weight: 700;
-}
-
 /* Управление звуком — компактное, в стиле кабинета. */
 .soundControl {
   display: flex;
@@ -682,16 +571,76 @@
   overflow-wrap: anywhere;
 }
 
-.phoneLink {
-  color: inherit;
-  font-weight: 600;
+/* --- Активный заказ: вторичная строка, мета и звонок ----------------------- */
+
+.secondarySummary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--kds-muted, #66706a);
+  overflow-wrap: anywhere;
 }
 
-/* --- Мобильные lifecycle-кнопки: крупная одна главная кнопка на этап -------- */
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+
+.callButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  text-decoration: none;
+  text-align: center;
+}
+
+.callNumber {
+  font-size: 13px;
+  color: var(--kds-muted, #66706a);
+}
+
+/* --- Мобильные размеры: крупные touch-цели -------------------------------- */
 @media (max-width: 520px) {
+  /* Одна крупная главная кнопка на этап, вверху активного заказа. */
   .stageCard .primaryButton {
+    width: 100%;
+    min-height: 52px;
+    font-size: 16px;
+    font-weight: 750;
+    padding-inline: 16px;
+    white-space: normal;
+    text-align: center;
+  }
+
+  /* Форма входа: крупная кнопка «Войти». */
+  .loginCard .primaryButton {
+    width: 100%;
+    min-height: 52px;
+    font-size: 16px;
+  }
+
+  /* Предложение: действия вертикально, крупная главная кнопка. */
+  .offerActions {
+    flex-direction: column;
+  }
+  .offerActions .primaryButton {
     width: 100%;
     min-height: 50px;
     font-size: 16px;
+  }
+  .offerActions .secondaryButton {
+    width: 100%;
+    min-height: 44px;
   }
 }

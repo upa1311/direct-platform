@@ -244,7 +244,7 @@ export function markDriverArrivedAtRestaurant(
                   o,
                   o.status,
                   o.status,
-                  `Водитель ${guard.driver.name} прибыл в ресторан.`,
+                  `${guard.driver.name} прибыл в ресторан.`,
                   nowIso,
                 ),
               ],
@@ -300,7 +300,7 @@ export function markDriverPickedUpOrder(
     "ORDER_PICKED_UP",
     "READY",
     "OUT_FOR_DELIVERY",
-    `Водитель ${guard.driver.name} получил заказ в ресторане.`,
+    `${guard.driver.name} получил заказ в ресторане.`,
     nowIso,
   );
 }
@@ -337,7 +337,7 @@ export function markDriverArrivingToCustomer(
     "ARRIVING_TO_CUSTOMER",
     "OUT_FOR_DELIVERY",
     "ARRIVING",
-    `Водитель ${guard.driver.name} подъезжает к клиенту.`,
+    `${guard.driver.name} подъезжает к клиенту.`,
     nowIso,
   );
 }

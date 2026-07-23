@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { usePrototype } from "@/prototype/prototype-provider";
 import { formatMoney, getDriverActiveOrder } from "@/prototype/selectors";
@@ -26,8 +26,11 @@ import {
   useAuthenticatedDriverId,
   writeAuthenticatedDriverId,
 } from "./driver-session";
-import { DriverOfferSoundButton } from "./driver-offer-sound";
+import { BellOff, BellRing } from "lucide-react";
+
+import { useDriverOfferSoundPreference } from "./driver-offer-sound";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
+import { useDismissable } from "./use-popover";
 import styles from "@/app/driver/driver.module.css";
 
 /**
@@ -194,39 +197,101 @@ function ProfileLine({
           {statusZoneSummary(driver, zoneName)}
         </span>
       </div>
-      <ProfileMenu />
+      <ProfileMenu driver={driver} />
     </section>
   );
 }
 
-/** Меню «⋯» справа сверху: содержит «Выйти из аккаунта» (это не «Выйти из сети»). */
-function ProfileMenu() {
+const ACCOUNT_MENU_ID = "driver-account-menu";
+
+/**
+ * Меню «⋯» справа сверху с безопасным выходом из аккаунта (это НЕ «Выйти из
+ * сети»). Свободный водитель не должен остаться онлайн без интерфейса, поэтому:
+ *  - OFFLINE — сразу очистить сессию;
+ *  - AVAILABLE/PAUSED/ZONE_CONFIRMATION_REQUIRED — сначала driverGoOffline и
+ *    только при успехе очистить сессию (при ошибке сессия сохраняется);
+ *  - BUSY_DIRECT — выход запрещён (нельзя бросить активный заказ).
+ * Popover закрывается по клику снаружи, Escape и после успешного действия.
+ */
+function ProfileMenu({ driver }: { driver: DriverProfile }) {
+  const { driverGoOffline } = usePrototype();
   const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useDismissable({
+    open,
+    onClose: () => setOpen(false),
+    containerRef,
+    triggerRef,
+  });
+
+  const busy = driver.status === "BUSY_DIRECT";
+
+  const logout = async () => {
+    if (pending) return;
+    if (driver.status === "OFFLINE") {
+      setOpen(false);
+      clearAuthenticatedDriverId();
+      return;
+    }
+    // AVAILABLE / PAUSED / ZONE_CONFIRMATION_REQUIRED: сначала уходим из сети.
+    setPending(true);
+    setError(null);
+    const result = await driverGoOffline(driver.id);
+    setPending(false);
+    if (!result.ok) {
+      // Сессию не очищаем, меню оставляем открытым с ошибкой.
+      setError(result.error);
+      return;
+    }
+    setOpen(false);
+    clearAuthenticatedDriverId();
+  };
+
   return (
-    <div className={styles.overflowWrap}>
+    <div className={styles.overflowWrap} ref={containerRef}>
       <button
         type="button"
+        ref={triggerRef}
         className={styles.overflowButton}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Меню аккаунта"
+        aria-controls={ACCOUNT_MENU_ID}
+        aria-label="Меню водителя"
         onClick={() => setOpen((v) => !v)}
       >
         ⋯
       </button>
       {open ? (
-        <div className={styles.overflowMenu} role="menu">
-          <button
-            type="button"
-            className={styles.overflowMenuItem}
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              clearAuthenticatedDriverId();
-            }}
-          >
-            Выйти из аккаунта
-          </button>
+        <div className={styles.overflowMenu} role="menu" id={ACCOUNT_MENU_ID}>
+          {busy ? (
+            <button
+              type="button"
+              className={styles.overflowMenuItem}
+              role="menuitem"
+              disabled
+            >
+              Сначала завершите текущий заказ
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={styles.overflowMenuItem}
+              role="menuitem"
+              disabled={pending}
+              onClick={() => void logout()}
+            >
+              Выйти из аккаунта
+            </button>
+          )}
+          {error ? (
+            <span className={styles.error} role="alert">
+              {error}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -277,6 +342,9 @@ function useAction(): {
   return { pending, error, run };
 }
 
+const STATUS_MENU_ID = "driver-status-menu";
+const ZONE_MENU_ID = "driver-zone-menu";
+
 function DriverQuickControls({
   driver,
   zoneName,
@@ -294,6 +362,9 @@ function DriverQuickControls({
     driverConfirmZone,
   } = usePrototype();
   const { pending, error, run } = useAction();
+  // Единственный звуковой control страницы — иконка в этой панели.
+  const { soundEnabled, soundBlocked, enableSound, disableSound } =
+    useDriverOfferSoundPreference();
   const zones = state.zones;
   const status = driver.status;
 
@@ -308,6 +379,13 @@ function DriverQuickControls({
   const [confirmPicking, setConfirmPicking] = useState(
     driver.suggestedZoneId === null,
   );
+
+  const containerRef = useRef<HTMLElement>(null);
+  useDismissable({
+    open: openMenu !== null,
+    onClose: () => setOpenMenu(null),
+    containerRef,
+  });
 
   const runAndClose = (
     action: () => Promise<{ ok: boolean; error: string | null }>,
@@ -356,6 +434,7 @@ function DriverQuickControls({
         className={styles.quickButton}
         aria-haspopup="menu"
         aria-expanded={openMenu === "status"}
+        aria-controls={STATUS_MENU_ID}
         disabled={pending}
         onClick={() => setOpenMenu((m) => (m === "status" ? null : "status"))}
       >
@@ -369,6 +448,13 @@ function DriverQuickControls({
     status === "OFFLINE"
       ? zoneDraft
       : driver.currentZoneId ?? driver.suggestedZoneId ?? zoneDraft;
+  // Подпись зоны: «Выбрать зону», если у онлайн-водителя зона не подтверждена.
+  const zoneLabel =
+    status !== "OFFLINE" && driver.currentZoneId === null
+      ? "Выбрать зону"
+      : zoneName(shownZone);
+  // Зона, отмеченная в списке как выбранная.
+  const markedZone = status === "OFFLINE" ? zoneDraft : driver.currentZoneId;
   const zoneDisabled =
     status === "BUSY_DIRECT" || status === "ZONE_CONFIRMATION_REQUIRED";
 
@@ -383,7 +469,7 @@ function DriverQuickControls({
   };
 
   return (
-    <section aria-label="Управление сменой">
+    <section aria-label="Управление сменой" ref={containerRef}>
       <div className={styles.quickControls}>
         {statusButton()}
 
@@ -392,19 +478,46 @@ function DriverQuickControls({
           className={styles.quickButton}
           aria-haspopup="menu"
           aria-expanded={openMenu === "zone"}
+          aria-controls={ZONE_MENU_ID}
           disabled={pending || zoneDisabled}
           onClick={() => setOpenMenu((m) => (m === "zone" ? null : "zone"))}
         >
-          <span className={styles.quickButtonText}>{zoneName(shownZone)}</span>
+          <span className={styles.quickButtonText}>{zoneLabel}</span>
           <span aria-hidden="true">&#9662;</span>
         </button>
 
-        <DriverOfferSoundButton iconOnly />
+        <button
+          type="button"
+          className={styles.soundIconButton}
+          aria-pressed={soundEnabled}
+          aria-label={soundEnabled ? "Выключить звук" : "Включить звук"}
+          title={
+            soundBlocked
+              ? "Браузер не разрешил включить звук. Нажмите ещё раз."
+              : soundEnabled
+                ? "Выключить звук"
+                : "Включить звук"
+          }
+          onClick={soundEnabled ? disableSound : () => void enableSound()}
+        >
+          {soundEnabled ? (
+            <BellRing size={18} aria-hidden="true" />
+          ) : (
+            <BellOff size={18} aria-hidden="true" />
+          )}
+        </button>
       </div>
+
+      {/* Браузер заблокировал звук — компактная подсказка под панелью. */}
+      {soundBlocked ? (
+        <p className={styles.soundHint} role="alert">
+          Браузер не разрешил включить звук. Нажмите ещё раз.
+        </p>
+      ) : null}
 
       {/* Меню действий статуса (AVAILABLE/PAUSED). */}
       {openMenu === "status" && status === "AVAILABLE" ? (
-        <div className={styles.quickMenu} role="menu">
+        <div className={styles.quickMenu} role="menu" id={STATUS_MENU_ID}>
           <button
             type="button"
             className={styles.quickMenuItem}
@@ -427,7 +540,7 @@ function DriverQuickControls({
       ) : null}
 
       {openMenu === "status" && status === "PAUSED" ? (
-        <div className={styles.quickMenu} role="menu">
+        <div className={styles.quickMenu} role="menu" id={STATUS_MENU_ID}>
           <button
             type="button"
             className={styles.quickMenuItem}
@@ -451,13 +564,18 @@ function DriverQuickControls({
 
       {/* Список зон. */}
       {openMenu === "zone" ? (
-        <div className={styles.quickMenu} role="menu">
+        <div className={styles.quickMenu} role="menu" id={ZONE_MENU_ID}>
           {zones.map((zone) => (
             <button
               key={zone.id}
               type="button"
-              className={styles.quickMenuItem}
-              role="menuitem"
+              className={
+                zone.id === markedZone
+                  ? `${styles.quickMenuItem} ${styles.quickMenuItemActive}`
+                  : styles.quickMenuItem
+              }
+              role="menuitemradio"
+              aria-checked={zone.id === markedZone}
               disabled={pending}
               onClick={() => chooseZone(zone.id)}
             >
@@ -713,9 +831,28 @@ function ActiveOrderCard({
   const { pending, error, run } = useAction();
   const stage = resolveDriverDeliveryStage(state, driverId, order.id);
   const activeIndex = activeStepIndex(stage);
+  // После получения заказа главная точка маршрута — клиент, а не ресторан.
+  const pickedUp =
+    order.status === "OUT_FOR_DELIVERY" || order.status === "ARRIVING";
 
   return (
     <>
+      {/* Блок 1: текущий этап и одна главная кнопка — вверху активного заказа. */}
+      <StagePanel
+        stage={stage}
+        pending={pending}
+        onArrive={() => run(() => driverArriveAtRestaurant(driverId, order.id))}
+        onPickUp={() => run(() => driverPickUpOrder(driverId, order.id))}
+        onArriving={() => run(() => driverMarkArriving(driverId, order.id))}
+        onDeliver={() => run(() => driverCompleteDelivery(driverId, order.id))}
+      />
+
+      {error ? (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
+      ) : null}
+
       <ol className={styles.progress} aria-label="Этапы доставки">
         {PROGRESS_STEPS.map((label, index) => (
           <li
@@ -732,22 +869,68 @@ function ActiveOrderCard({
         ))}
       </ol>
 
-      <StagePanel
-        stage={stage}
-        pending={pending}
-        onArrive={() => run(() => driverArriveAtRestaurant(driverId, order.id))}
-        onPickUp={() => run(() => driverPickUpOrder(driverId, order.id))}
-        onArriving={() => run(() => driverMarkArriving(driverId, order.id))}
-        onDeliver={() => run(() => driverCompleteDelivery(driverId, order.id))}
-      />
+      {/* Блок 2: актуальная точка маршрута по этапу. */}
+      <RoutePoint order={order} pickedUp={pickedUp} zoneName={zoneName} />
 
-      {error ? (
-        <p className={styles.error} role="alert">
-          {error}
+      {/* Блок 3: детали заказа и связь с клиентом. */}
+      <OrderMeta order={order} />
+    </>
+  );
+}
+
+/** Актуальная точка маршрута: ресторан до получения, клиент — после. */
+function RoutePoint({
+  order,
+  pickedUp,
+  zoneName,
+}: {
+  order: Order;
+  pickedUp: boolean;
+  zoneName: (zoneId: ZoneId | null) => string;
+}) {
+  if (pickedUp) {
+    return (
+      <>
+        <div className={styles.detailCard}>
+          <span className={styles.detailRowLabel}>Доставить</span>
+          <span className={styles.detailRowValue}>
+            {formatCustomerAddress(order.address)}
+          </span>
+          {order.address && addressExtras(order.address) ? (
+            <span className={styles.detailRowValue}>
+              {addressExtras(order.address)}
+            </span>
+          ) : null}
+          <span className={styles.detailRowValue}>
+            {zoneName(order.financials.customerZoneId)}
+          </span>
+          {order.address && order.address.comment.trim() !== "" ? (
+            <span className={styles.detailRowValue}>
+              Комментарий: {order.address.comment}
+            </span>
+          ) : null}
+        </div>
+        {/* Ресторан свёрнут в компактную вторичную строку. */}
+        <p className={styles.secondarySummary}>
+          Забрали в: {order.restaurant.name}
         </p>
-      ) : null}
-
-      <OrderDetails order={order} zoneName={zoneName} />
+      </>
+    );
+  }
+  return (
+    <>
+      <div className={styles.detailCard}>
+        <span className={styles.detailRowLabel}>Забрать</span>
+        <span className={styles.detailRowValue}>{order.restaurant.name}</span>
+        <span className={styles.detailRowValue}>{order.restaurant.address}</span>
+        <span className={styles.detailRowValue}>
+          {zoneName(order.restaurant.zoneId)}
+        </span>
+      </div>
+      <p className={styles.secondarySummary}>
+        Клиент: {order.address?.street ?? "—"} ·{" "}
+        {zoneName(order.financials.customerZoneId)}
+      </p>
     </>
   );
 }
@@ -850,68 +1033,33 @@ function MainButton({
   );
 }
 
-function OrderDetails({
-  order,
-  zoneName,
-}: {
-  order: Order;
-  zoneName: (zoneId: ZoneId | null) => string;
-}) {
+/** Компактные детали заказа + связь с клиентом (одна карточка, без лишних рамок). */
+function OrderMeta({ order }: { order: Order }) {
   return (
-    <>
-      <div className={styles.detailCard}>
+    <div className={styles.detailCard}>
+      <div className={styles.metaRow}>
         <span className={styles.orderLine}>Заказ {order.publicNumber}</span>
         <span className={styles.detailRowValue}>Заказ принят</span>
       </div>
-
-      <div className={styles.detailCard}>
-        <span className={styles.detailRowLabel}>Забрать</span>
-        <span className={styles.detailRowValue}>{order.restaurant.name}</span>
-        <span className={styles.detailRowValue}>{order.restaurant.address}</span>
-        <span className={styles.detailRowValue}>
-          {zoneName(order.restaurant.zoneId)}
-        </span>
-      </div>
-
-      <div className={styles.detailCard}>
-        <span className={styles.detailRowLabel}>Доставить</span>
-        <span className={styles.detailRowValue}>
-          {formatCustomerAddress(order.address)}
-        </span>
-        <span className={styles.detailRowValue}>
-          {zoneName(order.financials.customerZoneId)}
-        </span>
-        {order.address && addressExtras(order.address) ? (
-          <span className={styles.detailRowValue}>
-            {addressExtras(order.address)}
-          </span>
-        ) : null}
-      </div>
-
-      <div className={styles.detailCard}>
-        <span className={styles.detailRowLabel}>Клиент</span>
-        <span className={styles.detailRowValue}>{order.customer.name}</span>
-        <a className={styles.phoneLink} href={`tel:${order.customer.phone}`}>
-          {order.customer.phone}
-        </a>
-        {order.address && order.address.comment.trim() !== "" ? (
-          <span className={styles.detailRowValue}>
-            Комментарий: {order.address.comment}
-          </span>
-        ) : null}
-      </div>
-
-      <div className={styles.detailCard}>
+      <div className={styles.metaRow}>
         <span className={styles.detailRowValue}>Оплата онлайн</span>
         <span className={styles.detailRowValue}>
-          Ваша выплата:{" "}
+          Выплата:{" "}
           {formatMoney(
             order.financials.driverPayoutCents,
             order.financials.currencyCode,
           )}
         </span>
       </div>
-    </>
+
+      <span className={styles.detailRowLabel}>Клиент</span>
+      <span className={styles.detailRowValue}>{order.customer.name}</span>
+      {/* Заметная touch-кнопка звонка (только tel:, без JS). */}
+      <a className={styles.callButton} href={`tel:${order.customer.phone}`}>
+        Позвонить клиенту
+      </a>
+      <span className={styles.callNumber}>{order.customer.phone}</span>
+    </div>
   );
 }
 
