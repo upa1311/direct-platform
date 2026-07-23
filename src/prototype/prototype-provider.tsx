@@ -116,6 +116,7 @@ import {
   markDriverArrivedAtRestaurant,
   markDriverArrivingToCustomer,
   markDriverDeliveredOrder,
+  type CompleteDriverDeliveryInput,
   markDriverPickedUpOrder,
   type DriverDeliveryActionResult,
 } from "./driver-delivery";
@@ -413,6 +414,7 @@ export interface PrototypeContextValue {
   driverCompleteDelivery: (
     driverId: string,
     orderId: string,
+    input: CompleteDriverDeliveryInput,
   ) => Promise<DriverDeliveryActionResult>;
   setPreparationMinutes: (orderId: string, minutes: number) => MutationAckPromise;
   setRestaurantAccepting: (
@@ -1646,7 +1648,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const driverCompleteDelivery = useCallback(
-    (driverId: string, orderId: string) =>
+    (driverId: string, orderId: string, input: CompleteDriverDeliveryInput) =>
       runSerializedActionMutation({
         mutation: (baseState) =>
           markDriverDeliveredOrder(
@@ -1654,6 +1656,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             driverId,
             orderId,
             new Date().toISOString(),
+            input,
           ),
         infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
       }),

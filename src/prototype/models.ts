@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 21 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 22 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -765,7 +765,9 @@ export interface PlatformDriverCashSnapshot {
  */
 export type PlatformDriverCashEventType =
   | "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF"
-  | "RESTAURANT_CONFIRMED_CASH_RECEIPT";
+  | "RESTAURANT_CONFIRMED_CASH_RECEIPT"
+  /** Водитель получил от клиента полную сумму заказа наличными (v22). */
+  | "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION";
 
 /**
  * Append-only аудит передачи наличных водителем ресторану (v21). Хранит только

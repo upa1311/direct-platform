@@ -113,12 +113,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * v18 — append-only журнал шагов доставки назначенного водителя,
  * v19 — неизменяемый наличный снимок будущего заказа PLATFORM_DRIVER,
  * v20 — подтверждение денежного запаса водителя в предложении наличного заказа,
- * v21 — append-only аудит передачи наличных водителем ресторану),
+ * v21 — append-only аудит передачи наличных водителем ресторану,
+ * v22 — получение полной суммы наличными от клиента и завершение доставки),
  * поэтому состояние прежней версии безопасно принимается и доводится
  * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -979,24 +980,25 @@ function normalizeDriverOffers(
 }
 
 /**
- * Нормализация append-only событий передачи наличных ресторану (v21). Состояние
- * до v21 поля не имеет — пустой список; внедрённые в старое состояние события НЕ
- * переносятся (недостоверны). Для схемы 21 сохраняются только строго валидные
- * события, ничего не реконструируется из order.history/статуса/delivery-событий.
+ * Нормализация append-only событий наличного потока (v21 передача ресторану,
+ * v22 получение денег от клиента). Состояние до v21 поля не имеет — пустой
+ * список; внедрённые в старое состояние события НЕ переносятся. Ничего не
+ * реконструируется из order.status/history/paymentStatus/paidAt/delivery-событий.
  *
- * Каждое событие: непустой уникальный id; существующие order (PLATFORM_DRIVER +
- * CASH с валидным snapshot) и driver (== assignedDriverId); restaurantId ==
- * order.restaurant.id; водитель связан ACCEPTED cash offer с валидным
- * cashReserveConfirmedAt; amountCents — safe > 0 и == restaurantHandoffCents;
- * валидный ISO; известный тип; actor и role соответствуют типу. Confirmation
- * действителен только при существующем валидном report того же водителя и суммы
- * и occurredAt не раньше report. Первое валидное событие каждого типа на заказ.
+ * Канонический порядок событий заказа:
+ *  1) DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF
+ *  2) RESTAURANT_CONFIRMED_CASH_RECEIPT
+ *  3) DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION (только схема >= 22)
+ *
+ * Схема 21 исторически не могла достоверно содержать получение денег от
+ * клиента, поэтому такой внедрённый event отбрасывается.
  */
 function normalizePlatformDriverCashEvents(
   value: unknown,
   orders: readonly Order[],
   driverIds: ReadonlySet<string>,
   offers: readonly DriverOffer[],
+  deliveryEvents: readonly DriverDeliveryEvent[],
   sourceSchemaVersion: number,
 ): PlatformDriverCashEvent[] {
   if (sourceSchemaVersion < 21 || !Array.isArray(value)) return [];
@@ -1008,6 +1010,14 @@ function normalizePlatformDriverCashEvents(
         o.driverId === driverId &&
         o.status === "ACCEPTED" &&
         isValidIso(o.cashReserveConfirmedAt),
+    );
+  const deliveryEvent = (
+    orderId: string,
+    driverId: string,
+    type: DriverDeliveryEventType,
+  ): DriverDeliveryEvent | undefined =>
+    deliveryEvents.find(
+      (e) => e.orderId === orderId && e.driverId === driverId && e.type === type,
     );
 
   /** Общая проверка формы события; null — отбросить. */
@@ -1031,21 +1041,29 @@ function normalizePlatformDriverCashEvents(
     }
     if (!acceptedConfirmedOffer(orderId, driverId)) return null;
     if (!isSafeCents(amountCents) || amountCents <= 0) return null;
-    if (amountCents !== snapshot.restaurantHandoffCents) return null;
     if (!isValidIso(occurredAt)) return null;
     if (
       type !== "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF" &&
-      type !== "RESTAURANT_CONFIRMED_CASH_RECEIPT"
+      type !== "RESTAURANT_CONFIRMED_CASH_RECEIPT" &&
+      type !== "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION"
     ) {
       return null;
     }
+    // Сумма зависит от типа: передача ресторану — restaurantHandoffCents,
+    // получение от клиента — полная сумма заказа customerCollectionCents.
+    const expected =
+      type === "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION"
+        ? snapshot.customerCollectionCents
+        : snapshot.restaurantHandoffCents;
+    if (amountCents !== expected) return null;
     const actor = raw.actor;
     const role = raw.restaurantWorkspaceRole;
-    if (type === "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF") {
-      if (actor !== "DRIVER" || role !== null) return null;
-    } else {
+    if (type === "RESTAURANT_CONFIRMED_CASH_RECEIPT") {
       if (actor !== "RESTAURANT") return null;
       if (role !== "COMBINED" && role !== "OPERATOR") return null;
+    } else {
+      // Оба водительских события: actor DRIVER, роль ресторана отсутствует.
+      if (actor !== "DRIVER" || role !== null) return null;
     }
     return {
       id,
@@ -1057,9 +1075,9 @@ function normalizePlatformDriverCashEvents(
       occurredAt,
       actor,
       restaurantWorkspaceRole:
-        type === "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF"
-          ? null
-          : (role as PlatformDriverCashEvent["restaurantWorkspaceRole"]),
+        type === "RESTAURANT_CONFIRMED_CASH_RECEIPT"
+          ? (role as PlatformDriverCashEvent["restaurantWorkspaceRole"])
+          : null,
     };
   };
 
@@ -1082,14 +1100,14 @@ function normalizePlatformDriverCashEvents(
     kept.push(ev);
   }
   // Первое валидное confirmation на заказ — только при валидном предыдущем report.
-  const confirmedOrders = new Set<string>();
+  const confirmByOrder = new Map<string, PlatformDriverCashEvent>();
   for (const raw of value) {
     const ev = validate(raw);
     if (
       !ev ||
       ev.type !== "RESTAURANT_CONFIRMED_CASH_RECEIPT" ||
       seenIds.has(ev.id) ||
-      confirmedOrders.has(ev.orderId)
+      confirmByOrder.has(ev.orderId)
     ) {
       continue;
     }
@@ -1099,7 +1117,46 @@ function normalizePlatformDriverCashEvents(
     if (ev.amountCents !== report.amountCents) continue;
     if (Date.parse(ev.occurredAt) < Date.parse(report.occurredAt)) continue;
     seenIds.add(ev.id);
-    confirmedOrders.add(ev.orderId);
+    confirmByOrder.set(ev.orderId, ev);
+    kept.push(ev);
+  }
+  // v22: получение денег от клиента. Только полностью согласованное завершение.
+  if (sourceSchemaVersion < 22) return kept;
+  const collectedOrders = new Set<string>();
+  for (const raw of value) {
+    const ev = validate(raw);
+    if (
+      !ev ||
+      ev.type !== "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION" ||
+      seenIds.has(ev.id) ||
+      collectedOrders.has(ev.orderId)
+    ) {
+      continue;
+    }
+    const report = reportByOrder.get(ev.orderId);
+    const confirm = confirmByOrder.get(ev.orderId);
+    if (!report || !confirm) continue;
+    const order = ordersById.get(ev.orderId);
+    if (!order) continue;
+    // Завершённое состояние заказа обязано согласовываться с событием.
+    if (order.status !== "DELIVERED") continue;
+    if (order.paymentStatus !== "PAID") continue;
+    if (!isValidIso(order.paidAt)) continue;
+    if (ev.occurredAt !== order.paidAt) continue;
+    // Рабочий путь водителя обязан быть пройден полностью.
+    const picked = deliveryEvent(ev.orderId, ev.driverId, "ORDER_PICKED_UP");
+    const arriving = deliveryEvent(ev.orderId, ev.driverId, "ARRIVING_TO_CUSTOMER");
+    const delivered = deliveryEvent(ev.orderId, ev.driverId, "ORDER_DELIVERED");
+    if (!picked || !arriving || !delivered) continue;
+    if (!isValidIso(arriving.occurredAt) || !isValidIso(delivered.occurredAt)) {
+      continue;
+    }
+    if (ev.occurredAt !== delivered.occurredAt) continue;
+    const at = Date.parse(ev.occurredAt);
+    if (at < Date.parse(confirm.occurredAt)) continue;
+    if (at < Date.parse(arriving.occurredAt)) continue;
+    seenIds.add(ev.id);
+    collectedOrders.add(ev.orderId);
     kept.push(ev);
   }
   return kept;
@@ -1428,6 +1485,21 @@ export function normalizePrototypeState(
     normalizedDriverIds,
     sourceSchemaVersion,
   );
+  // v22: получение денег от клиента валидируется против УЖЕ нормализованных
+  // driver delivery событий, а не против сырого массива.
+  const normalizedDriverDeliveryEvents = normalizeDriverDeliveryEvents(
+    state.driverDeliveryEvents,
+    normalizedOrderIds,
+    normalizedDriverIds,
+  );
+  const normalizedPlatformDriverCashEvents = normalizePlatformDriverCashEvents(
+    state.platformDriverCashEvents,
+    normalizedOrders,
+    normalizedDriverIds,
+    normalizedDriverOffers,
+    normalizedDriverDeliveryEvents,
+    sourceSchemaVersion,
+  );
   return {
     ...state,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
@@ -1463,18 +1535,8 @@ export function normalizePrototypeState(
     // запись без существующего заказа или водителя не сохраняется. Состояние
     // до v17/v18 получает пустой список.
     driverOffers: normalizedDriverOffers,
-    driverDeliveryEvents: normalizeDriverDeliveryEvents(
-      state.driverDeliveryEvents,
-      normalizedOrderIds,
-      normalizedDriverIds,
-    ),
-    platformDriverCashEvents: normalizePlatformDriverCashEvents(
-      state.platformDriverCashEvents,
-      normalizedOrders,
-      normalizedDriverIds,
-      normalizedDriverOffers,
-      sourceSchemaVersion,
-    ),
+    driverDeliveryEvents: normalizedDriverDeliveryEvents,
+    platformDriverCashEvents: normalizedPlatformDriverCashEvents,
     cart: normalizeCart(state.cart, defaults.cart),
     orders: normalizedOrders,
     settlements: normalizedSettlements,

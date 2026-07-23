@@ -20,6 +20,10 @@ import {
   getPlatformDriverCashHandoffView,
   type PlatformDriverCashHandoffView,
 } from "@/prototype/platform-driver-cash-handoff";
+import {
+  getPlatformDriverCustomerCashCollectionView,
+  type PlatformDriverCustomerCashCollectionView,
+} from "@/prototype/platform-driver-cash-collection";
 import { useNowMs } from "@/components/util/use-now";
 import type {
   DeliveryAddress,
@@ -1023,6 +1027,7 @@ function ActiveOrderCard({
           order={order}
           stage={stage}
           view={cashView}
+          collectionView={getPlatformDriverCustomerCashCollectionView(state, order)}
         />
       ) : (
         <>
@@ -1032,7 +1037,14 @@ function ActiveOrderCard({
             onArrive={() => run(() => driverArriveAtRestaurant(driverId, order.id))}
             onPickUp={() => run(() => driverPickUpOrder(driverId, order.id))}
             onArriving={() => run(() => driverMarkArriving(driverId, order.id))}
-            onDeliver={() => run(() => driverCompleteDelivery(driverId, order.id))}
+            onDeliver={() =>
+              run(() =>
+                // ONLINE: одно нажатие, без подтверждения наличных.
+                driverCompleteDelivery(driverId, order.id, {
+                  cashCollectionConfirmed: false,
+                }),
+              )
+            }
           />
           {error ? (
             <p className={styles.error} role="alert">
@@ -1135,11 +1147,13 @@ function DriverCashHandoffBlock({
   order,
   stage,
   view,
+  collectionView,
 }: {
   driverId: string;
   order: Order;
   stage: DriverDeliveryStage;
   view: PlatformDriverCashHandoffView;
+  collectionView: PlatformDriverCustomerCashCollectionView;
 }) {
   const {
     driverArriveAtRestaurant,
@@ -1151,10 +1165,35 @@ function DriverCashHandoffBlock({
   const { pending, error, clearError, run } = useAction();
   const [reportOpen, setReportOpen] = useState(false);
   const reportTriggerRef = useRef<HTMLButtonElement>(null);
+  // Подтверждение получения полной суммы от клиента (отдельный лист).
+  const [collectOpen, setCollectOpen] = useState(false);
+  const collectTriggerRef = useRef<HTMLButtonElement>(null);
   const amount =
     view.amountCents !== null
       ? formatMoney(view.amountCents, order.financials.currencyCode)
       : "—";
+  // Полная сумма заказа к получению от клиента — только из cash snapshot.
+  const customerAmount =
+    collectionView.amountCents !== null
+      ? formatMoney(collectionView.amountCents, order.financials.currencyCode)
+      : "—";
+
+  const openCollect = (event: React.MouseEvent<HTMLButtonElement>) => {
+    collectTriggerRef.current = event.currentTarget;
+    setCollectOpen(true);
+  };
+  const confirmCollect = async () => {
+    const result = await run(() =>
+      driverCompleteDelivery(driverId, order.id, {
+        cashCollectionConfirmed: true,
+      }),
+    );
+    if (result.ok) setCollectOpen(false);
+  };
+  const closeCollect = () => {
+    setCollectOpen(false);
+    clearError();
+  };
 
   const openReport = (event: React.MouseEvent<HTMLButtonElement>) => {
     reportTriggerRef.current = event.currentTarget;
@@ -1247,6 +1286,10 @@ function DriverCashHandoffBlock({
   } else if (stage === "GO_TO_CUSTOMER") {
     card = (
       <StageCard title="Доставьте заказ клиенту">
+        {/* Справочно: сколько предстоит получить. Действия получения тут нет. */}
+        <p className={styles.cashHandoffLine}>
+          Получить от клиента: {customerAmount}
+        </p>
         <MainButton
           label="Я подъезжаю"
           pending={pending}
@@ -1257,14 +1300,18 @@ function DriverCashHandoffBlock({
   } else if (stage === "ARRIVING_TO_CUSTOMER") {
     card = (
       <StageCard
-        title="Вы подъезжаете к клиенту"
-        hint="Свяжитесь с клиентом при необходимости."
+        title="Получите оплату и передайте заказ"
+        hint={`Получите от клиента ${customerAmount} наличными.`}
       >
-        <MainButton
-          label="Заказ доставлен"
-          pending={pending}
-          onClick={() => void run(() => driverCompleteDelivery(driverId, order.id))}
-        />
+        <button
+          type="button"
+          ref={collectTriggerRef}
+          className={styles.primaryButton}
+          disabled={pending}
+          onClick={openCollect}
+        >
+          Получил {customerAmount} и передал заказ
+        </button>
       </StageCard>
     );
   } else {
@@ -1313,7 +1360,44 @@ function DriverCashHandoffBlock({
         ) : null}
       </DriverControlSheet>
 
-      {error && !reportOpen ? (
+      {/* Подтверждение получения полной суммы от клиента + передачи заказа.
+          Только главная кнопка завершает заказ (атомарно в домене). */}
+      <DriverControlSheet
+        open={collectOpen}
+        title="Подтвердите оплату и доставку"
+        onClose={closeCollect}
+        triggerRef={collectTriggerRef}
+      >
+        <p className={styles.cashSheetText}>
+          Подтвердите, что вы получили от клиента {customerAmount} наличными и
+          передали заказ.
+        </p>
+        <div className={styles.cashConfirmActions}>
+          <button
+            type="button"
+            className={`${styles.primaryButton} ${styles.cashConfirmPrimary}`}
+            disabled={pending}
+            onClick={() => void confirmCollect()}
+          >
+            Деньги получены, заказ передан
+          </button>
+          <button
+            type="button"
+            className={`${styles.secondaryButton} ${styles.cashConfirmSecondary}`}
+            disabled={pending}
+            onClick={closeCollect}
+          >
+            Отмена
+          </button>
+        </div>
+        {error ? (
+          <p className={styles.error} role="alert">
+            {error}
+          </p>
+        ) : null}
+      </DriverControlSheet>
+
+      {error && !reportOpen && !collectOpen ? (
         <p className={styles.error} role="alert">
           {error}
         </p>

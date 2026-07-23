@@ -10,7 +10,21 @@ import type { ActionResult } from "./actions";
 import { applyDriverDeliveredOrder } from "./actions";
 import { finalizeMutation } from "./prototype-store";
 import { getDriverActiveOrder } from "./selectors";
-import { hasRestaurantConfirmedDriverCashHandoff } from "./platform-driver-cash-handoff";
+import {
+  hasRestaurantConfirmedDriverCashHandoff,
+  getPlatformDriverCashHandoffView,
+} from "./platform-driver-cash-handoff";
+import {
+  customerCashCollectionEventId,
+  hasValidPlatformDriverCustomerCashCollection,
+} from "./platform-driver-cash-collection";
+import { getPlatformDriverCashSnapshot } from "./selectors";
+import type { PlatformDriverCashEvent } from "./models";
+
+/** Явный ввод завершения доставки: наличные требуют подтверждения получения. */
+export interface CompleteDriverDeliveryInput {
+  cashCollectionConfirmed: boolean;
+}
 
 /** Поддерживаемый водителем канал: онлайн-оплаченный ЛИБО наличный заказ. */
 function isDriverDeliverableOrder(order: Order): boolean {
@@ -375,6 +389,7 @@ export function markDriverDeliveredOrder(
   driverId: string,
   orderId: string,
   nowIso: string,
+  input: CompleteDriverDeliveryInput,
 ): ActionResult<DriverDeliveryActionResult> {
   // No-op ДО guard: после доставки водитель уже не BUSY_DIRECT и заказ не
   // активен, поэтому обычный guard не пройдёт — но повтор должен быть успешным.
@@ -385,6 +400,13 @@ export function markDriverDeliveredOrder(
     existingOrder.assignedDriverId === driverId &&
     hasEvent(state, orderId, driverId, "ORDER_DELIVERED")
   ) {
+    // Наличный завершённый заказ считается успешным повтором ТОЛЬКО при
+    // полностью согласованном получении денег; иначе — fail-closed review.
+    if (existingOrder.paymentMethod === "CASH") {
+      return hasValidPlatformDriverCustomerCashCollection(state, existingOrder)
+        ? okNoop(state, orderId)
+        : fail(state, "Данные наличной доставки требуют проверки Direct.");
+    }
     return okNoop(state, orderId);
   }
 
@@ -398,14 +420,15 @@ export function markDriverDeliveredOrder(
   if (order.status !== "ARRIVING") {
     return fail(state, "Действие недоступно на текущем этапе заказа.");
   }
-  // Наличная доставка ещё не завершается: получение денег от клиента —
-  // следующий отдельный микробатч. Fail-closed до его реализации.
+
+  // Наличный заказ: получение полной суммы от клиента и завершение доставки —
+  // одна атомарная мутация (см. completeCashDelivery).
   if (order.paymentMethod === "CASH") {
-    return fail(state, "Получение наличных от клиента ещё не подтверждено.");
+    return completeCashDelivery(state, order, driverId, nowIso, input);
   }
 
-  // Единственный канонический завершитель: признаёт обязательства из снимка,
-  // освобождает водителя на подтверждение зоны, не дублирует формулы.
+  // ONLINE: единственный канонический завершитель — признаёт обязательства из
+  // снимка, освобождает водителя на подтверждение зоны, формулы не дублирует.
   const completion = applyDriverDeliveredOrder(state, order, nowIso);
   if (!completion.ok) {
     return fail(state, completion.error);
@@ -423,6 +446,135 @@ export function markDriverDeliveredOrder(
     nowIso,
   );
   return { state: nextState, result: { ok: true, error: null, orderId } };
+}
+
+/**
+ * Атомарное получение полной суммы наличными от клиента + завершение доставки.
+ *
+ * Сумма берётся только из cash snapshot (customerCollectionCents) — ни из UI, ни
+ * из аргумента. Одной мутацией: событие получения денег, paymentStatus=PAID,
+ * paidAt=nowIso, ARRIVING→DELIVERED, ORDER_DELIVERED, одна история, освобождение
+ * водителя на подтверждение зоны, ровно один рост ревизии. Промежуточного
+ * сохранённого состояния «деньги получены, но заказ ещё ARRIVING» не существует:
+ * при любой ошибке возвращается ИСХОДНЫЙ state.
+ *
+ * Для наличного заказа обязательства ресторана НЕ создаются (ресторан уже
+ * получил свою сумму от водителя) — см. applyDriverDeliveredOrder.
+ */
+function completeCashDelivery(
+  state: PrototypeState,
+  order: Order,
+  driverId: string,
+  nowIso: string,
+  input: CompleteDriverDeliveryInput,
+): ActionResult<DriverDeliveryActionResult> {
+  if (!input.cashCollectionConfirmed) {
+    return fail(
+      state,
+      "Перед завершением подтвердите получение полной суммы наличными от клиента.",
+    );
+  }
+
+  const snapshot = getPlatformDriverCashSnapshot(order);
+  if (snapshot === null) {
+    return fail(state, "Данные наличной доставки требуют проверки Direct.");
+  }
+  if (order.paymentStatus !== "CASH_ON_DELIVERY" || order.paidAt !== null) {
+    return fail(state, "Данные наличной доставки требуют проверки Direct.");
+  }
+
+  // Передача ресторану обязана быть подтверждена (это же проверяет и pickup).
+  const handoff = getPlatformDriverCashHandoffView(state, order);
+  if (handoff.status !== "CONFIRMED" || handoff.restaurantConfirmedAt === null) {
+    return fail(state, "Ресторан ещё не подтвердил получение наличных.");
+  }
+
+  const picked = state.driverDeliveryEvents.find(
+    (e) =>
+      e.orderId === order.id &&
+      e.driverId === driverId &&
+      e.type === "ORDER_PICKED_UP",
+  );
+  const arriving = state.driverDeliveryEvents.find(
+    (e) =>
+      e.orderId === order.id &&
+      e.driverId === driverId &&
+      e.type === "ARRIVING_TO_CUSTOMER",
+  );
+  if (!picked || !arriving) {
+    return fail(state, "Действие недоступно на текущем этапе заказа.");
+  }
+  if (
+    state.platformDriverCashEvents.some(
+      (e) =>
+        e.orderId === order.id &&
+        e.type === "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION",
+    )
+  ) {
+    return fail(state, "Получение наличных уже подтверждено.");
+  }
+  if (hasEvent(state, order.id, driverId, "ORDER_DELIVERED")) {
+    return fail(state, "Действие недоступно на текущем этапе заказа.");
+  }
+
+  // Хронология: получение денег не раньше подтверждения ресторана, получения
+  // заказа и подъезда к клиенту. Равное время разрешено.
+  const nowMs = Date.parse(nowIso);
+  const confirmedMs = Date.parse(handoff.restaurantConfirmedAt);
+  const pickedMs = Date.parse(picked.occurredAt);
+  const arrivingMs = Date.parse(arriving.occurredAt);
+  if (
+    Number.isNaN(nowMs) ||
+    Number.isNaN(confirmedMs) ||
+    Number.isNaN(pickedMs) ||
+    Number.isNaN(arrivingMs)
+  ) {
+    return fail(state, "Данные наличной доставки требуют проверки Direct.");
+  }
+  if (nowMs < confirmedMs || nowMs < pickedMs || nowMs < arrivingMs) {
+    return fail(state, "Некорректное время подтверждения получения наличных.");
+  }
+
+  const collectionEvent: PlatformDriverCashEvent = {
+    id: customerCashCollectionEventId(order.id),
+    orderId: order.id,
+    driverId,
+    restaurantId: order.restaurant.id,
+    type: "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION",
+    amountCents: snapshot.customerCollectionCents,
+    occurredAt: nowIso,
+    actor: "DRIVER",
+    restaurantWorkspaceRole: null,
+  };
+  const paidOrder: Order = {
+    ...order,
+    paymentStatus: "PAID",
+    paidAt: nowIso,
+  };
+  // Нефинализированное промежуточное состояние: событие + оплаченный заказ.
+  const interim: PrototypeState = {
+    ...state,
+    orders: state.orders.map((o) => (o.id === order.id ? paidOrder : o)),
+    platformDriverCashEvents: [...state.platformDriverCashEvents, collectionEvent],
+  };
+  const completion = applyDriverDeliveredOrder(interim, paidOrder, nowIso);
+  if (!completion.ok) {
+    // Ничего не сохраняем: исходный state, revision не растёт.
+    return fail(state, completion.error);
+  }
+
+  const nextState = finalizeMutation(
+    state,
+    {
+      ...completion.state,
+      driverDeliveryEvents: [
+        ...completion.state.driverDeliveryEvents,
+        makeEvent(order, driverId, "ORDER_DELIVERED", "ARRIVING", "DELIVERED", nowIso),
+      ],
+    },
+    nowIso,
+  );
+  return { state: nextState, result: { ok: true, error: null, orderId: order.id } };
 }
 
 // --- Resolver этапа ------------------------------------------------------------

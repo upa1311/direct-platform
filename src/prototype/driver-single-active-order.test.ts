@@ -31,6 +31,7 @@ function order(id: string, overrides: Partial<Order> = {}): Order {
     id,
     deliveryMode: "PLATFORM_DRIVER",
     status: "PREPARING",
+    paymentMethod: "ONLINE",
     paymentStatus: "PAID",
     assignedDriverId: null,
     driverAssignedAt: null,

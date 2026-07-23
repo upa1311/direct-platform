@@ -192,8 +192,8 @@ const theOrder = (state: PrototypeState): Order => state.orders[0];
 
 // --- 1–3: schema / default ----------------------------------------------------
 
-test("1: схема равна 21", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 21);
+test("1: схема равна 22", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 22);
 });
 test("2: default platformDriverCashEvents пуст", () => {
   assert.deepEqual(createDefaultState().platformDriverCashEvents, []);
@@ -475,7 +475,7 @@ test("39/40: CASH pickup после confirmation успешен и один ра
   assert.equal(r.result.ok, true);
   assert.equal(theOrder(r.state).status, "OUT_FOR_DELIVERY");
 });
-test("41: CASH final delivery пока fail-closed", () => {
+test("41: CASH final delivery без подтверждения получения денег fail-closed", () => {
   const s = cashState({ status: "ARRIVING", arrived: true, reported: true, confirmed: true, pickedUp: true });
   // Добавляем событие ARRIVING_TO_CUSTOMER, чтобы дойти до guard доставки.
   const withArriving: PrototypeState = {
@@ -493,9 +493,15 @@ test("41: CASH final delivery пока fail-closed", () => {
       } as unknown as PrototypeState["driverDeliveryEvents"][number],
     ],
   };
-  const r = markDriverDeliveredOrder(withArriving, DRIVER, ORDER, T3);
+  const r = markDriverDeliveredOrder(withArriving, DRIVER, ORDER, T3, {
+    cashCollectionConfirmed: false,
+  });
   assert.equal(r.result.ok, false);
-  assert.equal(r.result.error, "Получение наличных от клиента ещё не подтверждено.");
+  assert.equal(
+    r.result.error,
+    "Перед завершением подтвердите получение полной суммы наличными от клиента.",
+  );
+  assert.equal(r.state, withArriving);
 });
 
 // --- permission matrix --------------------------------------------------------
@@ -733,8 +739,8 @@ test("ui-89/90: primary min-height 52px, secondary 44px", () => {
   assert.ok(cssRule(DRIVER_CSS, ".cashConfirmPrimary").includes("min-height: 52px"));
   assert.ok(cssRule(DRIVER_CSS, ".cashConfirmSecondary").includes("min-height: 44px"));
 });
-test("ui-92/93: нет customer cash collection / debt / ledger UI", () => {
-  for (const forbidden of ["Получить от клиента", "Долг водителя", "ledger"]) {
+test("ui-92/93: нет driver debt / ledger UI (получение от клиента — часть 4)", () => {
+  for (const forbidden of ["Долг водителя", "Вы должны Direct", "ledger"]) {
     assert.ok(!WORKSPACE.includes(forbidden));
     assert.ok(!REST_PANEL.includes(forbidden));
   }

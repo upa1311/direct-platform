@@ -4505,6 +4505,38 @@ export function applyDriverDeliveredOrder(
       },
     ],
   };
+  // v22: наличный заказ водителя Direct. Ресторан уже физически получил свою
+  // сумму от водителя и подтвердил это отдельным append-only событием, поэтому
+  // обязательств ресторана перед Direct у такого заказа НЕТ: accounting-записи,
+  // settlement и settlement records не создаются. Будущая дебиторская
+  // задолженность водителя (directReceivableFromDriverCents) останется в снимке
+  // и станет отдельным driver cash ledger в следующем микробатче.
+  if (order.paymentMethod === "CASH") {
+    // Fail-closed: наличное завершение допустимо только после фактического
+    // получения денег от клиента (paymentStatus/paidAt уже проставлены вызвавшей
+    // атомарной мутацией). Иначе заказ не завершается.
+    if (
+      updatedOrder.paymentStatus !== "PAID" ||
+      typeof updatedOrder.paidAt !== "string" ||
+      Number.isNaN(Date.parse(updatedOrder.paidAt))
+    ) {
+      return { ok: false, error: "Данные наличной доставки требуют проверки Direct." };
+    }
+    return {
+      ok: true,
+      state: {
+        ...state,
+        orders: state.orders.map((o) => (o.id === order.id ? updatedOrder : o)),
+        drivers: releaseAssignedDriver(
+          state,
+          order.assignedDriverId,
+          order.id,
+          order.financials.customerZoneId,
+        ),
+      },
+    };
+  }
+
   const accounting = computeCompletedOrderAccounting(
     updatedOrder,
     state.restaurantAccountingEntries,
@@ -4570,6 +4602,12 @@ export function markOrderDeliveredByDriverWithResult(
   }
   if (!order.assignedDriverId) {
     return fail("Для заказа не назначен водитель.");
+  }
+  // v22: этот compatibility-путь остаётся ONLINE-only. Наличный заказ
+  // завершается ТОЛЬКО identity-aware markDriverDeliveredOrder с явным
+  // подтверждением получения денег — обхода нет даже у повреждённого состояния.
+  if (order.paymentMethod !== "ONLINE") {
+    return fail("Неподдерживаемый способ оплаты для этого завершения.");
   }
   if (order.paymentStatus !== "PAID") {
     return fail("Оплата по заказу ещё не подтверждена.");

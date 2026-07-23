@@ -110,7 +110,7 @@ function toArriving(state: PrototypeState, orderId: string): PrototypeState {
 // --- 1–9: schema и нормализация ------------------------------------------------
 
 test("1: схема прототипа равна 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 21);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 22);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
@@ -118,9 +118,9 @@ test("2: нормализатор принимает схемы 7–18", () => {
   for (let v = 7; v <= 18; v += 1) {
     const parsed = parseStoredState(JSON.stringify({ ...base, schemaVersion: v }));
     assert.ok(parsed, `схема ${v}`);
-    assert.equal(parsed.schemaVersion, 21);
+    assert.equal(parsed.schemaVersion, 22);
   }
-  assert.equal(parseStoredState(JSON.stringify({ ...base, schemaVersion: 22 })), null);
+  assert.equal(parseStoredState(JSON.stringify({ ...base, schemaVersion: 23 })), null);
 });
 
 test("3: состояние до v18 получает пустой журнал", () => {
@@ -218,7 +218,9 @@ test("8: журнал не реконструируется из history", () =>
   // У доставленного заказа история есть, но журнал не восстанавливается.
   const { state, orderId } = assignedState();
   const delivered = markDriverDeliveredOrder(
-    toArriving(state, orderId),
+    toArriving(state, orderId, {
+    cashCollectionConfirmed: false,
+  }),
     D1,
     orderId,
     T(3),
@@ -422,7 +424,9 @@ test("28: повторный подъезд — no-op", () => {
 test("29–33: ARRIVING + подъезд → DELIVERED, водитель на подтверждении зоны", () => {
   const { state, orderId } = assignedState();
   const s = toArriving(state, orderId);
-  const res = markDriverDeliveredOrder(s, D1, orderId, T(3));
+  const res = markDriverDeliveredOrder(s, D1, orderId, T(3, {
+    cashCollectionConfirmed: false,
+  }));
   assert.equal(res.result.ok, true, res.result.error ?? "");
   assert.equal(statusOf(res.state, orderId), "DELIVERED"); // 29
   assert.equal(
@@ -438,12 +442,16 @@ test("34–35: accounting создаётся один раз; повтор не 
   const { state, orderId } = assignedState();
   const s = toArriving(state, orderId);
   const before = s.restaurantAccountingEntries.length;
-  const first = markDriverDeliveredOrder(s, D1, orderId, T(3));
+  const first = markDriverDeliveredOrder(s, D1, orderId, T(3, {
+    cashCollectionConfirmed: false,
+  }));
   assert.equal(first.result.ok, true, first.result.error ?? "");
   const afterFirst = first.state.restaurantAccountingEntries.length;
   assert.ok(afterFirst > before, "обязательства признаны");
   // Повтор тем же водителем — успешный no-op, второй accounting не создаётся.
-  const second = markDriverDeliveredOrder(first.state, D1, orderId, T(4));
+  const second = markDriverDeliveredOrder(first.state, D1, orderId, T(4, {
+    cashCollectionConfirmed: false,
+  }));
   assert.equal(second.result.ok, true);
   assert.equal(second.state, first.state);
   assert.equal(second.state.restaurantAccountingEntries.length, afterFirst);
@@ -470,7 +478,9 @@ test("36: ошибка accounting полностью fail-closed", () => {
   };
   // REVIEW_REQUIRED не создаёт обязательств, но и не падает — доставка проходит
   // без новых записей. Проверяем именно отсутствие дубля и целостность.
-  const res = markDriverDeliveredOrder(broken, D1, orderId, T(3));
+  const res = markDriverDeliveredOrder(broken, D1, orderId, T(3, {
+    cashCollectionConfirmed: false,
+  }));
   assert.equal(res.result.ok, true, res.result.error ?? "");
   assert.equal(
     res.state.restaurantAccountingEntries.length,
@@ -481,7 +491,9 @@ test("36: ошибка accounting полностью fail-closed", () => {
 test("37: другой водитель не может завершить", () => {
   const { state, orderId } = assignedState();
   const s = toArriving(state, orderId);
-  const res = markDriverDeliveredOrder(s, D2, orderId, T(3));
+  const res = markDriverDeliveredOrder(s, D2, orderId, T(3, {
+    cashCollectionConfirmed: false,
+  }));
   assert.equal(res.result.ok, false);
   assert.equal(res.result.error, "Этот заказ назначен другому водителю.");
   assert.equal(res.state, s);
@@ -491,7 +503,9 @@ test("38: старый водитель после переназначения 
   const { state, orderId } = assignedState();
   const s = toArriving(state, orderId);
   const reassigned = reassignDriverForOrder(s, orderId, D2, "ближе").state;
-  const res = markDriverDeliveredOrder(reassigned, D1, orderId, T(3));
+  const res = markDriverDeliveredOrder(reassigned, D1, orderId, T(3, {
+    cashCollectionConfirmed: false,
+  }));
   assert.equal(res.result.ok, false);
 });
 

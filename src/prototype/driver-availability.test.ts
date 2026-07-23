@@ -79,6 +79,7 @@ function order(id: string, overrides: Partial<Order> = {}): Order {
     id,
     deliveryMode: "PLATFORM_DRIVER",
     status: "PREPARING",
+    paymentMethod: "ONLINE",
     paymentStatus: "PAID",
     assignedDriverId: null,
     driverAssignedAt: null,
@@ -134,21 +135,21 @@ function online(
 // --- 1–2: схема ---------------------------------------------------------------
 
 test("1: схема прототипа поднята до 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 21);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 22);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
   const base = createDefaultState();
-  for (let version = 7; version <= 21; version += 1) {
+  for (let version = 7; version <= 22; version += 1) {
     const parsed = parseStoredState(
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version} должна парситься`);
-    assert.equal(parsed.schemaVersion, 21, `схема ${version} → 18`);
+    assert.equal(parsed.schemaVersion, 22, `схема ${version} → 18`);
   }
   // Неизвестная будущая версия по-прежнему не принимается.
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 22 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 23 })),
     null,
   );
 });

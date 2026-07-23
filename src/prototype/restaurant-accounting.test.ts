@@ -76,6 +76,7 @@ function makeOrder(opts: {
   deliveryMode: DeliveryMode;
   completedAt?: string;
   updatedAt?: string;
+  paymentMethod?: Order["paymentMethod"];
   paymentStatus?: Order["paymentStatus"];
   paidAt?: string | null;
   history?: OrderHistoryEvent[];
@@ -88,6 +89,7 @@ function makeOrder(opts: {
     status: opts.status,
     deliveryMode: opts.deliveryMode,
     updatedAt: opts.updatedAt ?? opts.completedAt ?? "2026-07-17T10:00:00.000Z",
+    paymentMethod: opts.paymentMethod ?? TEMPLATE_ORDER.paymentMethod,
     paymentStatus: opts.paymentStatus ?? "PAID",
     paidAt: opts.paidAt === undefined ? "2026-07-17T09:00:00.000Z" : opts.paidAt,
     history: opts.history ?? [],
@@ -637,6 +639,7 @@ test("orders, financials и старые settlements не мутируются; 
       id: "arr",
       status: "ARRIVING",
       deliveryMode: "PLATFORM_DRIVER",
+      paymentMethod: "ONLINE",
       paymentStatus: "PAID",
       history: [statusEvent("OUT_FOR_DELIVERY", "ARRIVING", "2026-07-17T09:30:00.000Z")],
       fin: DIRECT_COLLECTED,

@@ -354,5 +354,5 @@ test("21: административный раздел расчётов не и
 });
 
 test("22: схема прототипа остаётся 15", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 21);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 22);
 });

@@ -42,7 +42,9 @@ function driveDeliveredByDriver(
   let s = markDriverArrivedAtRestaurant(state, driverId, orderId, "2026-07-22T12:00:00.000Z").state;
   s = markDriverPickedUpOrder(s, driverId, orderId, "2026-07-22T12:01:00.000Z").state;
   s = markDriverArrivingToCustomer(s, driverId, orderId, "2026-07-22T12:02:00.000Z").state;
-  s = markDriverDeliveredOrder(s, driverId, orderId, "2026-07-22T12:03:00.000Z").state;
+  s = markDriverDeliveredOrder(s, driverId, orderId, "2026-07-22T12:03:00.000Z", {
+    cashCollectionConfirmed: false,
+  }).state;
   return s;
 }
 import {

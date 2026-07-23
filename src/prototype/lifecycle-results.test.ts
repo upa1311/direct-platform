@@ -221,13 +221,17 @@ test("Водитель Direct: markDeliveredByDriver повторно — оши
   s = markDriverPickedUpOrder(s, "driver-1", orderId, "2026-07-22T12:01:00.000Z").state;
   s = markDriverArrivingToCustomer(s, "driver-1", orderId, "2026-07-22T12:02:00.000Z").state;
 
-  const first = markDriverDeliveredOrder(s, "driver-1", orderId, "2026-07-22T12:03:00.000Z");
+  const first = markDriverDeliveredOrder(s, "driver-1", orderId, "2026-07-22T12:03:00.000Z", {
+    cashCollectionConfirmed: false,
+  });
   assert.equal(first.result.ok, true, first.result.error ?? "");
   assert.equal(getOrder(first.state, orderId).status, "DELIVERED");
 
   // Повторная доставка тем же водителем — успешный no-op без второго accounting.
   const before = first.state.restaurantAccountingEntries.length;
-  const second = markDriverDeliveredOrder(first.state, "driver-1", orderId, "2026-07-22T12:04:00.000Z");
+  const second = markDriverDeliveredOrder(first.state, "driver-1", orderId, "2026-07-22T12:04:00.000Z", {
+    cashCollectionConfirmed: false,
+  });
   assert.equal(second.result.ok, true);
   assert.equal(second.state, first.state);
   assert.equal(second.state.restaurantAccountingEntries.length, before);
