@@ -51,6 +51,9 @@ const OPERATOR_ACTIONS: ReadonlySet<RestaurantWorkspaceAction> = new Set([
   "MANAGE_CANCELLATION",
   "MANAGE_DRIVER",
   "HANDOFF_ORDER",
+  // Подтверждение получения наличных от водителя Direct — финансовое действие
+  // оператора/общего экрана. Кухне (KITCHEN) недоступно.
+  "CONFIRM_DRIVER_CASH_RECEIPT",
   // Меню ресторана ведут все три ресторанные роли: оператор так же отключает и
   // возвращает блюда и категории и так же заводит заявку на новое блюдо.
   // Публикация клиенту остаётся исключительно за ADMIN Direct.

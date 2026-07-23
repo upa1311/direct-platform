@@ -19,6 +19,7 @@ import {
   type Order,
   type OrderItemSnapshot,
   type PaymentMethod,
+  type PlatformDriverCashEvent,
   type PrototypeState,
   type RestaurantDeliveryProvider,
   type WeeklySchedule,
@@ -42,6 +43,7 @@ import {
 import { validateRestaurantSettlementRecord } from "./restaurant-settlement-integrity";
 import { validateFinancialRuleSnapshot } from "./financial-rule";
 import { resolvePlatformDriverCashSnapshot } from "./platform-driver-cash";
+import { isSafeCents } from "./bank-fee";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
@@ -110,12 +112,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * вручную зона водителя, v17 — предложения заказов водителям по зоне,
  * v18 — append-only журнал шагов доставки назначенного водителя,
  * v19 — неизменяемый наличный снимок будущего заказа PLATFORM_DRIVER,
- * v20 — подтверждение денежного запаса водителя в предложении наличного заказа),
+ * v20 — подтверждение денежного запаса водителя в предложении наличного заказа,
+ * v21 — append-only аудит передачи наличных водителем ресторану),
  * поэтому состояние прежней версии безопасно принимается и доводится
  * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -975,6 +978,133 @@ function normalizeDriverOffers(
   return result;
 }
 
+/**
+ * Нормализация append-only событий передачи наличных ресторану (v21). Состояние
+ * до v21 поля не имеет — пустой список; внедрённые в старое состояние события НЕ
+ * переносятся (недостоверны). Для схемы 21 сохраняются только строго валидные
+ * события, ничего не реконструируется из order.history/статуса/delivery-событий.
+ *
+ * Каждое событие: непустой уникальный id; существующие order (PLATFORM_DRIVER +
+ * CASH с валидным snapshot) и driver (== assignedDriverId); restaurantId ==
+ * order.restaurant.id; водитель связан ACCEPTED cash offer с валидным
+ * cashReserveConfirmedAt; amountCents — safe > 0 и == restaurantHandoffCents;
+ * валидный ISO; известный тип; actor и role соответствуют типу. Confirmation
+ * действителен только при существующем валидном report того же водителя и суммы
+ * и occurredAt не раньше report. Первое валидное событие каждого типа на заказ.
+ */
+function normalizePlatformDriverCashEvents(
+  value: unknown,
+  orders: readonly Order[],
+  driverIds: ReadonlySet<string>,
+  offers: readonly DriverOffer[],
+  sourceSchemaVersion: number,
+): PlatformDriverCashEvent[] {
+  if (sourceSchemaVersion < 21 || !Array.isArray(value)) return [];
+  const ordersById = new Map(orders.map((o) => [o.id, o]));
+  const acceptedConfirmedOffer = (orderId: string, driverId: string): boolean =>
+    offers.some(
+      (o) =>
+        o.orderId === orderId &&
+        o.driverId === driverId &&
+        o.status === "ACCEPTED" &&
+        isValidIso(o.cashReserveConfirmedAt),
+    );
+
+  /** Общая проверка формы события; null — отбросить. */
+  const validate = (raw: unknown): PlatformDriverCashEvent | null => {
+    if (!isRecord(raw)) return null;
+    const { id, orderId, driverId, restaurantId, type, amountCents, occurredAt } =
+      raw;
+    if (typeof id !== "string" || id === "") return null;
+    if (typeof orderId !== "string") return null;
+    const order = ordersById.get(orderId);
+    if (!order) return null;
+    if (order.deliveryMode !== "PLATFORM_DRIVER" || order.paymentMethod !== "CASH") {
+      return null;
+    }
+    const snapshot = order.financials.platformDriverCash;
+    if (!snapshot) return null;
+    if (typeof driverId !== "string" || !driverIds.has(driverId)) return null;
+    if (order.assignedDriverId !== driverId) return null;
+    if (typeof restaurantId !== "string" || restaurantId !== order.restaurant.id) {
+      return null;
+    }
+    if (!acceptedConfirmedOffer(orderId, driverId)) return null;
+    if (!isSafeCents(amountCents) || amountCents <= 0) return null;
+    if (amountCents !== snapshot.restaurantHandoffCents) return null;
+    if (!isValidIso(occurredAt)) return null;
+    if (
+      type !== "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF" &&
+      type !== "RESTAURANT_CONFIRMED_CASH_RECEIPT"
+    ) {
+      return null;
+    }
+    const actor = raw.actor;
+    const role = raw.restaurantWorkspaceRole;
+    if (type === "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF") {
+      if (actor !== "DRIVER" || role !== null) return null;
+    } else {
+      if (actor !== "RESTAURANT") return null;
+      if (role !== "COMBINED" && role !== "OPERATOR") return null;
+    }
+    return {
+      id,
+      orderId,
+      driverId,
+      restaurantId,
+      type,
+      amountCents,
+      occurredAt,
+      actor,
+      restaurantWorkspaceRole:
+        type === "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF"
+          ? null
+          : (role as PlatformDriverCashEvent["restaurantWorkspaceRole"]),
+    };
+  };
+
+  // Первый валидный report на заказ.
+  const reportByOrder = new Map<string, PlatformDriverCashEvent>();
+  const seenIds = new Set<string>();
+  const kept: PlatformDriverCashEvent[] = [];
+  for (const raw of value) {
+    const ev = validate(raw);
+    if (
+      !ev ||
+      ev.type !== "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF" ||
+      seenIds.has(ev.id) ||
+      reportByOrder.has(ev.orderId)
+    ) {
+      continue;
+    }
+    seenIds.add(ev.id);
+    reportByOrder.set(ev.orderId, ev);
+    kept.push(ev);
+  }
+  // Первое валидное confirmation на заказ — только при валидном предыдущем report.
+  const confirmedOrders = new Set<string>();
+  for (const raw of value) {
+    const ev = validate(raw);
+    if (
+      !ev ||
+      ev.type !== "RESTAURANT_CONFIRMED_CASH_RECEIPT" ||
+      seenIds.has(ev.id) ||
+      confirmedOrders.has(ev.orderId)
+    ) {
+      continue;
+    }
+    const report = reportByOrder.get(ev.orderId);
+    if (!report) continue;
+    if (ev.driverId !== report.driverId) continue;
+    if (ev.amountCents !== report.amountCents) continue;
+    if (Date.parse(ev.occurredAt) < Date.parse(report.occurredAt)) continue;
+    seenIds.add(ev.id);
+    confirmedOrders.add(ev.orderId);
+    kept.push(ev);
+  }
+  return kept;
+}
+
 const DRIVER_DELIVERY_EVENT_TYPES: ReadonlySet<string> =
   new Set<DriverDeliveryEventType>([
     "ARRIVED_AT_RESTAURANT",
@@ -1292,6 +1422,12 @@ export function normalizePrototypeState(
   const normalizedDriverIds = new Set(
     normalizedDrivers.map((driver) => driver.id),
   );
+  const normalizedDriverOffers = normalizeDriverOffers(
+    state.driverOffers,
+    normalizedOrders,
+    normalizedDriverIds,
+    sourceSchemaVersion,
+  );
   return {
     ...state,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
@@ -1326,16 +1462,18 @@ export function normalizePrototypeState(
     // Предложения и журнал доставки нормализуем после заказов и водителей:
     // запись без существующего заказа или водителя не сохраняется. Состояние
     // до v17/v18 получает пустой список.
-    driverOffers: normalizeDriverOffers(
-      state.driverOffers,
-      normalizedOrders,
-      normalizedDriverIds,
-      sourceSchemaVersion,
-    ),
+    driverOffers: normalizedDriverOffers,
     driverDeliveryEvents: normalizeDriverDeliveryEvents(
       state.driverDeliveryEvents,
       normalizedOrderIds,
       normalizedDriverIds,
+    ),
+    platformDriverCashEvents: normalizePlatformDriverCashEvents(
+      state.platformDriverCashEvents,
+      normalizedOrders,
+      normalizedDriverIds,
+      normalizedDriverOffers,
+      sourceSchemaVersion,
     ),
     cart: normalizeCart(state.cart, defaults.cart),
     orders: normalizedOrders,

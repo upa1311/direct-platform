@@ -16,6 +16,10 @@ import {
   resolveDriverDeliveryStage,
   type DriverDeliveryStage,
 } from "@/prototype/driver-delivery";
+import {
+  getPlatformDriverCashHandoffView,
+  type PlatformDriverCashHandoffView,
+} from "@/prototype/platform-driver-cash-handoff";
 import { useNowMs } from "@/components/util/use-now";
 import type {
   DeliveryAddress,
@@ -1006,24 +1010,37 @@ function ActiveOrderCard({
   // После получения заказа главная точка маршрута — клиент, а не ресторан.
   const pickedUp =
     order.status === "OUT_FOR_DELIVERY" || order.status === "ARRIVING";
+  // Наличный заказ ведёт отдельный блок с передачей денег ресторану.
+  const cashView = getPlatformDriverCashHandoffView(state, order);
+  const isCash = cashView.status !== "NOT_APPLICABLE";
 
   return (
     <>
       {/* Блок 1: текущий этап и одна главная кнопка — вверху активного заказа. */}
-      <StagePanel
-        stage={stage}
-        pending={pending}
-        onArrive={() => run(() => driverArriveAtRestaurant(driverId, order.id))}
-        onPickUp={() => run(() => driverPickUpOrder(driverId, order.id))}
-        onArriving={() => run(() => driverMarkArriving(driverId, order.id))}
-        onDeliver={() => run(() => driverCompleteDelivery(driverId, order.id))}
-      />
-
-      {error ? (
-        <p className={styles.error} role="alert">
-          {error}
-        </p>
-      ) : null}
+      {isCash ? (
+        <DriverCashHandoffBlock
+          driverId={driverId}
+          order={order}
+          stage={stage}
+          view={cashView}
+        />
+      ) : (
+        <>
+          <StagePanel
+            stage={stage}
+            pending={pending}
+            onArrive={() => run(() => driverArriveAtRestaurant(driverId, order.id))}
+            onPickUp={() => run(() => driverPickUpOrder(driverId, order.id))}
+            onArriving={() => run(() => driverMarkArriving(driverId, order.id))}
+            onDeliver={() => run(() => driverCompleteDelivery(driverId, order.id))}
+          />
+          {error ? (
+            <p className={styles.error} role="alert">
+              {error}
+            </p>
+          ) : null}
+        </>
+      )}
 
       <ol className={styles.progress} aria-label="Этапы доставки">
         {PROGRESS_STEPS.map((label, index) => (
@@ -1103,6 +1120,204 @@ function RoutePoint({
         Клиент: {order.address?.street ?? "—"} ·{" "}
         {zoneName(order.financials.customerZoneId)}
       </p>
+    </>
+  );
+}
+
+/**
+ * Наличный заказ: передача денег ресторану ведёт весь верхний блок. Сумма — из
+ * cash snapshot (view.amountCents), не пересчитывается. До подтверждения
+ * ресторана «Заказ получен» недоступен; передача подтверждается через
+ * DriverControlSheet.
+ */
+function DriverCashHandoffBlock({
+  driverId,
+  order,
+  stage,
+  view,
+}: {
+  driverId: string;
+  order: Order;
+  stage: DriverDeliveryStage;
+  view: PlatformDriverCashHandoffView;
+}) {
+  const {
+    driverArriveAtRestaurant,
+    driverPickUpOrder,
+    driverMarkArriving,
+    driverCompleteDelivery,
+    driverReportCashHandoffToRestaurant,
+  } = usePrototype();
+  const { pending, error, clearError, run } = useAction();
+  const [reportOpen, setReportOpen] = useState(false);
+  const reportTriggerRef = useRef<HTMLButtonElement>(null);
+  const amount =
+    view.amountCents !== null
+      ? formatMoney(view.amountCents, order.financials.currencyCode)
+      : "—";
+
+  const openReport = (event: React.MouseEvent<HTMLButtonElement>) => {
+    reportTriggerRef.current = event.currentTarget;
+    setReportOpen(true);
+  };
+  const confirmReport = async () => {
+    const result = await run(() =>
+      driverReportCashHandoffToRestaurant(driverId, order.id),
+    );
+    if (result.ok) setReportOpen(false);
+  };
+  const closeReport = () => {
+    setReportOpen(false);
+    clearError();
+  };
+
+  let card: React.ReactNode;
+  if (stage === "GO_TO_RESTAURANT") {
+    card = (
+      <StageCard
+        title="Следующий шаг"
+        hint="Доберитесь до ресторана и подтвердите прибытие."
+      >
+        <p className={styles.cashHandoffLine}>
+          Нужно передать ресторану: {amount}
+        </p>
+        <MainButton
+          label="Я в ресторане"
+          pending={pending}
+          onClick={() => void run(() => driverArriveAtRestaurant(driverId, order.id))}
+        />
+      </StageCard>
+    );
+  } else if (stage === "WAITING_AT_RESTAURANT" || stage === "READY_TO_PICK_UP") {
+    if (view.status === "DRIVER_ACTION_REQUIRED") {
+      card = (
+        <StageCard
+          title="Передайте наличные ресторану"
+          hint={`Передайте ресторану ${amount} наличными и сообщите об этом.`}
+        >
+          <button
+            type="button"
+            ref={reportTriggerRef}
+            className={styles.primaryButton}
+            disabled={pending}
+            onClick={openReport}
+          >
+            Я передал ресторану {amount}
+          </button>
+        </StageCard>
+      );
+    } else if (view.status === "RESTAURANT_CONFIRMATION_REQUIRED") {
+      card = (
+        <StageCard
+          title="Ожидаем подтверждение ресторана"
+          hint="Ресторан подтвердит получение наличных. После этого можно забрать заказ."
+        >
+          {null}
+        </StageCard>
+      );
+    } else if (view.status === "CONFIRMED" && stage === "READY_TO_PICK_UP") {
+      card = (
+        <StageCard
+          title="Заказ готов"
+          hint={`Ресторан подтвердил получение ${amount}. Заберите заказ.`}
+        >
+          <MainButton
+            label="Заказ получен"
+            pending={pending}
+            onClick={() => void run(() => driverPickUpOrder(driverId, order.id))}
+          />
+        </StageCard>
+      );
+    } else if (view.status === "CONFIRMED") {
+      card = (
+        <StageCard
+          title="Вы в ресторане"
+          hint={`Ресторан подтвердил получение ${amount}. Ожидаем готовность заказа.`}
+        >
+          {null}
+        </StageCard>
+      );
+    } else {
+      card = (
+        <div className={styles.notice} role="status">
+          Наличная передача требует проверки Direct.
+        </div>
+      );
+    }
+  } else if (stage === "GO_TO_CUSTOMER") {
+    card = (
+      <StageCard title="Доставьте заказ клиенту">
+        <MainButton
+          label="Я подъезжаю"
+          pending={pending}
+          onClick={() => void run(() => driverMarkArriving(driverId, order.id))}
+        />
+      </StageCard>
+    );
+  } else if (stage === "ARRIVING_TO_CUSTOMER") {
+    card = (
+      <StageCard
+        title="Вы подъезжаете к клиенту"
+        hint="Свяжитесь с клиентом при необходимости."
+      >
+        <MainButton
+          label="Заказ доставлен"
+          pending={pending}
+          onClick={() => void run(() => driverCompleteDelivery(driverId, order.id))}
+        />
+      </StageCard>
+    );
+  } else {
+    card = (
+      <div className={styles.notice} role="status">
+        Этап заказа требует проверки Direct.
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {card}
+
+      <DriverControlSheet
+        open={reportOpen}
+        title="Подтвердите передачу"
+        onClose={closeReport}
+        triggerRef={reportTriggerRef}
+      >
+        <p className={styles.cashSheetText}>
+          Подтвердите, что вы уже передали ресторану {amount} наличными.
+        </p>
+        <div className={styles.cashConfirmActions}>
+          <button
+            type="button"
+            className={`${styles.primaryButton} ${styles.cashConfirmPrimary}`}
+            disabled={pending}
+            onClick={() => void confirmReport()}
+          >
+            Я передал эту сумму
+          </button>
+          <button
+            type="button"
+            className={`${styles.secondaryButton} ${styles.cashConfirmSecondary}`}
+            disabled={pending}
+            onClick={closeReport}
+          >
+            Отмена
+          </button>
+        </div>
+        {error ? (
+          <p className={styles.error} role="alert">
+            {error}
+          </p>
+        ) : null}
+      </DriverControlSheet>
+
+      {error && !reportOpen ? (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
+      ) : null}
     </>
   );
 }

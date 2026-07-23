@@ -1173,6 +1173,31 @@
   background: var(--kds-surface-subtle);
 }
 
+/* Наличные водителя Direct: сумма к получению и подтверждение (v21). */
+.cashPanel {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--kds-border-strong);
+  border-radius: 12px;
+  background: var(--kds-surface-subtle);
+}
+
+.cashPanelTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 750;
+  color: var(--kds-text);
+}
+
+.cashPanelAmount {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 750;
+  color: var(--kds-text);
+}
+
 .pickupAmount {
   margin: 0;
   font-size: 18px;

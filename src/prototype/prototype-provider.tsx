@@ -108,6 +108,11 @@ import {
   type ReconcileDriverOffersResult,
 } from "./driver-offers";
 import {
+  reportDriverCashHandoffToRestaurant,
+  confirmRestaurantDriverCashReceipt,
+  type PlatformDriverCashHandoffActionResult,
+} from "./platform-driver-cash-handoff";
+import {
   markDriverArrivedAtRestaurant,
   markDriverArrivingToCustomer,
   markDriverDeliveredOrder,
@@ -479,6 +484,17 @@ export interface PrototypeContextValue {
     driverId: string,
     offerId: string,
   ) => Promise<DriverOfferActionResult>;
+  /** Водитель сообщает, что передал ресторану наличные (v21). Сумма — из snapshot. */
+  driverReportCashHandoffToRestaurant: (
+    driverId: string,
+    orderId: string,
+  ) => Promise<PlatformDriverCashHandoffActionResult>;
+  /** Ресторан подтверждает фактическое получение наличных от водителя (v21). */
+  restaurantConfirmDriverCashReceipt: (
+    restaurantId: string,
+    orderId: string,
+    workspaceRole: RestaurantWorkspaceRole,
+  ) => Promise<PlatformDriverCashHandoffActionResult>;
   createRestaurantEntry: (
     input: RestaurantFormInput,
   ) => Promise<CreateRestaurantResult>;
@@ -1854,6 +1870,41 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  const driverReportCashHandoffToRestaurant = useCallback(
+    (driverId: string, orderId: string) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          reportDriverCashHandoffToRestaurant(
+            baseState,
+            driverId,
+            orderId,
+            new Date().toISOString(),
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const restaurantConfirmDriverCashReceipt = useCallback(
+    (
+      restaurantId: string,
+      orderId: string,
+      workspaceRole: RestaurantWorkspaceRole,
+    ) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          confirmRestaurantDriverCashReceipt(
+            baseState,
+            restaurantId,
+            orderId,
+            workspaceRole,
+            new Date().toISOString(),
+          ),
+        infrastructureFailure: (error) => ({ ok: false, error, orderId: null }),
+      }),
+    [runSerializedActionMutation],
+  );
+
   const createRestaurantEntry = useCallback(
     (input: RestaurantFormInput) =>
       runSerializedActionMutation({
@@ -1975,6 +2026,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       refreshDriverOffers,
       driverAcceptOffer,
       driverDeclineOffer,
+      driverReportCashHandoffToRestaurant,
+      restaurantConfirmDriverCashReceipt,
       createRestaurantEntry,
       updateRestaurantEntry,
       setMenuItemVariants,
@@ -2050,6 +2103,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       refreshDriverOffers,
       driverAcceptOffer,
       driverDeclineOffer,
+      driverReportCashHandoffToRestaurant,
+      restaurantConfirmDriverCashReceipt,
       createRestaurantEntry,
       updateRestaurantEntry,
       setMenuItemVariants,

@@ -158,6 +158,14 @@
   overflow-wrap: anywhere;
 }
 
+/* Строка суммы к передаче ресторану в активном наличном заказе. */
+.cashHandoffLine {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 /* Текст листа подтверждения — сумма читается целиком, без обрезания. */
 .cashSheetText {
   margin: 0;

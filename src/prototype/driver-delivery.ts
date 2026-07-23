@@ -10,6 +10,15 @@ import type { ActionResult } from "./actions";
 import { applyDriverDeliveredOrder } from "./actions";
 import { finalizeMutation } from "./prototype-store";
 import { getDriverActiveOrder } from "./selectors";
+import { hasRestaurantConfirmedDriverCashHandoff } from "./platform-driver-cash-handoff";
+
+/** Поддерживаемый водителем канал: онлайн-оплаченный ЛИБО наличный заказ. */
+function isDriverDeliverableOrder(order: Order): boolean {
+  const online = order.paymentMethod === "ONLINE" && order.paymentStatus === "PAID";
+  const cash =
+    order.paymentMethod === "CASH" && order.paymentStatus === "CASH_ON_DELIVERY";
+  return online || cash;
+}
 
 /**
  * Рабочий путь назначенного водителя Direct по оплаченному онлайн-заказу (v18):
@@ -95,7 +104,7 @@ function guardDriverOrder(
   if (order.deliveryMode !== "PLATFORM_DRIVER") {
     return { ok: false, error: "Действие недоступно на текущем этапе заказа." };
   }
-  if (order.paymentMethod !== "ONLINE" || order.paymentStatus !== "PAID") {
+  if (!isDriverDeliverableOrder(order)) {
     return { ok: false, error: "Действие недоступно на текущем этапе заказа." };
   }
   if (order.assignedDriverId !== driverId) {
@@ -293,6 +302,13 @@ export function markDriverPickedUpOrder(
   if (order.status !== "READY") {
     return fail(state, "Действие недоступно на текущем этапе заказа.");
   }
+  // Наличный заказ нельзя забрать, пока ресторан не подтвердил получение денег.
+  if (
+    order.paymentMethod === "CASH" &&
+    !hasRestaurantConfirmedDriverCashHandoff(state, order)
+  ) {
+    return fail(state, "Ресторан ещё не подтвердил получение наличных.");
+  }
   return commitStep(
     state,
     order,
@@ -382,6 +398,11 @@ export function markDriverDeliveredOrder(
   if (order.status !== "ARRIVING") {
     return fail(state, "Действие недоступно на текущем этапе заказа.");
   }
+  // Наличная доставка ещё не завершается: получение денег от клиента —
+  // следующий отдельный микробатч. Fail-closed до его реализации.
+  if (order.paymentMethod === "CASH") {
+    return fail(state, "Получение наличных от клиента ещё не подтверждено.");
+  }
 
   // Единственный канонический завершитель: признаёт обязательства из снимка,
   // освобождает водителя на подтверждение зоны, не дублирует формулы.
@@ -421,9 +442,7 @@ export function resolveDriverDeliveryStage(
   const order = state.orders.find((o) => o.id === orderId);
   if (!driver || !order) return "REVIEW_REQUIRED";
   if (order.deliveryMode !== "PLATFORM_DRIVER") return "REVIEW_REQUIRED";
-  if (order.paymentMethod !== "ONLINE" || order.paymentStatus !== "PAID") {
-    return "REVIEW_REQUIRED";
-  }
+  if (!isDriverDeliverableOrder(order)) return "REVIEW_REQUIRED";
   if (order.assignedDriverId !== driverId) return "REVIEW_REQUIRED";
   if (driver.status !== "BUSY_DIRECT") return "REVIEW_REQUIRED";
   if (getDriverActiveOrder(state, driverId)?.id !== orderId) {

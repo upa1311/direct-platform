@@ -24,6 +24,7 @@ import { useOperatorOrderReadySound } from "@/components/operator/use-operator-o
 import { canPrintOperatorProductionTicket } from "@/components/operator/operator-production-print";
 import { SOUND_ACTIVATION_MESSAGE } from "@/components/kitchen/sound-preference";
 import { RestaurantMenuAvailabilityPanel } from "@/components/kitchen/restaurant-menu-availability-panel";
+import { RestaurantCashHandoffPanel } from "@/components/restaurant/restaurant-cash-handoff-panel";
 import { rememberMenuWorkspaceRole } from "@/components/menu/menu-workspace-context";
 import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
 import { useRestaurantWorkspace } from "@/components/workspaces/restaurant-workspace";
@@ -825,6 +826,8 @@ function OperatorOrderCard({
       ) : (
         <OperatorHandoffActions order={order} />
       )}
+      {/* Наличные водителя Direct: сумма и подтверждение получения (оператор). */}
+      <RestaurantCashHandoffPanel order={order} workspaceRole="OPERATOR" />
     </article>
   );
 }

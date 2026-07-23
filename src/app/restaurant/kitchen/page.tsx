@@ -9,6 +9,7 @@ import { formatMenuPortion } from "@/prototype/menu-catalog";
 import { HighValueCashOrderWarning } from "@/components/kitchen/high-value-cash-order-warning";
 import { useKitchenProductionTicketPrint } from "@/components/kitchen/kitchen-production-ticket-print";
 import { OperatorPackageLabelPrintButton } from "@/components/operator/operator-package-label-print";
+import { RestaurantCashHandoffPanel } from "@/components/restaurant/restaurant-cash-handoff-panel";
 import {
   defaultPrep,
   formatAutoClose,
@@ -797,6 +798,11 @@ function PreparingCard({
       ) : null}
       {/* Этап 6: кухня может сообщить о проблеме и во время приготовления. */}
       <PreparationProblemPanel order={order} isSplit={isSplit} />
+      {/* Наличные водителя Direct: подтверждение получения (COMBINED; кухне нет). */}
+      <RestaurantCashHandoffPanel
+        order={order}
+        workspaceRole={isSplit ? "KITCHEN" : "COMBINED"}
+      />
     </article>
   );
 }
@@ -1148,6 +1154,11 @@ function ReadyCard({
       {isPickup && !isSplit ? (
         <KitchenPickupHandoff order={order} nowMs={nowMs} />
       ) : null}
+      {/* Наличные водителя Direct: подтверждение получения (COMBINED; кухне нет). */}
+      <RestaurantCashHandoffPanel
+        order={order}
+        workspaceRole={isSplit ? "KITCHEN" : "COMBINED"}
+      />
     </article>
   );
 }

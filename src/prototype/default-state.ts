@@ -581,6 +581,7 @@ export function createDefaultState(): PrototypeState {
     driverOffers: [],
     // Append-only журнал шагов доставки — создаётся действиями водителя.
     driverDeliveryEvents: [],
+    platformDriverCashEvents: [],
     cart: createEmptyCart(),
     orders: [],
     settlements: [],

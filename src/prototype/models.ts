@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 20 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 21 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -381,6 +381,8 @@ export type RestaurantWorkspaceAction =
   | "MANAGE_CANCELLATION"
   | "MANAGE_DRIVER"
   | "HANDOFF_ORDER"
+  /** Подтверждение фактического получения наличных от водителя Direct (v21). */
+  | "CONFIRM_DRIVER_CASH_RECEIPT"
   | "PAUSE_RESTAURANT"
   /** Временное включение/выключение уже существующих блюд. */
   | "CHANGE_MENU_AVAILABILITY"
@@ -755,6 +757,36 @@ export interface PlatformDriverCashSnapshot {
   directReceivableFromDriverCents: number;
 }
 
+/**
+ * Тип append-only события физической передачи наличных ресторану (v21).
+ * DRIVER_REPORTED — водитель заявил, что передал сумму; RESTAURANT_CONFIRMED —
+ * ресторан подтвердил фактическое получение. Больше одного события каждого типа
+ * на заказ не создаётся.
+ */
+export type PlatformDriverCashEventType =
+  | "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF"
+  | "RESTAURANT_CONFIRMED_CASH_RECEIPT";
+
+/**
+ * Append-only аудит передачи наличных водителем ресторану (v21). Хранит только
+ * связь заказ↔водитель↔ресторан, тип, момент и audit-снимок суммы. amountCents —
+ * НЕ новый расчёт: он обязан точно совпадать со snapshot.restaurantHandoffCents.
+ * Клиентских данных, адреса, телефона, GPS, комментариев и банковских сумм здесь
+ * нет.
+ */
+export interface PlatformDriverCashEvent {
+  id: string;
+  orderId: string;
+  driverId: string;
+  restaurantId: string;
+  type: PlatformDriverCashEventType;
+  amountCents: number;
+  occurredAt: string;
+  actor: "DRIVER" | "RESTAURANT";
+  /** null для DRIVER-события; COMBINED|OPERATOR для RESTAURANT-подтверждения. */
+  restaurantWorkspaceRole: RestaurantWorkspaceRole | null;
+}
+
 export interface FinancialSnapshot {
   currencyCode: CurrencyCode;
   deliveryMode: DeliveryMode;
@@ -1023,6 +1055,8 @@ export interface PrototypeState {
   driverOffers: DriverOffer[];
   /** Append-only журнал шагов доставки назначенных водителей (v18). */
   driverDeliveryEvents: DriverDeliveryEvent[];
+  /** Append-only аудит передачи наличных водителем ресторану (v21). */
+  platformDriverCashEvents: PlatformDriverCashEvent[];
   cart: Cart;
   orders: Order[];
   settlements: SettlementEntry[];
