@@ -3,11 +3,11 @@ import { test } from "node:test";
 
 import {
   assignDriverToOrder,
-  markOrderDeliveredByDriverWithResult,
   goDriverOnline,
   reassignDriverForOrder,
   unassignDriverFromOrder,
 } from "./actions.ts";
+import { markDriverDeliveredOrder } from "./driver-delivery.ts";
 import { createDefaultState } from "./default-state.ts";
 import {
   getDriverActiveOrder,
@@ -87,6 +87,54 @@ function stateWith(
     s = withDriverStatus(s, id, st);
   }
   return s;
+}
+
+/**
+ * Завершение доставки Direct через единственный публичный identity-aware путь
+ * markDriverDeliveredOrder (compatibility-обход закрыт в repair split №2).
+ */
+function completeByAssignedDriver(
+  state: PrototypeState,
+  orderId: string,
+  driverId: string,
+) {
+  const ready: PrototypeState = {
+    ...state,
+    orders: state.orders.map((o) =>
+      o.id === orderId
+        ? ({ ...o, status: "ARRIVING", paymentStatus: "PAID" } as Order)
+        : o,
+    ),
+    drivers: state.drivers.map((d) =>
+      d.id === driverId
+        ? { ...d, status: "BUSY_DIRECT", currentZoneId: "zone-1" }
+        : d,
+    ),
+    driverDeliveryEvents: [
+      ...state.driverDeliveryEvents,
+      {
+        id: `de-pick-${orderId}`,
+        orderId,
+        driverId,
+        type: "ORDER_PICKED_UP",
+        occurredAt: "2026-07-22T10:00:00.000Z",
+        orderStatusBefore: "READY",
+        orderStatusAfter: "OUT_FOR_DELIVERY",
+      },
+      {
+        id: `de-arr-${orderId}`,
+        orderId,
+        driverId,
+        type: "ARRIVING_TO_CUSTOMER",
+        occurredAt: "2026-07-22T10:01:00.000Z",
+        orderStatusBefore: "OUT_FOR_DELIVERY",
+        orderStatusAfter: "ARRIVING",
+      },
+    ] as unknown as PrototypeState["driverDeliveryEvents"],
+  };
+  return markDriverDeliveredOrder(ready, driverId, orderId, "2026-07-22T10:02:00.000Z", {
+    cashCollectionConfirmed: false,
+  });
 }
 
 const statusOf = (state: PrototypeState, driverId: string): DriverStatus =>
@@ -216,7 +264,7 @@ test("после завершения единственного заказа в
     [order("A", { assignedDriverId: D1, status: "OUT_FOR_DELIVERY" })],
     { [D1]: "BUSY_DIRECT" },
   );
-  const res = markOrderDeliveredByDriverWithResult(state, "A");
+  const res = completeByAssignedDriver(state, "A", D1);
   assert.equal(res.result.ok, true, res.result.error ?? "");
   assert.equal(orderById(res.state, "A").status, "DELIVERED");
   assert.equal(

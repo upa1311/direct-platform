@@ -309,6 +309,10 @@ const PAYMENT_CHANNELS: readonly OrderPaymentChannel[] = [
   "CARD_AT_RESTAURANT",
   "CASH_AT_RESTAURANT",
   "CASH_TO_RESTAURANT_COURIER",
+  // v24: наличные водителю Direct — валидный сохранённый канал (иначе движение
+  // наличного заказа не переживало бы serialize → parse, а вместе с ним терялись
+  // бы заработок водителя и обязательство ресторана).
+  "CASH_TO_PLATFORM_DRIVER",
 ];
 
 function isCents(value: unknown): value is number {
@@ -366,6 +370,12 @@ export interface MoneyMovementRecoveryContext {
   pickupPaidWith: "CASH" | "CARD" | null;
   /** Самовывоз фактически оплачен/выдан (клиент уже платил). */
   pickupSettled: boolean;
+  /**
+   * v24: наличный заказ доставки водителем Direct. Тогда ожидаемый канал —
+   * CASH_TO_PLATFORM_DRIVER (а не онлайн-карта): способ оплаты определяет канал,
+   * который иначе не выводится из режима сбора платежей.
+   */
+  platformDriverCash?: boolean;
 }
 
 /**
@@ -414,6 +424,10 @@ function expectedChannel(
     return context.pickupPaidWith !== null
       ? pickupChannelForPaidWith(context.pickupPaidWith)
       : null;
+  }
+  // v24: наличный заказ водителя Direct — канал определяется способом оплаты.
+  if (deliveryMode === "PLATFORM_DRIVER" && context.platformDriverCash) {
+    return "CASH_TO_PLATFORM_DRIVER";
   }
   return knownChannelForMode(deliveryMode, collectionMode);
 }
@@ -560,6 +574,9 @@ export function recoverMoneyMovement(
     } else {
       return { moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" };
     }
+  } else if (sums.deliveryMode === "PLATFORM_DRIVER" && context.platformDriverCash) {
+    // v24: наличный заказ водителя Direct — канал по способу оплаты.
+    channel = "CASH_TO_PLATFORM_DRIVER";
   } else {
     channel = knownChannelForMode(
       sums.deliveryMode,

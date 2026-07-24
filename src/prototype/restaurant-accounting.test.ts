@@ -20,10 +20,10 @@ import {
   addCartItem,
   completePickupWithCode,
   createOrderFromCart,
-  markOrderDeliveredByDriverWithResult,
   markOrderDeliveredWithResult,
   setCartFulfillmentChoice,
 } from "./actions.ts";
+import { markDriverDeliveredOrder } from "./driver-delivery.ts";
 import { createDefaultState } from "./default-state.ts";
 import { parseStoredState } from "./prototype-store.ts";
 import { PROTOTYPE_SCHEMA_VERSION } from "./models.ts";
@@ -39,6 +39,50 @@ import type {
 } from "./models.ts";
 
 const RESTAURANT_ID = "restaurant-1";
+
+/**
+ * Завершение доставки Direct через единственный публичный identity-aware путь
+ * markDriverDeliveredOrder (compatibility-обход закрыт в repair split №2):
+ * назначенный водитель BUSY_DIRECT, полный журнал получения/подъезда, доставка.
+ */
+function completeByAssignedDriver(
+  state: PrototypeState,
+  orderId: string,
+  driverId: string,
+) {
+  const ready: PrototypeState = {
+    ...state,
+    drivers: state.drivers.map((d) =>
+      d.id === driverId
+        ? { ...d, status: "BUSY_DIRECT", currentZoneId: "zone-1" }
+        : d,
+    ),
+    driverDeliveryEvents: [
+      ...state.driverDeliveryEvents,
+      {
+        id: `de-pick-${orderId}`,
+        orderId,
+        driverId,
+        type: "ORDER_PICKED_UP",
+        occurredAt: "2026-07-17T09:40:00.000Z",
+        orderStatusBefore: "READY",
+        orderStatusAfter: "OUT_FOR_DELIVERY",
+      },
+      {
+        id: `de-arr-${orderId}`,
+        orderId,
+        driverId,
+        type: "ARRIVING_TO_CUSTOMER",
+        occurredAt: "2026-07-17T09:45:00.000Z",
+        orderStatusBefore: "OUT_FOR_DELIVERY",
+        orderStatusAfter: "ARRIVING",
+      },
+    ] as unknown as PrototypeState["driverDeliveryEvents"],
+  };
+  return markDriverDeliveredOrder(ready, driverId, orderId, "2026-07-17T09:50:00.000Z", {
+    cashCollectionConfirmed: false,
+  });
+}
 
 const TEMPLATE_ORDER = (() => {
   let s = createDefaultState();
@@ -654,7 +698,7 @@ test("orders, financials и старые settlements не мутируются; 
   const settlementsRef = st.settlements;
   const finRef = order.financials;
 
-  const res = markOrderDeliveredByDriverWithResult(st, "arr");
+  const res = completeByAssignedDriver(st, "arr", "driver-1");
   assert.equal(res.result.ok, true, res.result.error ?? "");
   // Атомарно создано обязательство выплаты Direct → ресторану.
   const created = res.state.restaurantAccountingEntries.filter((e) => e.orderId === "arr");

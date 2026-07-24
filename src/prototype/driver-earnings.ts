@@ -4,7 +4,7 @@ import type {
   Order,
   PrototypeState,
 } from "./models";
-import { getPlatformDriverCashSnapshot } from "./selectors";
+import { getPlatformDriverCashSnapshot, getDriverActiveOrder } from "./selectors";
 import { computeCompletedOrderAccounting } from "./restaurant-accounting";
 import {
   customerCashCollectionEventId,
@@ -136,10 +136,13 @@ function baseEarningContext(
  * Запись заработка для ПОДГОТОВЛЕННОГО (ещё не финализированного) завершения.
  * Признаётся ровно один раз при переходе ARRIVING → DELIVERED.
  *
- * ONLINE: проверяются экономические инварианты завершаемого онлайн-заказа
- * (PLATFORM_DRIVER, ONLINE, PAID, положительная выплата). Хронология рабочего
- * пути водителя (получение заказа, подъезд) обеспечивается identity-aware guard
- * доменного действия доставки, а не дублируется здесь.
+ * ONLINE: builder САМ fail-closed доказывает полный lifecycle (repair split №2),
+ * не полагаясь на внешний action: заказ ARRIVING (не OUT_FOR_DELIVERY), водитель
+ * BUSY_DIRECT и это его активный заказ, ровно одно ORDER_PICKED_UP
+ * (READY→OUT_FOR_DELIVERY) и одно ARRIVING_TO_CUSTOMER (OUT_FOR_DELIVERY→ARRIVING)
+ * ИМЕННО этого водителя, ноль ORDER_DELIVERED, валидная хронология
+ * pickup ≤ arriving ≤ nowIso. События другого водителя доказательством не служат;
+ * дубли одного типа — fail-closed (точное количество через filter, без find).
  *
  * CASH: сначала переиспользуется полная prepared-проверка наличного завершения
  * (validatePreparedPlatformDriverCashCompletion), затем строго сверяются
@@ -163,10 +166,59 @@ export function buildPreparedDriverEarningEntry(
 
   if (order.paymentMethod === "ONLINE") {
     if (order.paymentStatus !== "PAID") return fail();
-    // Пред-завершающий статус доставки водителем Direct.
-    if (order.status !== "ARRIVING" && order.status !== "OUT_FOR_DELIVERY") {
+    // §7: только ARRIVING — завершение без шага «Я подъезжаю» запрещено.
+    if (order.status !== "ARRIVING") return fail();
+
+    // Идентичность и активный заказ проверяются на свежем state.
+    const driver = state.drivers.find((d) => d.id === driverId);
+    if (!driver || driver.status !== "BUSY_DIRECT") return fail();
+    if (getDriverActiveOrder(state, driverId)?.id !== order.id) return fail();
+
+    // Полное доказательство рабочего пути ИМЕННО этого водителя: точное
+    // количество событий (filter, не find), точные переходы статусов.
+    const picked = state.driverDeliveryEvents.filter(
+      (e) =>
+        e.orderId === order.id &&
+        e.driverId === driverId &&
+        e.type === "ORDER_PICKED_UP",
+    );
+    const arriving = state.driverDeliveryEvents.filter(
+      (e) =>
+        e.orderId === order.id &&
+        e.driverId === driverId &&
+        e.type === "ARRIVING_TO_CUSTOMER",
+    );
+    const delivered = state.driverDeliveryEvents.filter(
+      (e) =>
+        e.orderId === order.id &&
+        e.driverId === driverId &&
+        e.type === "ORDER_DELIVERED",
+    );
+    if (picked.length !== 1 || arriving.length !== 1 || delivered.length !== 0) {
       return fail();
     }
+    if (
+      picked[0].orderStatusBefore !== "READY" ||
+      picked[0].orderStatusAfter !== "OUT_FOR_DELIVERY"
+    ) {
+      return fail();
+    }
+    if (
+      arriving[0].orderStatusBefore !== "OUT_FOR_DELIVERY" ||
+      arriving[0].orderStatusAfter !== "ARRIVING"
+    ) {
+      return fail();
+    }
+
+    // Хронология: pickup ≤ arriving ≤ nowIso (равное время разрешено).
+    if (!isValidIso(picked[0].occurredAt) || !isValidIso(arriving[0].occurredAt)) {
+      return fail();
+    }
+    const pickedMs = Date.parse(picked[0].occurredAt);
+    const arrivingMs = Date.parse(arriving[0].occurredAt);
+    const nowMs = Date.parse(nowIso);
+    if (!(pickedMs <= arrivingMs && arrivingMs <= nowMs)) return fail();
+
     return {
       ok: true,
       entry: makeEntry(order, driverId, driverPayoutCents, "DIRECT_PAYOUT_DUE", nowIso),

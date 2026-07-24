@@ -418,11 +418,13 @@ test("47: DELIVERED CASH без collection event — не no-op, а review", () 
   assert.equal(r.state, broken);
 });
 
-test("48: compatibility-завершение блокирует CASH-заказ", () => {
+test("48: compatibility-завершение блокирует PLATFORM_DRIVER-заказ", () => {
+  // repair split №2: compatibility-путь закрыт для ЛЮБОГО PLATFORM_DRIVER-заказа
+  // (обход единственного identity-aware завершителя устранён).
   const cash = cashState();
   const rc = markOrderDeliveredByDriverWithResult(cash, ORDER);
   assert.equal(rc.result.ok, false);
-  assert.equal(rc.result.error, "Неподдерживаемый способ оплаты для этого завершения.");
+  assert.equal(rc.result.error, "Этот этап отмечает назначенный водитель Direct.");
   assert.equal(rc.state, cash);
   // CASH-заказ через этот путь не завершается даже частично.
   assert.equal(theOrder(rc.state).status, "ARRIVING");

@@ -545,6 +545,9 @@ function normalizeOrder(
         (safeStatus === "PICKED_UP" ||
           raw.paymentStatus === "PAID_AT_RESTAURANT" ||
           raw.pickupCodeUsed === true),
+      // v24: наличный заказ водителя Direct — ожидаемый канал по способу оплаты.
+      platformDriverCash:
+        deliveryMode === "PLATFORM_DRIVER" && paymentMethod === "CASH",
     }),
     history,
     etaAdjustments,

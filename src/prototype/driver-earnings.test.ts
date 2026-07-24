@@ -34,6 +34,8 @@ import {
   driverCashHandoffReportEventId,
   restaurantCashReceiptEventId,
 } from "./platform-driver-cash-handoff.ts";
+import { markOrderDeliveredByDriverWithResult } from "./actions.ts";
+import { FINANCIAL_RULES } from "./financial-rule.ts";
 
 /**
  * CASH DIRECT — split №2: единый журнал заработка водителя. Заработок — из снимка
@@ -118,10 +120,18 @@ function cashState(opts: CashOpts = {}): PrototypeState {
     financials: {
       currencyCode: "USD",
       customerZoneId: "zone-1",
+      // Полный снимок сумм (v24): наличное движение переживает serialize → parse
+      // только при подтверждённых суммах и правиле заказа.
+      foodSubtotalCents: 700,
+      deliveryFeeCents: 300,
+      smallOrderFeeCents: 0,
+      restaurantCommissionCents: 100,
       customerTotalCents: 1000,
       restaurantPayoutBeforeBankFeeCents: 600,
       driverPayoutCents: 300,
       platformGrossRevenueCents: 100,
+      financialRule: FINANCIAL_RULES.DIRECT_FINANCIAL_RULE_V1,
+      financialCollectionMode: "MIXED_COLLECTION",
       platformDriverCash: opts.snapshot === undefined ? SNAPSHOT : opts.snapshot,
       moneyMovementStatus: "COMPLETE",
       moneyMovement: opts.movement === undefined ? MOVEMENT : opts.movement,
@@ -276,13 +286,25 @@ function onlineAssigned(): { state: PrototypeState; orderId: string } {
   return { state: s, orderId };
 }
 
-/** Онлайн-заказ, доведённый до ARRIVING полным рабочим путём водителя. */
-function onlineArriving(): { state: PrototypeState; orderId: string } {
+/** Онлайн-заказ в OUT_FOR_DELIVERY (получен, но подъезд ещё не отмечен). */
+function onlineOutForDelivery(): { state: PrototypeState; orderId: string } {
   const { state, orderId } = onlineAssigned();
   let s = markDriverArrivedAtRestaurant(state, DRIVER, orderId, T2).state;
   s = markDriverPickedUpOrder(s, DRIVER, orderId, T4).state;
-  s = markDriverArrivingToCustomer(s, DRIVER, orderId, T5).state;
   return { state: s, orderId };
+}
+
+/** Онлайн-заказ, доведённый до ARRIVING полным рабочим путём водителя. */
+function onlineArriving(): { state: PrototypeState; orderId: string } {
+  const { state, orderId } = onlineOutForDelivery();
+  const s = markDriverArrivingToCustomer(state, DRIVER, orderId, T5).state;
+  return { state: s, orderId };
+}
+
+function findOrder(state: PrototypeState, orderId: string): Order {
+  const order = state.orders.find((o) => o.id === orderId);
+  assert.ok(order);
+  return order;
 }
 
 /** Успешно завершённый онлайн-заказ. */
@@ -638,4 +660,242 @@ test("75–90: чистый домен, без payout-событий и выпл
   for (const source of [src, readFileSync("src/prototype/models.ts", "utf8")]) {
     assert.ok(!source.includes("DriverPayoutEvent"));
   }
+});
+
+// --- repair split №2: закрытый compatibility-обход ----------------------------
+
+test("bypass: compat-action fail-closed для ONLINE OUT_FOR_DELIVERY", () => {
+  const { state, orderId } = onlineOutForDelivery();
+  const r = markOrderDeliveredByDriverWithResult(state, orderId);
+  assert.equal(r.result.ok, false);
+  assert.equal(r.result.error, "Этот этап отмечает назначенный водитель Direct.");
+  assert.equal(r.state, state);
+  assert.equal(r.state.revision, state.revision);
+  assert.equal(findOrder(r.state, orderId).status, "OUT_FOR_DELIVERY");
+  assert.equal(
+    r.state.driverDeliveryEvents.filter(
+      (e) => e.orderId === orderId && e.type === "ORDER_DELIVERED",
+    ).length,
+    0,
+  );
+  assert.equal(r.state.driverEarningEntries.length, 0);
+  assert.equal(
+    r.state.restaurantAccountingEntries.filter((e) => e.orderId === orderId).length,
+    0,
+  );
+  assert.equal(r.state.drivers.find((d) => d.id === DRIVER)?.status, "BUSY_DIRECT");
+});
+
+test("bypass: compat-action fail-closed даже для валидного ONLINE ARRIVING", () => {
+  const { state, orderId } = onlineArriving();
+  const r = markOrderDeliveredByDriverWithResult(state, orderId);
+  assert.equal(r.result.ok, false);
+  assert.equal(r.result.error, "Этот этап отмечает назначенный водитель Direct.");
+  assert.equal(r.state, state);
+  assert.equal(r.state.revision, state.revision);
+  assert.equal(findOrder(r.state, orderId).status, "ARRIVING");
+  assert.equal(
+    r.state.driverDeliveryEvents.filter(
+      (e) => e.orderId === orderId && e.type === "ORDER_DELIVERED",
+    ).length,
+    0,
+  );
+  assert.equal(r.state.driverEarningEntries.length, 0);
+  assert.equal(
+    r.state.restaurantAccountingEntries.filter((e) => e.orderId === orderId).length,
+    0,
+  );
+  assert.equal(r.state.drivers.find((d) => d.id === DRIVER)?.status, "BUSY_DIRECT");
+});
+
+// --- §12: prepared ONLINE отклоняет неполноценный lifecycle -------------------
+
+test("prepared ONLINE: полный набор негативных проверок lifecycle", () => {
+  const NOW = "2026-07-22T10:11:00.000Z";
+  const { state: s0, orderId: oid } = onlineArriving();
+  const ok = buildPreparedDriverEarningEntry(s0, findOrder(s0, oid), NOW);
+  assert.equal(ok.ok, true, ok.ok ? "" : ok.error);
+  if (ok.ok) assert.equal(ok.entry.mode, "DIRECT_PAYOUT_DUE");
+
+  const setOrder = (patch: Partial<Order>): PrototypeState => ({
+    ...s0,
+    orders: s0.orders.map((o) => (o.id === oid ? { ...o, ...patch } : o)),
+  });
+  const mapEvents = (
+    fn: (es: PrototypeState["driverDeliveryEvents"]) => unknown[],
+  ): PrototypeState =>
+    ({
+      ...s0,
+      driverDeliveryEvents: fn(
+        s0.driverDeliveryEvents,
+      ) as PrototypeState["driverDeliveryEvents"],
+    }) as PrototypeState;
+  const ev = (type: string) =>
+    s0.driverDeliveryEvents.find(
+      (e) => e.orderId === oid && e.driverId === DRIVER && e.type === type,
+    )!;
+  const reject = (state: PrototypeState, label: string, nowIso = NOW) =>
+    assert.equal(
+      buildPreparedDriverEarningEntry(state, findOrder(state, oid), nowIso).ok,
+      false,
+      label,
+    );
+
+  reject(setOrder({ status: "OUT_FOR_DELIVERY" }), "OUT_FOR_DELIVERY");
+  reject(setOrder({ status: "PREPARING" }), "PREPARING");
+  reject(
+    mapEvents((es) => es.filter((e) => e.type !== "ORDER_PICKED_UP")),
+    "нет pickup",
+  );
+  reject(
+    mapEvents((es) => [...es, { ...ev("ORDER_PICKED_UP"), id: "dup-pick" }]),
+    "два pickup",
+  );
+  reject(
+    mapEvents((es) => es.filter((e) => e.type !== "ARRIVING_TO_CUSTOMER")),
+    "нет arriving",
+  );
+  reject(
+    mapEvents((es) => [...es, { ...ev("ARRIVING_TO_CUSTOMER"), id: "dup-arr" }]),
+    "два arriving",
+  );
+  reject(
+    mapEvents((es) => [
+      ...es,
+      {
+        ...ev("ARRIVING_TO_CUSTOMER"),
+        id: "deliv",
+        type: "ORDER_DELIVERED",
+        orderStatusBefore: "ARRIVING",
+        orderStatusAfter: "DELIVERED",
+      },
+    ]),
+    "уже есть delivered",
+  );
+  reject(
+    mapEvents((es) =>
+      es.map((e) =>
+        e.type === "ORDER_PICKED_UP" || e.type === "ARRIVING_TO_CUSTOMER"
+          ? { ...e, driverId: OTHER }
+          : e,
+      ),
+    ),
+    "события другого водителя",
+  );
+  reject(
+    mapEvents((es) =>
+      es.map((e) =>
+        e.type === "ORDER_PICKED_UP" ? { ...e, orderStatusBefore: "PREPARING" } : e,
+      ),
+    ),
+    "pickup неверный before",
+  );
+  reject(
+    mapEvents((es) =>
+      es.map((e) =>
+        e.type === "ARRIVING_TO_CUSTOMER" ? { ...e, orderStatusAfter: "DELIVERED" } : e,
+      ),
+    ),
+    "arriving неверный after",
+  );
+  reject(
+    mapEvents((es) =>
+      es.map((e) => (e.type === "ORDER_PICKED_UP" ? { ...e, occurredAt: "не-дата" } : e)),
+    ),
+    "pickup невалидный ISO",
+  );
+  reject(
+    mapEvents((es) =>
+      es.map((e) =>
+        e.type === "ARRIVING_TO_CUSTOMER" ? { ...e, occurredAt: "не-дата" } : e,
+      ),
+    ),
+    "arriving невалидный ISO",
+  );
+  reject(
+    mapEvents((es) =>
+      es.map((e) =>
+        e.type === "ORDER_PICKED_UP"
+          ? { ...e, occurredAt: "2026-07-22T10:30:00.000Z" }
+          : e,
+      ),
+    ),
+    "pickup позже arriving",
+  );
+  reject(
+    { ...s0, drivers: s0.drivers.map((d) => (d.id === DRIVER ? { ...d, status: "AVAILABLE" } : d)) },
+    "водитель не BUSY_DIRECT",
+  );
+  reject(
+    {
+      ...s0,
+      orders: [
+        { ...findOrder(s0, oid), id: "other-active", status: "OUT_FOR_DELIVERY" },
+        ...s0.orders,
+      ],
+    },
+    "активный заказ водителя другой",
+  );
+  reject(s0, "nowIso раньше arriving", "2026-07-22T10:08:00.000Z");
+});
+
+// --- §13: позитивный ONLINE ---------------------------------------------------
+
+test("prepared ONLINE позитив: DIRECT_PAYOUT_DUE, сумма и recognizedAt", () => {
+  const NOW = "2026-07-22T10:11:00.000Z";
+  const { state, orderId } = onlineArriving();
+  const order = findOrder(state, orderId);
+  const built = buildPreparedDriverEarningEntry(state, order, NOW);
+  assert.equal(built.ok, true, built.ok ? "" : built.error);
+  if (!built.ok) return;
+  assert.equal(built.entry.mode, "DIRECT_PAYOUT_DUE");
+  assert.equal(built.entry.amountCents, order.financials.driverPayoutCents);
+  assert.equal(built.entry.recognizedAt, NOW);
+});
+
+// --- §10: round-trip integrity ------------------------------------------------
+
+test("round-trip ONLINE: earning + accounting + ORDER_DELIVERED переживают parse", () => {
+  const { state, orderId } = onlineCompleted();
+  const parsed = parseStoredState(JSON.stringify(state));
+  assert.ok(parsed);
+  const o = findOrder(parsed, orderId);
+  assert.equal(o.status, "DELIVERED");
+  const delivered = parsed.driverDeliveryEvents.filter(
+    (e) => e.orderId === orderId && e.type === "ORDER_DELIVERED",
+  );
+  assert.equal(delivered.length, 1);
+  const earnings = parsed.driverEarningEntries.filter((e) => e.orderId === orderId);
+  assert.equal(earnings.length, 1);
+  assert.equal(earnings[0].mode, "DIRECT_PAYOUT_DUE");
+  assert.equal(earnings[0].amountCents, o.financials.driverPayoutCents);
+  assert.equal(earnings[0].recognizedAt, delivered[0].occurredAt);
+  assert.equal(
+    parsed.restaurantAccountingEntries.filter((e) => e.orderId === orderId).length,
+    1,
+  );
+});
+
+test("round-trip CASH: CASH_RETAINED + RESTAURANT_REMITTANCE + ORDER_DELIVERED переживают parse", () => {
+  const state = cashCompleted();
+  const ledgerBefore = state.driverCashLedgerEntries.length;
+  const parsed = parseStoredState(JSON.stringify(state));
+  assert.ok(parsed);
+  const o = findOrder(parsed, ORDER);
+  assert.equal(o.status, "DELIVERED");
+  assert.equal(
+    parsed.driverDeliveryEvents.filter(
+      (e) => e.orderId === ORDER && e.type === "ORDER_DELIVERED",
+    ).length,
+    1,
+  );
+  const earnings = parsed.driverEarningEntries.filter((e) => e.orderId === ORDER);
+  assert.equal(earnings.length, 1);
+  assert.equal(earnings[0].mode, "CASH_RETAINED");
+  assert.equal(earnings[0].amountCents, SNAPSHOT.driverEarningCents);
+  const acc = parsed.restaurantAccountingEntries.filter((e) => e.orderId === ORDER);
+  assert.equal(acc.length, 1);
+  assert.equal(acc[0].type, "RESTAURANT_REMITTANCE");
+  assert.equal(acc[0].amountCents, SNAPSHOT.restaurantOwesDirectCents);
+  assert.equal(parsed.driverCashLedgerEntries.length, ledgerBefore);
 });

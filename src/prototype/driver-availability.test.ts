@@ -8,13 +8,13 @@ import {
   confirmDriverZone,
   goDriverOffline,
   goDriverOnline,
-  markOrderDeliveredByDriverWithResult,
   pauseDriver,
   reassignDriverForOrder,
   resumeDriver,
   setDriverAvailability,
   unassignDriverFromOrder,
 } from "./actions.ts";
+import { markDriverDeliveredOrder } from "./driver-delivery.ts";
 import { createDefaultState } from "./default-state.ts";
 import { PROTOTYPE_SCHEMA_VERSION } from "./models.ts";
 import { parseStoredState } from "./prototype-store.ts";
@@ -107,6 +107,51 @@ function order(id: string, overrides: Partial<Order> = {}): Order {
     },
     ...overrides,
   } as unknown as Order;
+}
+
+/**
+ * Завершение доставки Direct через единственный публичный identity-aware путь
+ * markDriverDeliveredOrder (compatibility-обход закрыт в repair split №2): заказ
+ * доводится до ARRIVING, добавляется журнал получения/подъезда назначенного
+ * водителя, затем доставка.
+ */
+function completeByAssignedDriver(
+  state: PrototypeState,
+  orderId: string,
+  driverId: string,
+) {
+  const ready: PrototypeState = {
+    ...state,
+    orders: state.orders.map((o) =>
+      o.id === orderId
+        ? ({ ...o, status: "ARRIVING", paymentStatus: "PAID" } as Order)
+        : o,
+    ),
+    driverDeliveryEvents: [
+      ...state.driverDeliveryEvents,
+      {
+        id: `de-pick-${orderId}`,
+        orderId,
+        driverId,
+        type: "ORDER_PICKED_UP",
+        occurredAt: "2026-07-22T10:00:00.000Z",
+        orderStatusBefore: "READY",
+        orderStatusAfter: "OUT_FOR_DELIVERY",
+      },
+      {
+        id: `de-arr-${orderId}`,
+        orderId,
+        driverId,
+        type: "ARRIVING_TO_CUSTOMER",
+        occurredAt: "2026-07-22T10:01:00.000Z",
+        orderStatusBefore: "OUT_FOR_DELIVERY",
+        orderStatusAfter: "ARRIVING",
+      },
+    ] as unknown as PrototypeState["driverDeliveryEvents"],
+  };
+  return markDriverDeliveredOrder(ready, driverId, orderId, "2026-07-22T10:02:00.000Z", {
+    cashCollectionConfirmed: false,
+  });
 }
 
 /** Состояние с заданными заказами и явно выставленными полями водителей. */
@@ -494,7 +539,7 @@ test("27: после доставки водитель обязан подтве
     [order("A", { assignedDriverId: D1, status: "OUT_FOR_DELIVERY" })],
     { [D1]: { status: "BUSY_DIRECT", currentZoneId: Z1 } },
   );
-  const res = markOrderDeliveredByDriverWithResult(state, "A");
+  const res = completeByAssignedDriver(state, "A", D1);
   assert.equal(res.result.ok, true, res.result.error ?? "");
   assert.equal(statusOf(res.state, D1), "ZONE_CONFIRMATION_REQUIRED");
   // Предложений он не получает, пока зона не подтверждена.
@@ -521,7 +566,7 @@ test("28: после доставки предлагается зона клие
     ],
     { [D1]: { status: "BUSY_DIRECT", currentZoneId: Z1 } },
   );
-  const res = markOrderDeliveredByDriverWithResult(state, "A");
+  const res = completeByAssignedDriver(state, "A", D1);
   assert.equal(res.result.ok, true, res.result.error ?? "");
   const driver = driverOf(res.state, D1);
   assert.equal(driver.suggestedZoneId, "zone-4", "предложена зона клиента");
@@ -685,7 +730,7 @@ test("37: ресторанные расчёты и финансовые моду
     { [D1]: { status: "BUSY_DIRECT", currentZoneId: Z1 } },
   );
   const before = state.restaurantAccountingEntries.length;
-  const res = markOrderDeliveredByDriverWithResult(state, "A");
+  const res = completeByAssignedDriver(state, "A", D1);
   assert.equal(res.result.ok, true);
   // REVIEW_REQUIRED-снимок обязательств не создаёт — и это не регрессия.
   assert.equal(res.state.restaurantAccountingEntries.length, before);

@@ -7,11 +7,11 @@ import {
   addCartItem,
   completePickupAtRestaurant,
   createOrderFromCart,
-  markOrderDeliveredByDriverWithResult,
   markOrderReady,
   setCartFulfillmentChoice,
   updateCartAddress,
 } from "./actions.ts";
+import { markDriverDeliveredOrder } from "./driver-delivery.ts";
 import { createDefaultState } from "./default-state.ts";
 import type {
   FinancialSnapshot,
@@ -69,6 +69,49 @@ function stateWithMode(
 }
 
 /** Завершённый доставкой Direct заказ ресторана-2. */
+/**
+ * Завершение доставки Direct через единственный публичный identity-aware путь
+ * markDriverDeliveredOrder (compatibility-обход закрыт в repair split №2).
+ */
+function completeByAssignedDriver(
+  state: PrototypeState,
+  orderId: string,
+  driverId: string,
+) {
+  const ready: PrototypeState = {
+    ...state,
+    drivers: state.drivers.map((d) =>
+      d.id === driverId
+        ? { ...d, status: "BUSY_DIRECT", currentZoneId: "zone-2" }
+        : d,
+    ),
+    driverDeliveryEvents: [
+      ...state.driverDeliveryEvents,
+      {
+        id: `de-pick-${orderId}`,
+        orderId,
+        driverId,
+        type: "ORDER_PICKED_UP",
+        occurredAt: "2026-07-22T10:00:00.000Z",
+        orderStatusBefore: "READY",
+        orderStatusAfter: "OUT_FOR_DELIVERY",
+      },
+      {
+        id: `de-arr-${orderId}`,
+        orderId,
+        driverId,
+        type: "ARRIVING_TO_CUSTOMER",
+        occurredAt: "2026-07-22T10:01:00.000Z",
+        orderStatusBefore: "OUT_FOR_DELIVERY",
+        orderStatusAfter: "ARRIVING",
+      },
+    ] as unknown as PrototypeState["driverDeliveryEvents"],
+  };
+  return markDriverDeliveredOrder(ready, driverId, orderId, "2026-07-22T10:02:00.000Z", {
+    cashCollectionConfirmed: false,
+  });
+}
+
 function driverCompleted(mode: RestaurantFinancialCollectionMode): {
   state: PrototypeState;
   orderId: string;
@@ -85,7 +128,7 @@ function driverCompleted(mode: RestaurantFinancialCollectionMode): {
     assignedDriverId: "driver-1",
     driverAssignedAt: new Date().toISOString(),
   }));
-  const res = markOrderDeliveredByDriverWithResult(prepared, orderId);
+  const res = completeByAssignedDriver(prepared, orderId, "driver-1");
   assert.equal(res.result.error, null);
   return { state: res.state, orderId };
 }

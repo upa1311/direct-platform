@@ -4472,17 +4472,25 @@ export function unassignDriverFromOrder(
 }
 
 /**
- * Единственный канонический завершитель доставки водителем Direct
- * (ARRIVING/OUT_FOR_DELIVERY → DELIVERED). Возвращает НЕ финализированное
- * состояние (без bump ревизии), чтобы вызывающий мог в той же мутации добавить
- * свои поля (например, событие журнала) и финализировать один раз.
+ * Внутренний нефинализированный helper завершения доставки водителем Direct
+ * (ARRIVING → DELIVERED). НЕ самостоятельный публичный completion workflow:
+ * единственный публичный завершитель — markDriverDeliveredOrder, который вызывает
+ * этот helper и ОБЯЗАН в той же финальной мутации добавить событие ORDER_DELIVERED
+ * (helper его НЕ создаёт — иначе возникло бы второе событие). Возвращает НЕ
+ * финализированное состояние (без bump ревизии), чтобы вызывающий добавил свои
+ * поля и финализировал один раз.
+ *
+ * После усиления prepared-проверки (repair split №2) helper не пройдёт без полного
+ * доказательства lifecycle: BUSY_DIRECT, активный заказ водителя, ровно одно
+ * ORDER_PICKED_UP и ARRIVING_TO_CUSTOMER, корректная хронология и статус ARRIVING
+ * (для ONLINE) либо полная prepared-проверка наличного завершения (для CASH).
  *
  * Обязательства ресторана признаются ТОЛЬКО из канонического движения денег
  * снимка через computeCompletedOrderAccounting — формулы не копируются; при
  * противоречии существующим записям — fail-closed до мутации. Заработок водителя
- * признаётся ровно один раз в той же мутации через buildPreparedDriverEarningEntry
- * (ONLINE → DIRECT_PAYOUT_DUE, CASH → CASH_RETAINED). Назначенный водитель уходит
- * на подтверждение зоны с предложенной зоной клиента (не становится доступным).
+ * признаётся ровно один раз через buildPreparedDriverEarningEntry (ONLINE →
+ * DIRECT_PAYOUT_DUE, CASH → CASH_RETAINED). Назначенный водитель уходит на
+ * подтверждение зоны с предложенной зоной клиента (не становится доступным).
  *
  * v24: единая атомарная последовательность для ONLINE и CASH. Наличный заказ
  * больше НЕ обходит бухгалтерию: ресторан получил наличные от водителя и
@@ -4560,66 +4568,49 @@ export function applyDriverDeliveredOrder(
 }
 
 /**
- * Завершение доставки заказа водителем Direct (PLATFORM_DRIVER). Оплата уже
- * ONLINE (PAID), поэтому финансы и settlement не затрагиваются; назначенный
- * водитель освобождается.
+ * Закрытый compatibility-путь завершения PLATFORM_DRIVER (v24, repair split №2).
  *
- * v18: рабочий путь водителя идёт через identity-aware markDriverDeliveredOrder
- * (см. driver-delivery.ts). Эта функция остаётся каноническим завершителем и
- * переиспользует общий applyDriverDeliveredOrder; в UI напрямую она больше не
- * доступна (провайдерский driverless-обход убран).
+ * Раньше эта функция сама вызывала applyDriverDeliveredOrder и переводила заказ в
+ * DELIVERED, создавая DriverEarningEntry и обязательство ресторана, но НЕ добавляя
+ * обязательное событие ORDER_DELIVERED. Такое состояние противоречиво: после
+ * serialize → parse нормализатор удаляет заработок (completed-валидатор требует
+ * ровно одно ORDER_DELIVERED). Это был обход единственного identity-aware
+ * завершителя.
+ *
+ * Теперь единственный публичный завершитель доставки водителем Direct —
+ * markDriverDeliveredOrder (см. driver-delivery.ts): только он атомарно создаёт
+ * DELIVERED + ORDER_DELIVERED + историю + заработок + обязательство ресторана +
+ * освобождение водителя за один рост ревизии. Этот compatibility-action больше
+ * не завершает PLATFORM_DRIVER-заказ ни при каком статусе: он fail-closed и не
+ * мутирует state (не ищет driverId, не вызывает markDriverDeliveredOrder, не
+ * создаёт ORDER_DELIVERED, не «чинит» старые данные). Экспорт сохранён ради
+ * существующих импортов.
  */
 export function markOrderDeliveredByDriverWithResult(
   state: PrototypeState,
   orderId: string,
 ): ActionResult<OrderTransitionResult> {
-  const fail = (error: string): ActionResult<OrderTransitionResult> => ({
-    state,
-    result: { ok: false, error },
-  });
   const order = state.orders.find((o) => o.id === orderId);
-  // §3: завершение только для оплаченного PLATFORM_DRIVER-заказа с назначенным
-  // водителем и только из OUT_FOR_DELIVERY/ARRIVING (не из PREPARING).
   if (!order) {
-    return fail("Заказ не найден.");
+    return { state, result: { ok: false, error: "Заказ не найден." } };
   }
-  if (order.deliveryMode !== "PLATFORM_DRIVER") {
-    return fail("Неподдерживаемый способ получения заказа.");
-  }
-  if (
-    order.status === "DELIVERED" ||
-    order.status === "PICKED_UP" ||
-    order.status === "CANCELED"
-  ) {
-    return fail("Заказ уже обработан. Обновите данные.");
-  }
-  if (!order.assignedDriverId) {
-    return fail("Для заказа не назначен водитель.");
-  }
-  // v22: этот compatibility-путь остаётся ONLINE-only. Наличный заказ
-  // завершается ТОЛЬКО identity-aware markDriverDeliveredOrder с явным
-  // подтверждением получения денег — обхода нет даже у повреждённого состояния.
-  if (order.paymentMethod !== "ONLINE") {
-    return fail("Неподдерживаемый способ оплаты для этого завершения.");
-  }
-  if (order.paymentStatus !== "PAID") {
-    return fail("Оплата по заказу ещё не подтверждена.");
-  }
-  if (order.status !== "OUT_FOR_DELIVERY" && order.status !== "ARRIVING") {
-    return fail("Заказ ещё не готов к этому переходу.");
-  }
-  const now = new Date().toISOString();
-  const completion = applyDriverDeliveredOrder(state, order, now);
-  if (!completion.ok) {
-    return fail(completion.error);
+  if (order.deliveryMode === "PLATFORM_DRIVER") {
+    // Завершение доставки Direct отмечает только назначенный водитель.
+    return {
+      state,
+      result: {
+        ok: false,
+        error: "Этот этап отмечает назначенный водитель Direct.",
+      },
+    };
   }
   return {
-    state: finalizeMutation(state, completion.state, now),
-    result: { ok: true, error: null },
+    state,
+    result: { ok: false, error: "Неподдерживаемый способ получения заказа." },
   };
 }
 
-/** Compatibility-wrapper: прежняя state-возвращающая сигнатура. */
+/** Compatibility-wrapper: прежняя state-возвращающая сигнатура (отказ → тот же state). */
 export function markOrderDeliveredByDriver(
   state: PrototypeState,
   orderId: string,

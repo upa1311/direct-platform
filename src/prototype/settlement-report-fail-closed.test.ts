@@ -5,9 +5,9 @@ import { test } from "node:test";
 import {
   addCartItem,
   createOrderFromCart,
-  markOrderDeliveredByDriverWithResult,
   updateCartAddress,
 } from "./actions.ts";
+import { markDriverDeliveredOrder } from "./driver-delivery.ts";
 import { createDefaultState } from "./default-state.ts";
 import { PROTOTYPE_SCHEMA_VERSION } from "./models.ts";
 import type {
@@ -71,6 +71,50 @@ function withFinancials(
 }
 
 /** Завершённый доставкой Direct заказ ресторана-2 в заданном режиме. */
+/**
+ * Завершение доставки Direct через единственный публичный identity-aware путь
+ * markDriverDeliveredOrder (compatibility-обход закрыт в repair split №2):
+ * назначенный водитель BUSY_DIRECT, полный журнал получения/подъезда, доставка.
+ */
+function completeByAssignedDriver(
+  state: PrototypeState,
+  orderId: string,
+  driverId: string,
+) {
+  const ready: PrototypeState = {
+    ...state,
+    drivers: state.drivers.map((d) =>
+      d.id === driverId
+        ? { ...d, status: "BUSY_DIRECT", currentZoneId: "zone-2" }
+        : d,
+    ),
+    driverDeliveryEvents: [
+      ...state.driverDeliveryEvents,
+      {
+        id: `de-pick-${orderId}`,
+        orderId,
+        driverId,
+        type: "ORDER_PICKED_UP",
+        occurredAt: "2026-07-22T10:00:00.000Z",
+        orderStatusBefore: "READY",
+        orderStatusAfter: "OUT_FOR_DELIVERY",
+      },
+      {
+        id: `de-arr-${orderId}`,
+        orderId,
+        driverId,
+        type: "ARRIVING_TO_CUSTOMER",
+        occurredAt: "2026-07-22T10:01:00.000Z",
+        orderStatusBefore: "OUT_FOR_DELIVERY",
+        orderStatusAfter: "ARRIVING",
+      },
+    ] as unknown as PrototypeState["driverDeliveryEvents"],
+  };
+  return markDriverDeliveredOrder(ready, driverId, orderId, "2026-07-22T10:02:00.000Z", {
+    cashCollectionConfirmed: false,
+  });
+}
+
 function driverCompleted(mode: RestaurantFinancialCollectionMode): {
   state: PrototypeState;
   orderId: string;
@@ -96,7 +140,7 @@ function driverCompleted(mode: RestaurantFinancialCollectionMode): {
     assignedDriverId: "driver-1",
     driverAssignedAt: NOW,
   }));
-  const res = markOrderDeliveredByDriverWithResult(prepared, orderId);
+  const res = completeByAssignedDriver(prepared, orderId, "driver-1");
   assert.equal(res.result.error, null);
   return { state: res.state, orderId };
 }
@@ -117,7 +161,7 @@ function twoCompletedOrders(): { state: PrototypeState; orderIds: string[] } {
     assignedDriverId: "driver-2",
     driverAssignedAt: NOW,
   }));
-  const res = markOrderDeliveredByDriverWithResult(prepared, secondId);
+  const res = completeByAssignedDriver(prepared, secondId, "driver-2");
   assert.equal(res.result.error, null);
   return { state: res.state, orderIds: [first.orderId, secondId] };
 }
@@ -382,7 +426,7 @@ test("15: переполнение собранного рестораном →
     assignedDriverId: "driver-2",
     driverAssignedAt: NOW,
   }));
-  const delivered = markOrderDeliveredByDriverWithResult(prepared, secondId);
+  const delivered = completeByAssignedDriver(prepared, secondId, "driver-2");
   assert.equal(delivered.result.error, null);
   let next = delivered.state;
   for (const id of [first.orderId, secondId]) {
