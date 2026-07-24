@@ -19,6 +19,7 @@ import {
   type Order,
   type OrderItemSnapshot,
   type PaymentMethod,
+  type DriverCashLedgerEntry,
   type PlatformDriverCashEvent,
   type PrototypeState,
   type RestaurantDeliveryProvider,
@@ -44,6 +45,10 @@ import { validateRestaurantSettlementRecord } from "./restaurant-settlement-inte
 import { validateFinancialRuleSnapshot } from "./financial-rule";
 import { resolvePlatformDriverCashSnapshot } from "./platform-driver-cash";
 import { isSafeCents } from "./bank-fee";
+import {
+  buildCompletedDriverCashLedgerEntry,
+  driverCashLedgerEntriesEqual,
+} from "./driver-cash-ledger";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
@@ -114,12 +119,13 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * v19 — неизменяемый наличный снимок будущего заказа PLATFORM_DRIVER,
  * v20 — подтверждение денежного запаса водителя в предложении наличного заказа,
  * v21 — append-only аудит передачи наличных водителем ресторану,
- * v22 — получение полной суммы наличными от клиента и завершение доставки),
+ * v22 — получение полной суммы наличными от клиента и завершение доставки,
+ * v23 — append-only расчёты водителя по завершённым наличным доставкам),
  * поэтому состояние прежней версии безопасно принимается и доводится
  * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -1172,6 +1178,102 @@ function normalizePlatformDriverCashEvents(
   return kept;
 }
 
+/**
+ * Нормализация расчётов водителя по наличным доставкам (v23).
+ *
+ *  - схема <= 21: пустой список (доказанного наличного завершения тогда не было);
+ *  - схема 22: детерминированная одноразовая миграция — запись признаётся ТОЛЬКО
+ *    из уже сохранённого immutable snapshot и полного append-only доказательства
+ *    завершения. Сырое поле схемы 22 игнорируется (его там достоверно быть не
+ *    могло);
+ *  - схема >= 23: принимаются только сырые записи, строго равные ожидаемой;
+ *    отсутствующая запись НЕ синтезируется (её покажет selector как требующую
+ *    проверки). Конфликт (дубль по заказу или повтор id) удаляет ВСЕ записи
+ *    этого заказа — финансовый дубль не легализуется выбором первой записи.
+ */
+function normalizeDriverCashLedgerEntries(
+  value: unknown,
+  evidence: PrototypeState,
+  sourceSchemaVersion: number,
+): DriverCashLedgerEntry[] {
+  if (sourceSchemaVersion <= 21) return [];
+  if (sourceSchemaVersion === 22) {
+    const migrated: DriverCashLedgerEntry[] = [];
+    for (const order of evidence.orders) {
+      const built = buildCompletedDriverCashLedgerEntry(evidence, order);
+      if (built.ok) migrated.push(built.entry);
+    }
+    return migrated;
+  }
+  if (!Array.isArray(value)) return [];
+
+  const candidates: DriverCashLedgerEntry[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    const {
+      id,
+      orderId,
+      driverId,
+      restaurantId,
+      currencyCode,
+      customerCollectionCents,
+      restaurantHandoffCents,
+      driverEarningCents,
+      directReceivableFromDriverCents,
+      recognizedAt,
+      source,
+    } = raw;
+    if (typeof id !== "string" || id === "") continue;
+    if (typeof orderId !== "string" || typeof driverId !== "string") continue;
+    if (typeof restaurantId !== "string") continue;
+    if (currencyCode !== "USD") continue;
+    if (source !== "PLATFORM_DRIVER_CASH_ORDER") continue;
+    if (!isValidIso(recognizedAt)) continue;
+    if (
+      !isSafeCents(customerCollectionCents) ||
+      !isSafeCents(restaurantHandoffCents) ||
+      !isSafeCents(driverEarningCents) ||
+      !isSafeCents(directReceivableFromDriverCents)
+    ) {
+      continue;
+    }
+    candidates.push({
+      id,
+      orderId,
+      driverId,
+      restaurantId,
+      currencyCode,
+      customerCollectionCents,
+      restaurantHandoffCents,
+      driverEarningCents,
+      directReceivableFromDriverCents,
+      recognizedAt,
+      source,
+    });
+  }
+
+  const byOrder = new Map<string, number>();
+  const byId = new Map<string, number>();
+  for (const c of candidates) {
+    byOrder.set(c.orderId, (byOrder.get(c.orderId) ?? 0) + 1);
+    byId.set(c.id, (byId.get(c.id) ?? 0) + 1);
+  }
+
+  const kept: DriverCashLedgerEntry[] = [];
+  for (const c of candidates) {
+    if ((byOrder.get(c.orderId) ?? 0) > 1) continue;
+    if ((byId.get(c.id) ?? 0) > 1) continue;
+    const order = evidence.orders.find((o) => o.id === c.orderId);
+    if (!order) continue;
+    if (!evidence.drivers.some((d) => d.id === c.driverId)) continue;
+    const expected = buildCompletedDriverCashLedgerEntry(evidence, order);
+    if (!expected.ok) continue;
+    if (!driverCashLedgerEntriesEqual(c, expected.entry)) continue;
+    kept.push(c);
+  }
+  return kept;
+}
+
 const DRIVER_DELIVERY_EVENT_TYPES: ReadonlySet<string> =
   new Set<DriverDeliveryEventType>([
     "ARRIVED_AT_RESTAURANT",
@@ -1510,6 +1612,22 @@ export function normalizePrototypeState(
     normalizedDriverDeliveryEvents,
     sourceSchemaVersion,
   );
+  // Расчёты водителя валидируются против УЖЕ нормализованных заказов, водителей,
+  // предложений, delivery- и cash-событий (не против сырых массивов).
+  const evidenceState = {
+    ...state,
+    orders: normalizedOrders,
+    drivers: normalizedDrivers,
+    driverOffers: normalizedDriverOffers,
+    driverDeliveryEvents: normalizedDriverDeliveryEvents,
+    platformDriverCashEvents: normalizedPlatformDriverCashEvents,
+    driverCashLedgerEntries: [],
+  } as unknown as PrototypeState;
+  const normalizedDriverCashLedgerEntries = normalizeDriverCashLedgerEntries(
+    state.driverCashLedgerEntries,
+    evidenceState,
+    sourceSchemaVersion,
+  );
   return {
     ...state,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
@@ -1547,6 +1665,9 @@ export function normalizePrototypeState(
     driverOffers: normalizedDriverOffers,
     driverDeliveryEvents: normalizedDriverDeliveryEvents,
     platformDriverCashEvents: normalizedPlatformDriverCashEvents,
+    // Расчёты водителя: до v22 — пусто, v22 — детерминированная миграция из
+    // доказанного завершения, v23+ — только строго валидные сырые записи.
+    driverCashLedgerEntries: normalizedDriverCashLedgerEntries,
     cart: normalizeCart(state.cart, defaults.cart),
     orders: normalizedOrders,
     settlements: normalizedSettlements,

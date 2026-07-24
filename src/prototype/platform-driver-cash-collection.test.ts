@@ -230,8 +230,8 @@ const complete = (s: PrototypeState, now = T6, input = confirmInput) =>
 
 // --- 1–3: schema / defaults ---------------------------------------------------
 
-test("1: схема равна 22", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 22);
+test("1: схема равна 23", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
 });
 test("2/3: default cash выключен, событий нет", () => {
   const d = createDefaultState();

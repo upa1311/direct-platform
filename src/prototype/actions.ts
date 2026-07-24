@@ -102,7 +102,7 @@ import {
   validateMenuItemSubmissionDraft,
 } from "./menu-catalog";
 import { computeCompletedOrderAccounting } from "./restaurant-accounting";
-import { validatePreparedPlatformDriverCashCompletion } from "./platform-driver-cash-collection";
+import { buildPreparedDriverCashLedgerEntry } from "./driver-cash-ledger";
 
 export interface ActionResult<T> {
   state: PrototypeState;
@@ -4518,13 +4518,11 @@ export function applyDriverDeliveredOrder(
     // подготовленного наличного завершения: валидный snapshot, подтверждённый
     // cash offer, подтверждённая рестораном передача, получение заказа и
     // подъезд, ровно одно событие получения денег с точной суммой и временем.
-    const validation = validatePreparedPlatformDriverCashCompletion(
-      state,
-      order,
-      nowIso,
-    );
-    if (!validation.ok) {
-      return { ok: false, error: validation.error };
+    // Builder сам выполняет полную prepared-проверку доставки (без дублей) и
+    // дополнительно доказывает суммы расчёта и отсутствие уже признанной записи.
+    const ledger = buildPreparedDriverCashLedgerEntry(state, order, nowIso);
+    if (!ledger.ok) {
+      return { ok: false, error: ledger.error };
     }
     return {
       ok: true,
@@ -4537,6 +4535,11 @@ export function applyDriverDeliveredOrder(
           order.id,
           order.financials.customerZoneId,
         ),
+        // Расчёт водителя признаётся в той же мутации, что и завершение.
+        driverCashLedgerEntries: [
+          ...state.driverCashLedgerEntries,
+          ledger.entry,
+        ],
       },
     };
   }

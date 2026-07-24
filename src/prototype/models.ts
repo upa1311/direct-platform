@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 22 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 23 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -789,6 +789,36 @@ export interface PlatformDriverCashEvent {
   restaurantWorkspaceRole: RestaurantWorkspaceRole | null;
 }
 
+/**
+ * Неизменяемая append-only запись расчёта водителя по ОДНОЙ завершённой
+ * наличной доставке (v23). Копирует четыре уже зафиксированные суммы cash
+ * snapshot и ничего не пересчитывает.
+ *
+ * Экономический смысл двух разных категорий:
+ *  - driverEarningCents — заработок, который водитель УЖЕ удержал из полученных
+ *    наличных (Direct её не выплачивает повторно);
+ *  - directReceivableFromDriverCents — деньги Direct, которые пока физически
+ *    находятся у водителя и должны быть переданы позднее.
+ * Их нельзя складывать, вычитать друг из друга или показывать одним «балансом».
+ *
+ * Записи не редактируются: будущие погашения станут отдельными append-only
+ * событиями, а не изменением этой записи. Поэтому здесь нет status, settledAt,
+ * outstandingCents, payoutId и произвольных комментариев.
+ */
+export interface DriverCashLedgerEntry {
+  id: string;
+  orderId: string;
+  driverId: string;
+  restaurantId: string;
+  currencyCode: CurrencyCode;
+  customerCollectionCents: number;
+  restaurantHandoffCents: number;
+  driverEarningCents: number;
+  directReceivableFromDriverCents: number;
+  recognizedAt: string;
+  source: "PLATFORM_DRIVER_CASH_ORDER";
+}
+
 export interface FinancialSnapshot {
   currencyCode: CurrencyCode;
   deliveryMode: DeliveryMode;
@@ -1059,6 +1089,8 @@ export interface PrototypeState {
   driverDeliveryEvents: DriverDeliveryEvent[];
   /** Append-only аудит передачи наличных водителем ресторану (v21). */
   platformDriverCashEvents: PlatformDriverCashEvent[];
+  /** Append-only расчёты водителя по завершённым наличным доставкам (v23). */
+  driverCashLedgerEntries: DriverCashLedgerEntry[];
   cart: Cart;
   orders: Order[];
   settlements: SettlementEntry[];

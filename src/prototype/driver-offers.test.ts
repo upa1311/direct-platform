@@ -145,20 +145,20 @@ const offerFor = (state: PrototypeState, orderId: string, driverId: string) =>
 // --- 1–9: schema и нормализация ------------------------------------------------
 
 test("1: схема прототипа равна 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 22);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
   const base = createDefaultState();
-  for (let version = 7; version <= 22; version += 1) {
+  for (let version = 7; version <= 23; version += 1) {
     const parsed = parseStoredState(
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version}`);
-    assert.equal(parsed.schemaVersion, 22);
+    assert.equal(parsed.schemaVersion, 23);
   }
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 23 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 24 })),
     null,
   );
 });
@@ -1420,8 +1420,8 @@ function parseWith(
 
 const parsedOffer = (state: PrototypeState) => state.driverOffers[0];
 
-test("cash-31: схема поднята до 22", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 22);
+test("cash-31: схема поднята до 23", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
 });
 
 test("cash-32: schema 19 offer получает cashReserveConfirmedAt null", () => {

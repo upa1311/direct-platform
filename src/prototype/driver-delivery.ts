@@ -18,6 +18,10 @@ import {
   customerCashCollectionEventId,
   hasValidPlatformDriverCustomerCashCollection,
 } from "./platform-driver-cash-collection";
+import {
+  hasValidDriverCashLedgerEntry,
+  DRIVER_CASH_LEDGER_REVIEW_ERROR,
+} from "./driver-cash-ledger";
 import { getPlatformDriverCashSnapshot } from "./selectors";
 import type { PlatformDriverCashEvent } from "./models";
 
@@ -403,9 +407,15 @@ export function markDriverDeliveredOrder(
     // Наличный завершённый заказ считается успешным повтором ТОЛЬКО при
     // полностью согласованном получении денег; иначе — fail-closed review.
     if (existingOrder.paymentMethod === "CASH") {
-      return hasValidPlatformDriverCustomerCashCollection(state, existingOrder)
-        ? okNoop(state, orderId)
-        : fail(state, "Данные наличной доставки требуют проверки Direct.");
+      // Успешный повтор требует и доказанного получения денег, и корректной
+      // записи расчёта водителя. Задним числом ledger здесь НЕ создаётся.
+      if (!hasValidPlatformDriverCustomerCashCollection(state, existingOrder)) {
+        return fail(state, "Данные наличной доставки требуют проверки Direct.");
+      }
+      if (!hasValidDriverCashLedgerEntry(state, existingOrder)) {
+        return fail(state, DRIVER_CASH_LEDGER_REVIEW_ERROR);
+      }
+      return okNoop(state, orderId);
     }
     return okNoop(state, orderId);
   }
