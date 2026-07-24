@@ -1,0 +1,114 @@
+{
+  "counts": {
+    "objects_per_zone": {
+      "1": 3368,
+      "2": 3921,
+      "3": 8177,
+      "4": 6711
+    },
+    "severny_objects": 57,
+    "streets": 324,
+    "varnita_serviceable_addresses_in_zones": 0
+  },
+  "created_at": "2026-07-24T22:24:08Z",
+  "decided_k": 4,
+  "direct_integration": false,
+  "files": [
+    {
+      "bytes": 329254,
+      "path": "data/final-street-zone-catalog.json",
+      "sha256": "f257c109dfa86a0ec12bb502e59b9c0b48922fe8ac47a1aaf50911b7b7aa5c2a"
+    },
+    {
+      "bytes": 1132,
+      "path": "data/final-zone-map-summary.json",
+      "sha256": "5c8c88491dfbe675398be9097120e29f4facbd2a91161feb88f71f75d7038511"
+    },
+    {
+      "bytes": 221412,
+      "path": "data/final-zone-polygons.geojson",
+      "sha256": "cfc80697a7300890321319845704f1601f9a35317d80c99ec909d4be68e9db00"
+    },
+    {
+      "bytes": 10993,
+      "path": "data/severny-service-area.geojson",
+      "sha256": "14bf83b49a3b7a30cac05361090468a739c247dbe07eeb7050b373a858c2d5de"
+    },
+    {
+      "bytes": 2187,
+      "path": "data/varnita-admin-reference.geojson",
+      "sha256": "7479c276369f32cb9a5fe0c3f2903d465fb1433a3c7b7a4ea940cf26e0d03260"
+    },
+    {
+      "bytes": 8504,
+      "path": "data/varnita-village-no-delivery.geojson",
+      "sha256": "4dd4ccf2c53a24594a599c3c46aa5aed6f313452d2aa83134af9a6764b48b3ca"
+    },
+    {
+      "bytes": 117362,
+      "path": "data/zone-dataset.json",
+      "sha256": "73f872c59c47250a85d868eed4328849e0a94ba9c9607e0e26a6da0ab25db56a"
+    },
+    {
+      "bytes": 5919,
+      "path": "schemas/address-zone-lookup.schema.json",
+      "sha256": "372557d7318d04f5e0cebbfb8e318cd32faac297e8fbd62aea0e4a90e306a452"
+    },
+    {
+      "bytes": 3343,
+      "path": "schemas/order-pricing-snapshot.schema.json",
+      "sha256": "fa557e9cee8ab4c3bbf16178c48702dc8e25e011726c1a98edd7067f91fc3800"
+    },
+    {
+      "bytes": 2916,
+      "path": "schemas/zone-dataset.schema.json",
+      "sha256": "3de3dc78d69baa7702c5183d8f3f613d02a833877cae021d6dd2d3ba44ccb551"
+    },
+    {
+      "bytes": 3500,
+      "path": "schemas/zone-tariff-matrix.schema.json",
+      "sha256": "3073ed5f3660b551bae9624b45ad27a5c30764b0e27a8180e62d26322c696731"
+    }
+  ],
+  "immutable": true,
+  "notes": "Zones only. No prices. Immutable: re-releasing bumps the version, never edits this release. See docs/product/ZONE_PRICING_SEPARATION.md.",
+  "prices_included": false,
+  "readiness": {
+    "address_zone_catalog_ready": true,
+    "direct_integration_ready": false,
+    "owner_review_required": true,
+    "prices_ready": false,
+    "qa_map_ready": true,
+    "severny_address_catalog_complete": false,
+    "street_zone_catalog_ready": true,
+    "zones_geometry_ready": true
+  },
+  "referenced_artifacts": [
+    {
+      "bytes": 6798158,
+      "path": "docs/data/final-address-zone-catalog.csv",
+      "sha256": "1a7207a5e5d6b868ba99662f86da99b08ab8dfb7cf215cab5b9f2e8f5dce4c87"
+    },
+    {
+      "bytes": 11231857,
+      "path": "docs/data/final-address-zone-points.geojson",
+      "sha256": "a818668285e82a313c3524351da3048ec2be60c22ba342b09116043958dba9f4"
+    }
+  ],
+  "release": "bender-zones-v1",
+  "scenario": "A",
+  "source_dataset_version": "moldova-pbf:09ba0c058e89",
+  "version": "1.0.0",
+  "zone_colors": {
+    "1": "#2a9d3f",
+    "2": "#f2c500",
+    "3": "#f07f14",
+    "4": "#d62828"
+  },
+  "zone_edges_km": [
+    2.424,
+    4.076,
+    5.577,
+    9.692
+  ]
+}

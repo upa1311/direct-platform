@@ -5,6 +5,7 @@ import type {
 } from "./pricing-engine";
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
+import type { OrderZoneSnapshot } from "@/lib/zones/types";
 
 export const PROTOTYPE_SCHEMA_VERSION = 24 as const;
 
@@ -1005,6 +1006,12 @@ export interface Order {
   history: OrderHistoryEvent[];
   /** Аудит корректировок ожидаемого времени готовности (кухня, §2). */
   etaAdjustments: OrderEtaAdjustment[];
+  /**
+   * Неизменяемый снимок версии набора зон и зон отправления/назначения на момент
+   * расчёта. Заполняется интеграцией зон (см. src/lib/zones); опционален, чтобы
+   * не ломать существующие заказы. Денег не содержит.
+   */
+  zoneSnapshot?: OrderZoneSnapshot;
 }
 
 /**
