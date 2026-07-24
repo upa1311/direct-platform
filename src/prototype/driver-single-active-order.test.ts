@@ -44,8 +44,10 @@ function order(id: string, overrides: Partial<Order> = {}): Order {
       platformCollectedFromCustomerCents: 0,
       platformCommissionReceivableCents: 0,
       restaurantNetAfterPlatformCommissionCents: 0,
+      // Заработок водителя (DIRECT_PAYOUT_DUE) признаётся из выплаты доставки.
+      driverPayoutCents: 300,
       // Минимальная фикстура без канонического движения: REVIEW_REQUIRED —
-      // завершение заказа проходит, accounting-запись законно не создаётся.
+      // завершение заказа проходит, обязательство ресторана законно не создаётся.
       moneyMovementStatus: "REVIEW_REQUIRED",
     },
     ...overrides,

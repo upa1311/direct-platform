@@ -43,12 +43,26 @@ const SNAPSHOT = {
   restaurantOwesDirectCents: 100,
 };
 
+/** Каноническое движение денег наличного заказа (v24): CASH_TO_PLATFORM_DRIVER. */
+const MOVEMENT = {
+  customerMoneyRecipient: "RESTAURANT",
+  paymentChannel: "CASH_TO_PLATFORM_DRIVER",
+  totalBankFeeCents: 0,
+  restaurantBankFeeCents: 0,
+  directBankFeeCents: 0,
+  restaurantOwesDirectCents: 100,
+  directOwesRestaurantCents: 0,
+  restaurantNetCents: 600,
+  directNetRevenueCents: 100,
+};
+
 interface Opts {
   status?: Order["status"];
   paymentMethod?: Order["paymentMethod"];
   paymentStatus?: Order["paymentStatus"];
   paidAt?: string | null;
   snapshot?: unknown;
+  movement?: unknown;
   offerStatus?: "ACCEPTED" | "OPEN";
   reserveConfirmedAt?: string | null;
   reported?: boolean;
@@ -101,6 +115,14 @@ function cashState(opts: Opts = {}): PrototypeState {
       driverPayoutCents: 300,
       platformGrossRevenueCents: 100,
       platformDriverCash: opts.snapshot === undefined ? SNAPSHOT : opts.snapshot,
+      // movement === null → снимок движения денег отсутствует (для ONLINE-кейса,
+      // который обязан fail-closed именно на признании обязательств ресторана).
+      ...(opts.movement === null
+        ? {}
+        : {
+            moneyMovementStatus: "COMPLETE",
+            moneyMovement: opts.movement === undefined ? MOVEMENT : opts.movement,
+          }),
     },
   } as unknown as Order;
 
@@ -341,16 +363,23 @@ test("38/39: financials и cash snapshot не изменяются", () => {
   assert.deepEqual(after.platformDriverCash, SNAPSHOT);
 });
 
-test("40–43: для CASH нет accounting/settlements/records/ledger", () => {
+test("40–43: CASH создаёт перечисление ресторана и заработок, без settlements/ledger", () => {
   const s = cashState();
   const r = complete(s);
-  assert.deepEqual(r.state.restaurantAccountingEntries, s.restaurantAccountingEntries);
-  assert.equal(r.state.restaurantAccountingEntries.length, 0);
+  assert.equal(r.result.ok, true, r.result.error ?? "");
+  // v24: наличный заказ создаёт обязательство ресторана (перечисление комиссии +
+  // small-order fee из CASH_TO_PLATFORM_DRIVER), но НЕ settlement/record.
+  assert.equal(r.state.restaurantAccountingEntries.length, 1);
+  const acc = r.state.restaurantAccountingEntries[0];
+  assert.equal(acc.direction, "RESTAURANT_OWES_DIRECT");
+  assert.equal(acc.type, "RESTAURANT_REMITTANCE");
+  assert.equal(acc.amountCents, 100);
   assert.deepEqual(r.state.settlements, s.settlements);
   assert.deepEqual(r.state.restaurantSettlementRecords, s.restaurantSettlementRecords);
-  // 43: driver ledger не существует как поле состояния.
-  assert.ok(!("driverCashLedger" in r.state));
-  assert.ok(!("driverAccountingEntries" in r.state));
+  // Единый заработок CASH_RETAINED признан; старый driver cash ledger не пишется.
+  assert.equal(r.state.driverEarningEntries.length, 1);
+  assert.equal(r.state.driverEarningEntries[0].mode, "CASH_RETAINED");
+  assert.equal(r.state.driverCashLedgerEntries.length, 0);
 });
 
 test("44–46: повторное завершение — idempotent no-op без дублей", () => {
@@ -383,7 +412,9 @@ test("47: DELIVERED CASH без collection event — не no-op, а review", () 
   });
   const r = complete(broken);
   assert.equal(r.result.ok, false);
-  assert.equal(r.result.error, "Данные наличной доставки требуют проверки Direct.");
+  // v24: повтор проверяет единый заработок первым; без доказанного получения
+  // денег заработок невалиден → граница расчёта водителя.
+  assert.equal(r.result.error, "Данные расчёта водителя требуют проверки Direct.");
   assert.equal(r.state, broken);
 });
 
@@ -403,7 +434,12 @@ test("4/5: ONLINE идёт прежним accounting-путём и не созд
   // Здесь важно, что ONLINE НЕ уходит в наличную ветку: он доходит до признания
   // обязательств ресторана (на синтетическом снимке движения денег нет —
   // fail-closed именно там), и наличного события не появляется.
-  const online = cashState({ paymentMethod: "ONLINE", paymentStatus: "PAID", paidAt: T0 });
+  const online = cashState({
+    paymentMethod: "ONLINE",
+    paymentStatus: "PAID",
+    paidAt: T0,
+    movement: null,
+  });
   const r = markDriverDeliveredOrder(online, DRIVER, ORDER, T6, noConfirm);
   assert.equal(r.result.error, "Неизвестный статус движения денег заказа.");
   assert.equal(
@@ -980,7 +1016,7 @@ test("r23: collection раньше pickup → fail с chronology-ошибкой"
   );
 });
 
-test("r24/r28/r29: валидное prepared состояние → success без accounting/settlements", () => {
+test("r24/r28/r29: валидное prepared состояние → success с перечислением, без settlements", () => {
   const s = preparedState();
   const r = applyDirect(s);
   assert.equal(r.ok, true);
@@ -990,7 +1026,13 @@ test("r24/r28/r29: валидное prepared состояние → success бе
     r.state.drivers.find((d) => d.id === DRIVER)?.status,
     "ZONE_CONFIRMATION_REQUIRED",
   );
-  assert.equal(r.state.restaurantAccountingEntries.length, 0);
+  // v24: наличный заказ создаёт обязательство ресторана (перечисление) и единый
+  // заработок водителя; settlements не появляются.
+  assert.equal(r.state.restaurantAccountingEntries.length, 1);
+  assert.equal(r.state.restaurantAccountingEntries[0].type, "RESTAURANT_REMITTANCE");
+  assert.equal(r.state.restaurantAccountingEntries[0].amountCents, 100);
+  assert.equal(r.state.driverEarningEntries.length, 1);
+  assert.equal(r.state.driverEarningEntries[0].mode, "CASH_RETAINED");
   assert.equal(r.state.settlements.length, 0);
   // Helper сам ORDER_DELIVERED не добавляет — это делает driver lifecycle action.
   assert.equal(
@@ -1007,7 +1049,12 @@ test("r25: при fail исходное состояние не мутирует
 });
 
 test("r30: ONLINE прямой helper идёт прежним accounting-путём", () => {
-  const online = cashState({ paymentMethod: "ONLINE", paymentStatus: "PAID", paidAt: T0 });
+  const online = cashState({
+    paymentMethod: "ONLINE",
+    paymentStatus: "PAID",
+    paidAt: T0,
+    movement: null,
+  });
   const r = applyDriverDeliveredOrder(online, theOrder(online), T6);
   assert.equal(r.ok, false);
   assert.equal(

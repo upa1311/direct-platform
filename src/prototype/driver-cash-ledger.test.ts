@@ -47,6 +47,24 @@ const SNAPSHOT = {
   restaurantOwesDirectCents: 100,
 };
 
+/**
+ * Каноническое движение денег наличного заказа (v24): ресторан получил наличные
+ * от водителя и должен Direct комиссию + small-order fee (restaurantOwesDirect =
+ * platformGross = 100); стоимость доставки водитель удержал. Единственный
+ * источник обязательства ресторана при завершении.
+ */
+const MOVEMENT = {
+  customerMoneyRecipient: "RESTAURANT",
+  paymentChannel: "CASH_TO_PLATFORM_DRIVER",
+  totalBankFeeCents: 0,
+  restaurantBankFeeCents: 0,
+  directBankFeeCents: 0,
+  restaurantOwesDirectCents: 100,
+  directOwesRestaurantCents: 0,
+  restaurantNetCents: 600,
+  directNetRevenueCents: 100,
+};
+
 interface Opts {
   orderId?: string;
   status?: Order["status"];
@@ -54,6 +72,7 @@ interface Opts {
   paymentStatus?: Order["paymentStatus"];
   paidAt?: string | null;
   snapshot?: unknown;
+  movement?: unknown;
   offerStatus?: "ACCEPTED" | "OPEN";
   reserveConfirmedAt?: string | null;
   reported?: boolean;
@@ -105,6 +124,8 @@ function cashState(opts: Opts = {}): PrototypeState {
       driverPayoutCents: 300,
       platformGrossRevenueCents: 100,
       platformDriverCash: opts.snapshot === undefined ? SNAPSHOT : opts.snapshot,
+      moneyMovementStatus: "COMPLETE",
+      moneyMovement: opts.movement === undefined ? MOVEMENT : opts.movement,
     },
   } as unknown as Order;
 
@@ -251,11 +272,34 @@ function expectedEntry(orderId = ORDER): DriverCashLedgerEntry {
   };
 }
 
-/** Завершённое состояние (после успешного CASH completion). */
+/** Ожидаемая запись единого заработка CASH_RETAINED завершённого заказа. */
+function expectedEarning(orderId = ORDER) {
+  return {
+    id: `driver-earning-${orderId}`,
+    orderId,
+    driverId: DRIVER,
+    restaurantId: REST,
+    currencyCode: "USD",
+    amountCents: 300,
+    mode: "CASH_RETAINED",
+    recognizedAt: T6,
+    source: "PLATFORM_DRIVER_ORDER",
+  };
+}
+
+/**
+ * Завершённое состояние (после успешного CASH completion).
+ *
+ * Split №2: новое завершение больше НЕ пишет старый driver cash ledger (он
+ * заменён единым журналом заработка). Для тестов compatibility-модуля
+ * (нормализация и view старого ledger) ожидаемая запись присоединяется вручную —
+ * так же, как она пришла бы из persisted schema-23 состояния.
+ */
 const completedState = (): PrototypeState => {
   const r = complete(cashState());
   assert.equal(r.result.ok, true, r.result.error ?? "");
-  return r.state;
+  assert.equal(r.state.driverCashLedgerEntries.length, 0);
+  return { ...r.state, driverCashLedgerEntries: [expectedEntry()] };
 };
 
 // --- 1–3: schema / defaults ---------------------------------------------------
@@ -267,43 +311,62 @@ test("1/2/3: схема 23, пустой ledger и выключенные нал
   assert.equal(d.platformSettings.platformDriverCashEnabled, false);
 });
 
-// --- 4–26: атомарное создание записи ------------------------------------------
+// --- 4–26: завершение больше не пишет старый ledger ----------------------------
 
-test("4–19: CASH completion создаёт ровно одну точную запись из snapshot", () => {
+test("4–19: CASH completion НЕ увеличивает старый ledger (единый earning)", () => {
   const s = cashState();
   const r = complete(s);
-  assert.equal(r.result.ok, true);
-  assert.equal(r.state.driverCashLedgerEntries.length, 1);
-  assert.deepEqual(r.state.driverCashLedgerEntries[0], expectedEntry());
+  assert.equal(r.result.ok, true, r.result.error ?? "");
+  // Split №2: старый ledger не пишется новым завершением.
+  assert.equal(r.state.driverCashLedgerEntries.length, 0);
+  // Вместо него — единый заработок водителя CASH_RETAINED из snapshot.
+  assert.equal(r.state.driverEarningEntries.length, 1);
+  const earning = r.state.driverEarningEntries[0];
+  assert.equal(earning.mode, "CASH_RETAINED");
+  assert.equal(earning.amountCents, 300);
+  assert.equal(earning.orderId, ORDER);
 });
 
-test("5/6: ledger создаётся в той же ревизии, без второго bump", () => {
+test("5/6: завершение — один рост ревизии", () => {
   const s = cashState();
   const r = complete(s);
   assert.equal(r.state.revision, s.revision + 1);
 });
 
-test("13/14/15: recognizedAt === paidAt === collection === ORDER_DELIVERED", () => {
-  const st = completedState();
-  const entry = st.driverCashLedgerEntries[0];
+test("13/14/15: earning.recognizedAt === paidAt === collection === ORDER_DELIVERED", () => {
+  const s = cashState();
+  const r = complete(s);
+  assert.equal(r.result.ok, true, r.result.error ?? "");
+  const st = r.state;
+  const earning = st.driverEarningEntries[0];
   const order = theOrder(st);
   const collection = st.platformDriverCashEvents.find(
     (e) => e.type === "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION",
   );
   const delivered = st.driverDeliveryEvents.find((e) => e.type === "ORDER_DELIVERED");
-  assert.equal(entry.recognizedAt, order.paidAt);
-  assert.equal(entry.recognizedAt, collection?.occurredAt);
-  assert.equal(entry.recognizedAt, delivered?.occurredAt);
+  assert.equal(earning.recognizedAt, order.paidAt);
+  assert.equal(earning.recognizedAt, collection?.occurredAt);
+  assert.equal(earning.recognizedAt, delivered?.occurredAt);
 });
 
-test("20–24: снимок не меняется; CASH не создаёт accounting/settlements", () => {
+test("20–24: снимок не меняется; CASH создаёт перечисление ресторана, без settlements", () => {
   const s = cashState();
   const before = JSON.stringify(theOrder(s).financials);
-  const st = completedState();
+  const r = complete(s);
+  assert.equal(r.result.ok, true, r.result.error ?? "");
+  const st = r.state;
   assert.equal(JSON.stringify(theOrder(st).financials), before);
-  assert.equal(st.restaurantAccountingEntries.length, 0);
+  // v24: наличный заказ теперь создаёт обязательство ресторана (перечисление
+  // комиссии + small-order fee), но НЕ settlement/record.
+  assert.equal(st.restaurantAccountingEntries.length, 1);
+  const entry = st.restaurantAccountingEntries[0];
+  assert.equal(entry.direction, "RESTAURANT_OWES_DIRECT");
+  assert.equal(entry.type, "RESTAURANT_REMITTANCE");
+  assert.equal(entry.amountCents, 100);
   assert.equal(st.settlements.length, 0);
   assert.equal(st.restaurantSettlementRecords.length, 0);
+  // Старый ledger не пишется.
+  assert.equal(st.driverCashLedgerEntries.length, 0);
 });
 
 test("25: ONLINE completion не создаёт driver cash ledger", () => {
@@ -354,12 +417,19 @@ for (const [label, opts] of failCases) {
   });
 }
 
-test("34: существующая запись до завершения — fail-closed", () => {
-  const s = cashState({ ledger: [expectedEntry()] });
+test("34: существующий заработок до завершения — fail-closed", () => {
+  // Split №2: повторную подготовку блокирует уже признанный ЗАРАБОТОК, а не
+  // старый ledger (новое завершение ledger не проверяет и не пишет).
+  const s: PrototypeState = {
+    ...cashState(),
+    driverEarningEntries: [
+      expectedEarning(),
+    ] as unknown as PrototypeState["driverEarningEntries"],
+  };
   const r = complete(s);
   assert.equal(r.result.ok, false);
   assert.equal(r.state, s);
-  assert.equal(r.state.driverCashLedgerEntries.length, 1);
+  assert.equal(r.state.driverEarningEntries.length, 1);
 });
 
 // --- 42–49: повтор и целостность ---------------------------------------------
@@ -367,25 +437,25 @@ test("34: существующая запись до завершения — fa
 test("42/43/44: повторное завершение — no-op без второй записи и ревизии", () => {
   const st = completedState();
   const again = complete(st, "2026-07-22T11:00:00.000Z");
-  assert.equal(again.result.ok, true);
+  assert.equal(again.result.ok, true, again.result.error ?? "");
   assert.equal(again.state, st);
-  assert.equal(again.state.driverCashLedgerEntries.length, 1);
+  assert.equal(again.state.driverEarningEntries.length, 1);
   assert.equal(again.state.revision, st.revision);
 });
 
-test("45–49: завершённый CASH с отсутствующей/повреждённой записью → review", () => {
+test("45–49: завершённый CASH с отсутствующим/повреждённым заработком → review", () => {
   const st = completedState();
   const broken = (entries: unknown[]): PrototypeState => ({
     ...st,
-    driverCashLedgerEntries:
-      entries as unknown as PrototypeState["driverCashLedgerEntries"],
+    driverEarningEntries:
+      entries as unknown as PrototypeState["driverEarningEntries"],
   });
   const cases: [string, unknown[]][] = [
     ["без записи", []],
-    ["неверная сумма", [{ ...expectedEntry(), driverEarningCents: 999 }]],
-    ["дубль", [expectedEntry(), { ...expectedEntry(), id: "other" }]],
-    ["чужой водитель", [{ ...expectedEntry(), driverId: OTHER_DRIVER }]],
-    ["неверный recognizedAt", [{ ...expectedEntry(), recognizedAt: T5 }]],
+    ["неверная сумма", [{ ...expectedEarning(), amountCents: 999 }]],
+    ["дубль", [expectedEarning(), { ...expectedEarning(), id: "other" }]],
+    ["чужой водитель", [{ ...expectedEarning(), driverId: OTHER_DRIVER }]],
+    ["неверный recognizedAt", [{ ...expectedEarning(), recognizedAt: T5 }]],
   ];
   for (const [label, entries] of cases) {
     const s = broken(entries);

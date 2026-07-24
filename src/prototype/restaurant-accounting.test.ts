@@ -642,7 +642,9 @@ test("orders, financials и старые settlements не мутируются; 
       paymentMethod: "ONLINE",
       paymentStatus: "PAID",
       history: [statusEvent("OUT_FOR_DELIVERY", "ARRIVING", "2026-07-17T09:30:00.000Z")],
-      fin: DIRECT_COLLECTED,
+      // Выплата водителю > 0: единый заработок (DIRECT_PAYOUT_DUE) признаётся
+      // атомарно вместе с обязательством ресторана.
+      fin: { ...DIRECT_COLLECTED, driverPayoutCents: 300 },
     }),
     assignedDriverId: "driver-1",
     driverAssignedAt: "2026-07-17T09:00:00.000Z",

@@ -818,6 +818,36 @@ export interface DriverCashLedgerEntry {
   source: "PLATFORM_DRIVER_CASH_ORDER";
 }
 
+/**
+ * Как признан заработок водителя за одну завершённую доставку PLATFORM_DRIVER
+ * (v24, единый журнал):
+ *  - DIRECT_PAYOUT_DUE — онлайн-заказ: клиент заплатил онлайн, деньги у Direct,
+ *    поэтому Direct должен выплатить водителю его заработок (стоимость доставки);
+ *  - CASH_RETAINED — наличный заказ: клиент отдал деньги водителю, тот уже
+ *    оставил себе свой заработок из наличных, повторно платить не нужно.
+ * Водитель никогда не должен Direct по этой модели.
+ */
+export type DriverEarningMode = "DIRECT_PAYOUT_DUE" | "CASH_RETAINED";
+
+/**
+ * Неизменяемая append-only запись заработка водителя по ОДНОЙ завершённой
+ * доставке PLATFORM_DRIVER (v24). Единый журнал для онлайн и наличных заказов:
+ * сумма всегда равна order.financials.driverPayoutCents и НИКОГДА не
+ * пересчитывается по текущему тарифу. Ни статуса выплаты, ни остатка, ни долга
+ * здесь нет — фактическая выплата и её события вводятся отдельным этапом.
+ */
+export interface DriverEarningEntry {
+  id: string;
+  orderId: string;
+  driverId: string;
+  restaurantId: string;
+  currencyCode: CurrencyCode;
+  amountCents: number;
+  mode: DriverEarningMode;
+  recognizedAt: string;
+  source: "PLATFORM_DRIVER_ORDER";
+}
+
 export interface FinancialSnapshot {
   currencyCode: CurrencyCode;
   deliveryMode: DeliveryMode;
@@ -1090,6 +1120,12 @@ export interface PrototypeState {
   platformDriverCashEvents: PlatformDriverCashEvent[];
   /** Append-only расчёты водителя по завершённым наличным доставкам (v23). */
   driverCashLedgerEntries: DriverCashLedgerEntry[];
+  /**
+   * Единый append-only журнал заработка водителя по завершённым доставкам
+   * PLATFORM_DRIVER (v24): онлайн (Direct должен выплатить) и наличные (водитель
+   * уже удержал). Одна запись на завершённый заказ.
+   */
+  driverEarningEntries: DriverEarningEntry[];
   cart: Cart;
   orders: Order[];
   settlements: SettlementEntry[];

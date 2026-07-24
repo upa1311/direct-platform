@@ -19,9 +19,10 @@ import {
   hasValidPlatformDriverCustomerCashCollection,
 } from "./platform-driver-cash-collection";
 import {
-  hasValidDriverCashLedgerEntry,
-  DRIVER_CASH_LEDGER_REVIEW_ERROR,
-} from "./driver-cash-ledger";
+  hasValidDriverEarningEntry,
+  hasRecognizedCompletedOrderAccounting,
+  DRIVER_EARNING_REVIEW_ERROR,
+} from "./driver-earnings";
 import { getPlatformDriverCashSnapshot } from "./selectors";
 import type { PlatformDriverCashEvent } from "./models";
 
@@ -404,18 +405,31 @@ export function markDriverDeliveredOrder(
     existingOrder.assignedDriverId === driverId &&
     hasEvent(state, orderId, driverId, "ORDER_DELIVERED")
   ) {
-    // Наличный завершённый заказ считается успешным повтором ТОЛЬКО при
-    // полностью согласованном получении денег; иначе — fail-closed review.
+    // Успешный повтор допустим ТОЛЬКО при уже согласованном завершении: ровно
+    // один валидный заработок водителя и уже признанное (или законно нулевое)
+    // обязательство ресторана. Задним числом ни заработок, ни accounting здесь
+    // НЕ создаются.
+    if (!hasValidDriverEarningEntry(state, existingOrder)) {
+      return fail(state, DRIVER_EARNING_REVIEW_ERROR);
+    }
+    // Обязательство ресторана уже существует и совпадает (или законно нулевое).
+    if (!hasRecognizedCompletedOrderAccounting(state, existingOrder)) {
+      return fail(state, "Данные финансов заказа требуют проверки Direct.");
+    }
     if (existingOrder.paymentMethod === "CASH") {
-      // Успешный повтор требует и доказанного получения денег, и корректной
-      // записи расчёта водителя. Задним числом ledger здесь НЕ создаётся.
+      // Наличный заказ: доказанное получение денег от клиента (старый driver
+      // cash ledger в проверке повтора не участвует).
       if (!hasValidPlatformDriverCustomerCashCollection(state, existingOrder)) {
         return fail(state, "Данные наличной доставки требуют проверки Direct.");
       }
-      if (!hasValidDriverCashLedgerEntry(state, existingOrder)) {
-        return fail(state, DRIVER_CASH_LEDGER_REVIEW_ERROR);
+    } else if (existingOrder.paymentMethod === "ONLINE") {
+      // Онлайн-заказ: заработок обязан быть «Direct должен выплатить».
+      const entry = state.driverEarningEntries.find(
+        (e) => e.orderId === existingOrder.id,
+      );
+      if (!entry || entry.mode !== "DIRECT_PAYOUT_DUE") {
+        return fail(state, DRIVER_EARNING_REVIEW_ERROR);
       }
-      return okNoop(state, orderId);
     }
     return okNoop(state, orderId);
   }

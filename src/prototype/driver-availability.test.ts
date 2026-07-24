@@ -98,8 +98,11 @@ function order(id: string, overrides: Partial<Order> = {}): Order {
       platformCommissionReceivableCents: 0,
       restaurantNetAfterPlatformCommissionCents: 0,
       customerZoneId: Z2,
+      // Заработок водителя признаётся из выплаты доставки (единый журнал v24).
+      driverPayoutCents: 300,
       // Минимальная фикстура без канонического движения: REVIEW_REQUIRED —
-      // завершение проходит, accounting-запись законно не создаётся.
+      // обязательство ресторана законно не создаётся, а заработок водителя
+      // (DIRECT_PAYOUT_DUE) признаётся из driverPayoutCents.
       moneyMovementStatus: "REVIEW_REQUIRED",
     },
     ...overrides,
@@ -511,6 +514,7 @@ test("28: после доставки предлагается зона клие
           platformCommissionReceivableCents: 0,
           restaurantNetAfterPlatformCommissionCents: 0,
           customerZoneId: "zone-4",
+          driverPayoutCents: 300,
           moneyMovementStatus: "REVIEW_REQUIRED",
         },
       } as Partial<Order>),

@@ -102,7 +102,7 @@ import {
   validateMenuItemSubmissionDraft,
 } from "./menu-catalog";
 import { computeCompletedOrderAccounting } from "./restaurant-accounting";
-import { buildPreparedDriverCashLedgerEntry } from "./driver-cash-ledger";
+import { buildPreparedDriverEarningEntry } from "./driver-earnings";
 
 export interface ActionResult<T> {
   state: PrototypeState;
@@ -4477,10 +4477,18 @@ export function unassignDriverFromOrder(
  * состояние (без bump ревизии), чтобы вызывающий мог в той же мутации добавить
  * свои поля (например, событие журнала) и финализировать один раз.
  *
- * Обязательства признаются ТОЛЬКО из канонического движения денег снимка через
- * computeCompletedOrderAccounting — формулы не копируются; при противоречии
- * существующим записям — fail-closed до мутации. Назначенный водитель уходит на
- * подтверждение зоны с предложенной зоной клиента (не становится доступным).
+ * Обязательства ресторана признаются ТОЛЬКО из канонического движения денег
+ * снимка через computeCompletedOrderAccounting — формулы не копируются; при
+ * противоречии существующим записям — fail-closed до мутации. Заработок водителя
+ * признаётся ровно один раз в той же мутации через buildPreparedDriverEarningEntry
+ * (ONLINE → DIRECT_PAYOUT_DUE, CASH → CASH_RETAINED). Назначенный водитель уходит
+ * на подтверждение зоны с предложенной зоной клиента (не становится доступным).
+ *
+ * v24: единая атомарная последовательность для ONLINE и CASH. Наличный заказ
+ * больше НЕ обходит бухгалтерию: ресторан получил наличные от водителя и
+ * перечисляет Direct комиссию + small-order fee (RESTAURANT_REMITTANCE из
+ * CASH_TO_PLATFORM_DRIVER); стоимость доставки водитель уже удержал. Старый
+ * driver cash ledger новыми завершениями не пишется.
  */
 export function applyDriverDeliveredOrder(
   state: PrototypeState,
@@ -4506,44 +4514,18 @@ export function applyDriverDeliveredOrder(
       },
     ],
   };
-  // v22: наличный заказ водителя Direct. Ресторан уже физически получил свою
-  // сумму от водителя и подтвердил это отдельным append-only событием, поэтому
-  // обязательств ресторана перед Direct у такого заказа НЕТ: accounting-записи,
-  // settlement и settlement records не создаются. Будущая дебиторская
-  // задолженность водителя (directReceivableFromDriverCents) останется в снимке
-  // и станет отдельным driver cash ledger в следующем микробатче.
-  if (order.paymentMethod === "CASH") {
-    // Fail-closed: paymentStatus/paidAt недостаточно. Даже при прямом вызове
-    // этого экспортируемого helper'а требуется ПОЛНЫЙ набор доказательств
-    // подготовленного наличного завершения: валидный snapshot, подтверждённый
-    // cash offer, подтверждённая рестораном передача, получение заказа и
-    // подъезд, ровно одно событие получения денег с точной суммой и временем.
-    // Builder сам выполняет полную prepared-проверку доставки (без дублей) и
-    // дополнительно доказывает суммы расчёта и отсутствие уже признанной записи.
-    const ledger = buildPreparedDriverCashLedgerEntry(state, order, nowIso);
-    if (!ledger.ok) {
-      return { ok: false, error: ledger.error };
-    }
-    return {
-      ok: true,
-      state: {
-        ...state,
-        orders: state.orders.map((o) => (o.id === order.id ? updatedOrder : o)),
-        drivers: releaseAssignedDriver(
-          state,
-          order.assignedDriverId,
-          order.id,
-          order.financials.customerZoneId,
-        ),
-        // Расчёт водителя признаётся в той же мутации, что и завершение.
-        driverCashLedgerEntries: [
-          ...state.driverCashLedgerEntries,
-          ledger.entry,
-        ],
-      },
-    };
+
+  // 1. Заработок водителя признаётся из снимка заказа (сумма не из UI и не
+  //    аргументом). CASH-ветка builder'а сама выполняет полную prepared-проверку
+  //    наличного завершения; ONLINE — экономические инварианты онлайн-заказа.
+  const earning = buildPreparedDriverEarningEntry(state, order, nowIso);
+  if (!earning.ok) {
+    return { ok: false, error: earning.error };
   }
 
+  // 2. Обязательство ресторана — единственный источник суммы — каноническое
+  //    движение денег снимка. Для наличного заказа это RESTAURANT_REMITTANCE
+  //    (комиссия + small-order fee); при нулевом долге записи законно нет.
   const accounting = computeCompletedOrderAccounting(
     updatedOrder,
     state.restaurantAccountingEntries,
@@ -4554,6 +4536,9 @@ export function applyDriverDeliveredOrder(
       error: accounting.error ?? "Не удалось признать обязательства заказа.",
     };
   }
+
+  // 3. Одна returned-state мутация: заказ, освобождение водителя, заработок и
+  //    новые обязательства ресторана. Финализацию выполняет вызывающий.
   return {
     ok: true,
     state: {
@@ -4565,6 +4550,7 @@ export function applyDriverDeliveredOrder(
         order.id,
         order.financials.customerZoneId,
       ),
+      driverEarningEntries: [...state.driverEarningEntries, earning.entry],
       restaurantAccountingEntries: [
         ...state.restaurantAccountingEntries,
         ...accounting.entries,

@@ -20,6 +20,7 @@ import {
   type OrderItemSnapshot,
   type PaymentMethod,
   type DriverCashLedgerEntry,
+  type DriverEarningEntry,
   type PlatformDriverCashEvent,
   type PrototypeState,
   type RestaurantDeliveryProvider,
@@ -49,6 +50,11 @@ import {
   buildCompletedDriverCashLedgerEntry,
   driverCashLedgerEntriesEqual,
 } from "./driver-cash-ledger";
+import {
+  buildCompletedDriverEarningEntry,
+  driverEarningEntriesEqual,
+  driverEarningEntryId,
+} from "./driver-earnings";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
@@ -1274,6 +1280,91 @@ function normalizeDriverCashLedgerEntries(
   return kept;
 }
 
+/**
+ * Нормализация единого журнала заработка водителя (v24).
+ *
+ * Split №2: состояние до schema 24 — пустой список; записи НЕ синтезируются из
+ * завершённых заказов (полная миграция ONLINE/CASH выполняется в split №3).
+ * Состояние schema 24, созданное до появления поля, безопасно получает пустой
+ * массив. Для schema >= 24 принимаются только строго валидные сырые записи:
+ * структурная целостность, детерминированный id, существующие заказ и водитель,
+ * совпадение назначенного водителя и ресторана, USD, положительная сумма,
+ * известный режим, и точное совпадение с записью, которую строит
+ * buildCompletedDriverEarningEntry по полному доказательству завершения.
+ * Дубли (несколько записей одного orderId или повтор id) удаляют ВСЕ
+ * конфликтующие записи соответствующих заказов — первая «похожая» не легализуется.
+ *
+ * Валидация CASH-заработка зависит от УЖЕ нормализованных заказов, водителей,
+ * cash-событий и обязательств ресторана, поэтому вызывается последней.
+ */
+function normalizeDriverEarningEntries(
+  value: unknown,
+  evidence: PrototypeState,
+  sourceSchemaVersion: number,
+): DriverEarningEntry[] {
+  if (sourceSchemaVersion <= 23) return [];
+  if (!Array.isArray(value)) return [];
+
+  const candidates: DriverEarningEntry[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    const {
+      id,
+      orderId,
+      driverId,
+      restaurantId,
+      currencyCode,
+      amountCents,
+      mode,
+      recognizedAt,
+      source,
+    } = raw;
+    if (typeof id !== "string" || id === "") continue;
+    if (typeof orderId !== "string" || typeof driverId !== "string") continue;
+    if (typeof restaurantId !== "string") continue;
+    if (currencyCode !== "USD") continue;
+    if (source !== "PLATFORM_DRIVER_ORDER") continue;
+    if (mode !== "DIRECT_PAYOUT_DUE" && mode !== "CASH_RETAINED") continue;
+    if (!isValidIso(recognizedAt)) continue;
+    if (!isSafeCents(amountCents) || amountCents <= 0) continue;
+    candidates.push({
+      id,
+      orderId,
+      driverId,
+      restaurantId,
+      currencyCode,
+      amountCents,
+      mode,
+      recognizedAt,
+      source,
+    });
+  }
+
+  const byOrder = new Map<string, number>();
+  const byId = new Map<string, number>();
+  for (const c of candidates) {
+    byOrder.set(c.orderId, (byOrder.get(c.orderId) ?? 0) + 1);
+    byId.set(c.id, (byId.get(c.id) ?? 0) + 1);
+  }
+
+  const kept: DriverEarningEntry[] = [];
+  for (const c of candidates) {
+    if ((byOrder.get(c.orderId) ?? 0) > 1) continue;
+    if ((byId.get(c.id) ?? 0) > 1) continue;
+    if (c.id !== driverEarningEntryId(c.orderId)) continue;
+    const order = evidence.orders.find((o) => o.id === c.orderId);
+    if (!order) continue;
+    if (order.assignedDriverId !== c.driverId) continue;
+    if (order.restaurant.id !== c.restaurantId) continue;
+    if (!evidence.drivers.some((d) => d.id === c.driverId)) continue;
+    const expected = buildCompletedDriverEarningEntry(evidence, order);
+    if (!expected.ok) continue;
+    if (!driverEarningEntriesEqual(c, expected.entry)) continue;
+    kept.push(c);
+  }
+  return kept;
+}
+
 const DRIVER_DELIVERY_EVENT_TYPES: ReadonlySet<string> =
   new Set<DriverDeliveryEventType>([
     "ARRIVED_AT_RESTAURANT",
@@ -1628,6 +1719,27 @@ export function normalizePrototypeState(
     evidenceState,
     sourceSchemaVersion,
   );
+  // Двусторонний журнал обязательств нормализуется до заработка водителя: строгая
+  // проверка завершённого наличного заработка опирается на признанное
+  // обязательство ресторана.
+  const normalizedRestaurantAccountingEntries =
+    migrateLegacySettlementsToAccounting(
+      normalizeRestaurantAccountingEntries(state.restaurantAccountingEntries),
+      normalizedSettlements,
+    );
+  // Единый заработок водителя валидируется против УЖЕ нормализованных заказов,
+  // водителей, cash-событий и обязательств ресторана (полное доказательство
+  // завершения), поэтому нормализуется последним.
+  const normalizedDriverEarningEntries = normalizeDriverEarningEntries(
+    state.driverEarningEntries,
+    {
+      ...evidenceState,
+      driverCashLedgerEntries: normalizedDriverCashLedgerEntries,
+      restaurantAccountingEntries: normalizedRestaurantAccountingEntries,
+      driverEarningEntries: [],
+    } as unknown as PrototypeState,
+    sourceSchemaVersion,
+  );
   return {
     ...state,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
@@ -1668,15 +1780,15 @@ export function normalizePrototypeState(
     // Расчёты водителя: до v22 — пусто, v22 — детерминированная миграция из
     // доказанного завершения, v23+ — только строго валидные сырые записи.
     driverCashLedgerEntries: normalizedDriverCashLedgerEntries,
+    // Единый журнал заработка водителя: до schema 24 — пусто, schema 24 — только
+    // строго валидные сырые записи (без синтеза; полная миграция — split №3).
+    driverEarningEntries: normalizedDriverEarningEntries,
     cart: normalizeCart(state.cart, defaults.cart),
     orders: normalizedOrders,
     settlements: normalizedSettlements,
     // Двусторонний журнал: сохраняем валидные записи и идемпотентно мигрируем
     // существующие комиссионные settlements (без дублей по legacySettlementId).
-    restaurantAccountingEntries: migrateLegacySettlementsToAccounting(
-      normalizeRestaurantAccountingEntries(state.restaurantAccountingEntries),
-      normalizedSettlements,
-    ),
+    restaurantAccountingEntries: normalizedRestaurantAccountingEntries,
     restaurantAccountingResolutionEvents:
       normalizeRestaurantAccountingResolutionEvents(
         state.restaurantAccountingResolutionEvents,

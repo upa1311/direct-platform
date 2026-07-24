@@ -583,6 +583,7 @@ export function createDefaultState(): PrototypeState {
     driverDeliveryEvents: [],
     platformDriverCashEvents: [],
     driverCashLedgerEntries: [],
+    driverEarningEntries: [],
     cart: createEmptyCart(),
     orders: [],
     settlements: [],
