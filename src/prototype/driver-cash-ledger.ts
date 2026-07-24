@@ -20,8 +20,8 @@ import {
  *
  * Две разные экономические категории и их нельзя смешивать:
  *  - driverEarningCents — заработок, уже удержанный водителем из наличных;
- *  - directReceivableFromDriverCents — деньги Direct, пока находящиеся у
- *    водителя. Netting (вычитание) здесь не выполняется ни при каких условиях.
+ *  - directReceivableFromDriverCents — в корректной модели (v24) всегда 0:
+ *    долг перед Direct несёт ресторан, а не водитель.
  */
 
 /** Fail-closed ошибка границы расчётов водителя. */
@@ -72,29 +72,27 @@ function amountsConsistent(snapshot: {
   customerCollectionCents: number;
   restaurantHandoffCents: number;
   driverEarningCents: number;
-  directReceivableFromDriverCents: number;
+  restaurantOwesDirectCents: number;
 }): boolean {
   const {
     customerCollectionCents,
     restaurantHandoffCents,
     driverEarningCents,
-    directReceivableFromDriverCents,
+    restaurantOwesDirectCents,
   } = snapshot;
   if (
     !safeCents(customerCollectionCents) ||
     !safeCents(restaurantHandoffCents) ||
     !safeCents(driverEarningCents) ||
-    !safeCents(directReceivableFromDriverCents)
+    !safeCents(restaurantOwesDirectCents)
   ) {
     return false;
   }
   if (customerCollectionCents <= 0) return false;
   if (restaurantHandoffCents <= 0) return false;
   if (driverEarningCents <= 0) return false;
-  return (
-    customerCollectionCents ===
-    restaurantHandoffCents + driverEarningCents + directReceivableFromDriverCents
-  );
+  // v24: водитель передаёт ресторану весь остаток; долга водителя нет.
+  return customerCollectionCents === restaurantHandoffCents + driverEarningCents;
 }
 
 /** Записи расчёта по заказу. */
@@ -113,7 +111,7 @@ function makeEntry(
     customerCollectionCents: number;
     restaurantHandoffCents: number;
     driverEarningCents: number;
-    directReceivableFromDriverCents: number;
+    restaurantOwesDirectCents: number;
   },
   recognizedAt: string,
 ): DriverCashLedgerEntry {
@@ -126,7 +124,9 @@ function makeEntry(
     customerCollectionCents: snapshot.customerCollectionCents,
     restaurantHandoffCents: snapshot.restaurantHandoffCents,
     driverEarningCents: snapshot.driverEarningCents,
-    directReceivableFromDriverCents: snapshot.directReceivableFromDriverCents,
+    // v24: долга водителя перед Direct нет (перечисляет ресторан). Поле
+    // сохранено ради совместимости записи и всегда 0.
+    directReceivableFromDriverCents: 0,
     recognizedAt,
     source: "PLATFORM_DRIVER_CASH_ORDER",
   };
@@ -331,7 +331,7 @@ export function getDriverCashLedgerView(
   let dueToDirectCents = 0;
   for (const view of views) {
     cashEarningsCents += view.entry.driverEarningCents;
-    dueToDirectCents += view.entry.directReceivableFromDriverCents;
+    dueToDirectCents += view.entry.directReceivableFromDriverCents; // v24: всегда 0
     if (!safeCents(cashEarningsCents) || !safeCents(dueToDirectCents)) {
       return {
         entries: [],

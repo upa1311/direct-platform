@@ -239,8 +239,14 @@ function explainRow(
     row.direction === "RESTAURANT_OWES_DIRECT" &&
     row.accountingType === "RESTAURANT_REMITTANCE"
   ) {
-    const withDelivery = addChecked(restaurantCommissionCents, deliveryFeeCents);
-    const expected = addChecked(withDelivery, smallOrderFeeCents);
+    // v24: наличные водителю Direct. Ресторан получил наличные от водителя и
+    // должен Direct ТОЛЬКО комиссию + small-order fee: стоимость доставки
+    // водитель уже удержал из наличных, поэтому она INFO_ONLY, не часть долга.
+    const isCashToDriver = row.paymentChannel === "CASH_TO_PLATFORM_DRIVER";
+    const debtBase = isCashToDriver
+      ? restaurantCommissionCents
+      : addChecked(restaurantCommissionCents, deliveryFeeCents);
+    const expected = addChecked(debtBase, smallOrderFeeCents);
     if (expected === null || expected !== row.amountCents) {
       return { ok: false, error: BREAKDOWN_FAILED_ERROR };
     }
@@ -253,10 +259,14 @@ function explainRow(
       ),
     ];
     if (deliveryFeeCents > 0) {
+      // ONLINE_CARD_TO_RESTAURANT: доставка транзитом в долге (ADD).
+      // CASH_TO_PLATFORM_DRIVER: доставка уже у водителя (INFO_ONLY).
       parts.push(
         contribution(
-          "DIRECT_DRIVER_DELIVERY_TRANSIT",
-          "ADD",
+          isCashToDriver
+            ? "DIRECT_DRIVER_DELIVERY_INFO"
+            : "DIRECT_DRIVER_DELIVERY_TRANSIT",
+          isCashToDriver ? "INFO_ONLY" : "ADD",
           deliveryFeeCents,
           row,
         ),

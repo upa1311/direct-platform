@@ -428,3 +428,71 @@ test("денежное равенство сходится до цента", () 
     10_000,
   );
 });
+
+// --- CASH_TO_PLATFORM_DRIVER (v24) --------------------------------------------
+
+/** Наличные водителю Direct: клиент 10.50 = еда 100 + доставка 5; small-order 0.5. */
+const cashToDriver = (): OrderMoneyMovementInput => ({
+  deliveryMode: "PLATFORM_DRIVER",
+  paymentChannel: "CASH_TO_PLATFORM_DRIVER",
+  foodSubtotalCents: 10_000,
+  deliveryFeeCents: 500,
+  smallOrderFeeCents: 50,
+  customerTotalCents: 10_550,
+  restaurantCommissionCents: 1_500,
+  driverPayoutCents: 500,
+  financialRule: V1_RULE,
+  financialCollectionMode: "MIXED_COLLECTION",
+});
+
+test("CASH_TO_PLATFORM_DRIVER: получатель ресторан, банк 0, доставка не в долге", () => {
+  const m = okMovement(cashToDriver());
+  assert.equal(m.customerMoneyRecipient, "RESTAURANT");
+  assert.equal(m.totalBankFeeCents, 0);
+  assert.equal(m.restaurantBankFeeCents, 0);
+  assert.equal(m.directBankFeeCents, 0);
+  // Долг ресторана = комиссия + small-order fee (без стоимости доставки).
+  assert.equal(m.restaurantOwesDirectCents, 1_550);
+  assert.equal(m.directOwesRestaurantCents, 0);
+  assert.equal(m.restaurantNetCents, 8_500); // еда - комиссия
+  assert.equal(m.directNetRevenueCents, 1_550);
+});
+
+test("CASH_TO_PLATFORM_DRIVER работает и в RESTAURANT_COLLECTS_ALL", () => {
+  const m = okMovement({
+    ...cashToDriver(),
+    financialCollectionMode: "RESTAURANT_COLLECTS_ALL",
+  });
+  assert.equal(m.restaurantOwesDirectCents, 1_550);
+  assert.equal(m.directOwesRestaurantCents, 0);
+});
+
+test("CASH_TO_PLATFORM_DRIVER не путается с ONLINE_CARD_TO_RESTAURANT (доставка транзитом)", () => {
+  // Онлайн-ресторан: ресторан получил всю сумму, поэтому долг включает доставку.
+  const online = okMovement({
+    ...cashToDriver(),
+    paymentChannel: "ONLINE_CARD_TO_RESTAURANT",
+    financialCollectionMode: "RESTAURANT_COLLECTS_ALL",
+  });
+  assert.equal(online.restaurantOwesDirectCents, 1_500 + 500 + 50); // + доставка
+  // Наличный канал: доставку водитель удержал — в долг она не входит.
+  const cash = okMovement(cashToDriver());
+  assert.equal(cash.restaurantOwesDirectCents, 1_500 + 50);
+});
+
+test("CASH_TO_PLATFORM_DRIVER driverPayout обязан равняться deliveryFee", () => {
+  const bad = computeOrderMoneyMovement({ ...cashToDriver(), driverPayoutCents: 400 });
+  assert.equal(bad.ok, false);
+});
+
+test("CASH_TO_PLATFORM_DRIVER отклоняется для PICKUP/RESTAURANT_DELIVERY", () => {
+  const pickup = computeOrderMoneyMovement({
+    ...cashToDriver(),
+    deliveryMode: "PICKUP",
+    deliveryFeeCents: 0,
+    smallOrderFeeCents: 0,
+    customerTotalCents: 10_000,
+    driverPayoutCents: undefined,
+  });
+  assert.equal(pickup.ok, false);
+});

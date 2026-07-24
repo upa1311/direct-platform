@@ -145,20 +145,20 @@ const offerFor = (state: PrototypeState, orderId: string, driverId: string) =>
 // --- 1–9: schema и нормализация ------------------------------------------------
 
 test("1: схема прототипа равна 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
   const base = createDefaultState();
-  for (let version = 7; version <= 23; version += 1) {
+  for (let version = 7; version <= 24; version += 1) {
     const parsed = parseStoredState(
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version}`);
-    assert.equal(parsed.schemaVersion, 23);
+    assert.equal(parsed.schemaVersion, 24);
   }
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 24 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 25 })),
     null,
   );
 });
@@ -992,9 +992,9 @@ test("94–96: финансовые модули не читаются доме�
 
 const CASH_SNAPSHOT = {
   customerCollectionCents: 1000,
-  restaurantHandoffCents: 600,
+  restaurantHandoffCents: 700,
   driverEarningCents: 300,
-  directReceivableFromDriverCents: 100,
+  restaurantOwesDirectCents: 100,
 };
 
 const cashFinancials = (over: Record<string, unknown> = {}) => ({
@@ -1352,7 +1352,7 @@ test("cash-29..30: подтверждение не хранит сумму в Dr
   assert.equal(
     getPlatformDriverCashSnapshot(orderOf(r.state, orderId))
       ?.restaurantHandoffCents,
-    600,
+    700,
   );
 });
 
@@ -1420,8 +1420,8 @@ function parseWith(
 
 const parsedOffer = (state: PrototypeState) => state.driverOffers[0];
 
-test("cash-31: схема поднята до 23", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
+test("cash-31: схема поднята до 24", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
 });
 
 test("cash-32: schema 19 offer получает cashReserveConfirmedAt null", () => {

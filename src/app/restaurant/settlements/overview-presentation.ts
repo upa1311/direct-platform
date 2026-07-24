@@ -66,6 +66,7 @@ export const FINANCE_CHANNEL_LABELS: Record<FinanceRowPaymentChannel, string> = 
   CARD_AT_RESTAURANT: "Карта в ресторане",
   CASH_AT_RESTAURANT: "Наличные в ресторане",
   CASH_TO_RESTAURANT_COURIER: "Наличные курьеру ресторана",
+  CASH_TO_PLATFORM_DRIVER: "Наличные водителю Direct",
   LEGACY_UNKNOWN: "Архивные данные",
 };
 

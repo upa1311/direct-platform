@@ -135,21 +135,21 @@ function online(
 // --- 1–2: схема ---------------------------------------------------------------
 
 test("1: схема прототипа поднята до 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
   const base = createDefaultState();
-  for (let version = 7; version <= 23; version += 1) {
+  for (let version = 7; version <= 24; version += 1) {
     const parsed = parseStoredState(
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version} должна парситься`);
-    assert.equal(parsed.schemaVersion, 23, `схема ${version} → 18`);
+    assert.equal(parsed.schemaVersion, 24, `схема ${version} → 18`);
   }
   // Неизвестная будущая версия по-прежнему не принимается.
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 24 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 25 })),
     null,
   );
 });

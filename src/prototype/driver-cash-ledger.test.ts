@@ -42,9 +42,9 @@ const T6 = "2026-07-22T10:10:00.000Z"; // collection / delivery / now
 
 const SNAPSHOT = {
   customerCollectionCents: 1000,
-  restaurantHandoffCents: 600,
+  restaurantHandoffCents: 700,
   driverEarningCents: 300,
-  directReceivableFromDriverCents: 100,
+  restaurantOwesDirectCents: 100,
 };
 
 interface Opts {
@@ -161,7 +161,7 @@ function cashState(opts: Opts = {}): PrototypeState {
       driverId: DRIVER,
       restaurantId: REST,
       type: "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF",
-      amountCents: 600,
+      amountCents: 700,
       occurredAt: T2,
       actor: "DRIVER",
       restaurantWorkspaceRole: null,
@@ -174,7 +174,7 @@ function cashState(opts: Opts = {}): PrototypeState {
       driverId: DRIVER,
       restaurantId: REST,
       type: "RESTAURANT_CONFIRMED_CASH_RECEIPT",
-      amountCents: 600,
+      amountCents: 700,
       occurredAt: T3,
       actor: "RESTAURANT",
       restaurantWorkspaceRole: "COMBINED",
@@ -243,9 +243,9 @@ function expectedEntry(orderId = ORDER): DriverCashLedgerEntry {
     restaurantId: REST,
     currencyCode: "USD",
     customerCollectionCents: 1000,
-    restaurantHandoffCents: 600,
+    restaurantHandoffCents: 700,
     driverEarningCents: 300,
-    directReceivableFromDriverCents: 100,
+    directReceivableFromDriverCents: 0,
     recognizedAt: T6,
     source: "PLATFORM_DRIVER_CASH_ORDER",
   };
@@ -261,7 +261,7 @@ const completedState = (): PrototypeState => {
 // --- 1–3: schema / defaults ---------------------------------------------------
 
 test("1/2/3: схема 23, пустой ledger и выключенные наличные по умолчанию", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
   const d = createDefaultState();
   assert.deepEqual(d.driverCashLedgerEntries, []);
   assert.equal(d.platformSettings.platformDriverCashEnabled, false);
@@ -531,7 +531,7 @@ test("75–81: view фильтрует водителя и считает раз
   assert.equal(view.entries.length, 1);
   assert.equal(view.cashDeliveryCount, 1);
   assert.equal(view.cashEarningsCents, 300);
-  assert.equal(view.dueToDirectCents, 100);
+  assert.equal(view.dueToDirectCents, 0);
   assert.equal(view.reviewRequired, false);
   // Другой водитель записи не видит.
   const other = getDriverCashLedgerView(st, OTHER_DRIVER);
@@ -543,7 +543,7 @@ test("82: netting не выполняется (итоги раздельные)"
   const view = getDriverCashLedgerView(completedState(), DRIVER);
   // 300 и 100 остаются раздельными; разность 200 нигде не появляется.
   assert.equal(view.cashEarningsCents, 300);
-  assert.equal(view.dueToDirectCents, 100);
+  assert.equal(view.dueToDirectCents, 0);
   assert.notEqual(view.cashEarningsCents, 200);
 });
 

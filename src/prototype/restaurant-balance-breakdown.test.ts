@@ -1083,3 +1083,78 @@ test("48: расшифровка не создаёт новых бухгалте
     assert.equal(count, 1);
   }
 });
+
+// --- v24: наличные водителю Direct (CASH_TO_PLATFORM_DRIVER) -------------------
+
+/**
+ * Заказ доставки Direct, оплаченный наличными водителю. Ресторан получил
+ * наличные и должен Direct только комиссию + доплату; стоимость доставки
+ * водитель уже удержал. Реального CASH-пайплайна ещё нет (commit №2), поэтому
+ * снимок и запись бухгалтерии приводятся к наличной форме поверх driverCompleted.
+ */
+function cashToDriverCompleted(base: PrototypeState = createDefaultState()): {
+  state: PrototypeState;
+  orderId: string;
+  owed: number;
+} {
+  const { state, orderId } = driverCompleted(ALL, base);
+  const fin = orderOf(state, orderId).financials;
+  const owed = fin.restaurantCommissionCents + fin.smallOrderFeeCents;
+  const restaurantNet = fin.foodSubtotalCents - fin.restaurantCommissionCents;
+  const cashState = withOrder(state, orderId, (o) => ({
+    ...o,
+    financials: {
+      ...o.financials,
+      moneyMovement: {
+        customerMoneyRecipient: "RESTAURANT" as const,
+        paymentChannel: "CASH_TO_PLATFORM_DRIVER" as const,
+        totalBankFeeCents: 0,
+        restaurantBankFeeCents: 0,
+        directBankFeeCents: 0,
+        restaurantOwesDirectCents: owed,
+        directOwesRestaurantCents: 0,
+        restaurantNetCents: restaurantNet,
+        directNetRevenueCents: owed,
+      },
+    },
+  }));
+  const withEntry = {
+    ...cashState,
+    restaurantAccountingEntries: cashState.restaurantAccountingEntries.map((e) =>
+      e.orderId === orderId
+        ? { ...e, amountCents: owed, type: "RESTAURANT_REMITTANCE" as const }
+        : e,
+    ),
+  };
+  return { state: withEntry, orderId, owed };
+}
+
+test("v24 CASH: долг ресторана — только комиссия и доплата, без доставки", () => {
+  const { state, orderId, owed } = cashToDriverCompleted();
+  const fin = orderOf(state, orderId).financials;
+  const breakdown = okBreakdown(state, DIRECT_RID);
+  const commission = lineOf(breakdown, "DIRECT_DELIVERY_COMMISSION");
+  assert.ok(commission);
+  assert.equal(commission.effect, "ADD");
+  assert.equal(commission.amountCents, fin.restaurantCommissionCents);
+  // Стоимость доставки — информационная, не в долге.
+  if (fin.deliveryFeeCents > 0) {
+    const info = lineOf(breakdown, "DIRECT_DRIVER_DELIVERY_INFO");
+    assert.ok(info);
+    assert.equal(info.effect, "INFO_ONLY");
+    assert.equal(info.amountCents, fin.deliveryFeeCents);
+    assert.equal(lineOf(breakdown, "DIRECT_DRIVER_DELIVERY_TRANSIT"), undefined);
+  }
+  assert.equal(breakdown.restaurantOwesDirect.totalCents, owed);
+});
+
+test("v24 CASH: доплата за маленький заказ — отдельная строка долга", () => {
+  const { state, orderId } = cashToDriverCompleted();
+  const fin = orderOf(state, orderId).financials;
+  if (fin.smallOrderFeeCents === 0) return;
+  const breakdown = okBreakdown(state, DIRECT_RID);
+  const small = lineOf(breakdown, "SMALL_ORDER_FEE");
+  assert.ok(small);
+  assert.equal(small.effect, "ADD");
+  assert.equal(small.amountCents, fin.smallOrderFeeCents);
+});

@@ -16,8 +16,9 @@ import type {
  * подстановки нулей — при любом расхождении fail-closed.
  *
  * Снимок описывает ТОЛЬКО физический наличный поток «клиент → водитель →
- * ресторан / Direct / заработок водителя». Bank fee, комиссии эквайринга,
- * карточные аллокации и timestamps передачи денег сюда не входят.
+ * ресторан». Водитель оставляет только свою доставку; долга водителя перед
+ * Direct не существует. Bank fee, комиссии эквайринга, карточные аллокации и
+ * timestamps передачи денег сюда не входят.
  */
 
 /** Уже рассчитанные канонические суммы заказа — вход builder'а. */
@@ -44,12 +45,17 @@ function isPositiveCents(value: number): boolean {
 }
 
 /**
- * Строит cash-снимок из канонических сумм. Fail-closed:
- * - customer/restaurant/driver суммы: целые, безопасные, > 0;
- * - platform gross revenue: целое, безопасное, >= 0;
- * - обязательное равенство customerTotal === restaurantPayout + driverPayout
- *   + platformGrossRevenue.
- * Ничего не округляет, не исправляет и не обнуляет; input не мутирует.
+ * Строит cash-снимок из канонических сумм (v24). Fail-closed проверяет ВСЕ
+ * инварианты корректной наличной экономики:
+ *   customerCollection === customerTotal
+ *   driverEarning     === driverPayout
+ *   restaurantOwesDirect === platformGrossRevenue
+ *   restaurantHandoff === customerCollection - driverEarning
+ *   restaurantHandoff === restaurantPayoutBeforeBankFee + restaurantOwesDirect
+ *
+ * Водитель оставляет себе только доставку и передаёт ресторану весь остаток;
+ * долга водителя перед Direct не существует. Ничего не округляет, не исправляет
+ * и не пересчитывает — только проверяет и фиксирует.
  */
 export function buildPlatformDriverCashSnapshot(
   input: PlatformDriverCashAmountsInput,
@@ -65,26 +71,41 @@ export function buildPlatformDriverCashSnapshot(
     return { ok: false, error: "Некорректная сумма к получению от клиента." };
   }
   if (!isPositiveCents(restaurantPayoutBeforeBankFeeCents)) {
-    return { ok: false, error: "Некорректная сумма передачи ресторану." };
+    return { ok: false, error: "Некорректная чистая доля ресторана." };
   }
   if (!isPositiveCents(driverPayoutCents)) {
     return { ok: false, error: "Некорректный заработок водителя." };
   }
   if (!isSafeCents(platformGrossRevenueCents)) {
-    return { ok: false, error: "Некорректная сумма к получению Direct." };
+    return { ok: false, error: "Некорректная сумма к перечислению Direct." };
   }
 
-  // Reconciliation: наличный поток должен сходиться до цента. Не исправляем —
-  // при расхождении снимок не создаётся.
-  const distributed =
-    restaurantPayoutBeforeBankFeeCents +
-    driverPayoutCents +
-    platformGrossRevenueCents;
-  if (customerTotalCents !== distributed) {
+  // Водитель передаёт ресторану весь остаток после удержания своей доставки.
+  const restaurantHandoffCents = customerTotalCents - driverPayoutCents;
+  if (!isPositiveCents(restaurantHandoffCents)) {
+    return {
+      ok: false,
+      error: "Некорректная сумма передачи ресторану.",
+    };
+  }
+  // Передаваемая ресторану сумма обязана состоять ровно из его чистой доли и
+  // будущего долга перед Direct — иначе данные заказа противоречивы.
+  if (
+    restaurantHandoffCents !==
+    restaurantPayoutBeforeBankFeeCents + platformGrossRevenueCents
+  ) {
     return {
       ok: false,
       error:
-        "Наличный поток не сходится: сумма клиента не равна ресторану + водителю + Direct.",
+        "Наличный поток не сходится: передача ресторану не равна его доле плюс долгу Direct.",
+    };
+  }
+  // Полный поток клиента: передача ресторану + заработок водителя.
+  if (customerTotalCents !== restaurantHandoffCents + driverPayoutCents) {
+    return {
+      ok: false,
+      error:
+        "Наличный поток не сходится: сумма клиента не равна передаче ресторану плюс заработку водителя.",
     };
   }
 
@@ -92,9 +113,9 @@ export function buildPlatformDriverCashSnapshot(
     ok: true,
     snapshot: {
       customerCollectionCents: customerTotalCents,
-      restaurantHandoffCents: restaurantPayoutBeforeBankFeeCents,
+      restaurantHandoffCents,
       driverEarningCents: driverPayoutCents,
-      directReceivableFromDriverCents: platformGrossRevenueCents,
+      restaurantOwesDirectCents: platformGrossRevenueCents,
     },
   };
 }
@@ -110,8 +131,7 @@ function snapshotMatches(
     c.customerCollectionCents === canonical.customerCollectionCents &&
     c.restaurantHandoffCents === canonical.restaurantHandoffCents &&
     c.driverEarningCents === canonical.driverEarningCents &&
-    c.directReceivableFromDriverCents ===
-      canonical.directReceivableFromDriverCents
+    c.restaurantOwesDirectCents === canonical.restaurantOwesDirectCents
   );
 }
 

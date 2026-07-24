@@ -233,11 +233,13 @@ function validateSnapshotEntryAgainstOrder(
   ) {
     return "Обязательство существует при нулевом движении денег заказа.";
   }
-  // v13: основание долга ресторана задаётся каналом оплаты самого движения —
-  // ONLINE_CARD_TO_RESTAURANT означает перечисление, любой другой канал —
-  // комиссию. Тип, не соответствующий каналу, — повреждение, а не вариант.
+  // v13/v24: основание долга ресторана задаётся каналом оплаты движения.
+  // Перечисление (RESTAURANT_REMITTANCE) — когда ресторан получил деньги
+  // клиента: онлайн-картой (ONLINE_CARD_TO_RESTAURANT) или наличными от
+  // водителя Direct (CASH_TO_PLATFORM_DRIVER). Иные каналы — чистая комиссия.
   const expectedDebtType =
-    movement.paymentChannel === "ONLINE_CARD_TO_RESTAURANT"
+    movement.paymentChannel === "ONLINE_CARD_TO_RESTAURANT" ||
+    movement.paymentChannel === "CASH_TO_PLATFORM_DRIVER"
       ? "RESTAURANT_REMITTANCE"
       : "PLATFORM_COMMISSION";
   const matches =

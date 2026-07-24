@@ -39,9 +39,9 @@ const T3 = "2026-07-22T10:07:00.000Z";
 
 const SNAPSHOT = {
   customerCollectionCents: 1000,
-  restaurantHandoffCents: 600,
+  restaurantHandoffCents: 700,
   driverEarningCents: 300,
-  directReceivableFromDriverCents: 100,
+  restaurantOwesDirectCents: 100,
 };
 
 interface CashStateOpts {
@@ -142,7 +142,7 @@ function cashState(opts: CashStateOpts = {}): PrototypeState {
       driverId: DRIVER,
       restaurantId: REST,
       type: "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF",
-      amountCents: 600,
+      amountCents: 700,
       occurredAt: T2,
       actor: "DRIVER",
       restaurantWorkspaceRole: null,
@@ -155,7 +155,7 @@ function cashState(opts: CashStateOpts = {}): PrototypeState {
       driverId: DRIVER,
       restaurantId: REST,
       type: "RESTAURANT_CONFIRMED_CASH_RECEIPT",
-      amountCents: 600,
+      amountCents: 700,
       occurredAt: T3,
       actor: "RESTAURANT",
       restaurantWorkspaceRole: "COMBINED",
@@ -192,8 +192,8 @@ const theOrder = (state: PrototypeState): Order => state.orders[0];
 
 // --- 1–3: schema / default ----------------------------------------------------
 
-test("1: схема равна 23", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
+test("1: схема равна 24", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
 });
 test("2: default platformDriverCashEvents пуст", () => {
   assert.deepEqual(createDefaultState().platformDriverCashEvents, []);
@@ -244,7 +244,7 @@ test("12/13/14: amount из snapshot; action не принимает amount; о�
   assert.equal(r.result.ok, true);
   const events = r.state.platformDriverCashEvents;
   assert.equal(events.length, 1);
-  assert.equal(events[0].amountCents, 600);
+  assert.equal(events[0].amountCents, 700);
   assert.equal(events[0].actor, "DRIVER");
   assert.equal(events[0].restaurantWorkspaceRole, null);
 });
@@ -310,7 +310,7 @@ test("26/27: confirmation фиксирует точную сумму и роль
     (e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT",
   );
   assert.ok(ev);
-  assert.equal(ev.amountCents, 600);
+  assert.equal(ev.amountCents, 700);
   assert.equal(ev.restaurantWorkspaceRole, "OPERATOR");
   assert.equal(ev.actor, "RESTAURANT");
 });
@@ -406,7 +406,7 @@ test("35e: позднее время разрешено → CONFIRMED без и�
   );
   assert.ok(ev);
   assert.equal(ev.occurredAt, T3);
-  assert.equal(ev.amountCents, 600);
+  assert.equal(ev.amountCents, 700);
   assert.equal(getPlatformDriverCashHandoffView(r.state, theOrder(r.state)).status, "CONFIRMED");
 });
 
@@ -438,7 +438,7 @@ test("35f: повреждённый report.occurredAt — fail-closed без и�
 test("view: этапы DRIVER_ACTION → RESTAURANT_CONFIRMATION → CONFIRMED", () => {
   const s0 = cashState({ arrived: true });
   assert.equal(getPlatformDriverCashHandoffView(s0, theOrder(s0)).status, "DRIVER_ACTION_REQUIRED");
-  assert.equal(getPlatformDriverCashHandoffView(s0, theOrder(s0)).amountCents, 600);
+  assert.equal(getPlatformDriverCashHandoffView(s0, theOrder(s0)).amountCents, 700);
   const s1 = cashState({ arrived: true, reported: true });
   assert.equal(
     getPlatformDriverCashHandoffView(s1, theOrder(s1)).status,
@@ -536,7 +536,7 @@ function reportRaw(over: Record<string, unknown> = {}) {
     driverId: DRIVER,
     restaurantId: REST,
     type: "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF",
-    amountCents: 600,
+    amountCents: 700,
     occurredAt: T2,
     actor: "DRIVER",
     restaurantWorkspaceRole: null,
@@ -550,7 +550,7 @@ function confirmRaw(over: Record<string, unknown> = {}) {
     driverId: DRIVER,
     restaurantId: REST,
     type: "RESTAURANT_CONFIRMED_CASH_RECEIPT",
-    amountCents: 600,
+    amountCents: 700,
     occurredAt: T3,
     actor: "RESTAURANT",
     restaurantWorkspaceRole: "OPERATOR",
@@ -598,8 +598,8 @@ test("48–56: невалидные события удаляются", () => {
   assert.equal(bad({ orderId: "нет" }), 0); // 52 несуществующий order
   assert.equal(bad({ driverId: "нет" }), 0); // 53 несуществующий driver
   assert.equal(bad({ occurredAt: "не-дата" }), 0); // 54 невалидный ISO
-  assert.equal(bad({ amountCents: 600.5 }), 0); // 55 дробная
-  assert.equal(bad({ amountCents: 601 }), 0); // 56 отличается на 1 цент
+  assert.equal(bad({ amountCents: 700.5 }), 0); // 55 дробная
+  assert.equal(bad({ amountCents: 701 }), 0); // 56 отличается на 1 цент
 });
 test("57: event для ONLINE order удаляется", () => {
   const s = cashState({ paymentMethod: "ONLINE", paymentStatus: "PAID", arrived: true });

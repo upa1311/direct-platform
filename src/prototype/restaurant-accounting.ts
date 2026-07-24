@@ -120,8 +120,12 @@ export function computeCompletedOrderAccounting(
     // при доставке водителем Direct в режиме RESTAURANT_COLLECTS_ALL: ресторан
     // получил всю сумму клиента и перечисляет Direct комиссию, доставку и
     // small-order fee одним обязательством — это перечисление, а не комиссия.
+    // v24: CASH_TO_PLATFORM_DRIVER — ресторан получил наличные от водителя и
+    // перечисляет Direct комиссию + small-order fee (без стоимости доставки:
+    // её водитель уже удержал). Это тоже перечисление, а не «чистая комиссия».
     type =
-      movement.paymentChannel === "ONLINE_CARD_TO_RESTAURANT"
+      movement.paymentChannel === "ONLINE_CARD_TO_RESTAURANT" ||
+      movement.paymentChannel === "CASH_TO_PLATFORM_DRIVER"
         ? "RESTAURANT_REMITTANCE"
         : "PLATFORM_COMMISSION";
     amountCents = movement.restaurantOwesDirectCents;

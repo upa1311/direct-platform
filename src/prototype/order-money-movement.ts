@@ -43,7 +43,13 @@ export type OrderPaymentChannel =
   | "ONLINE_CARD_TO_RESTAURANT"
   | "CARD_AT_RESTAURANT"
   | "CASH_AT_RESTAURANT"
-  | "CASH_TO_RESTAURANT_COURIER";
+  | "CASH_TO_RESTAURANT_COURIER"
+  /**
+   * Наличные водителю Direct (v24): клиент отдаёт всю сумму водителю, водитель
+   * оставляет свою доставку и передаёт остаток ресторану. Экономический
+   * получатель денег — ресторан; водитель лишь операционный посредник.
+   */
+  | "CASH_TO_PLATFORM_DRIVER";
 
 /** Уже рассчитанные суммы одного заказа (pricing-engine) и канал оплаты. */
 export interface OrderMoneyMovementInput {
@@ -123,6 +129,7 @@ const KNOWN_PAYMENT_CHANNELS: readonly OrderPaymentChannel[] = [
   "CARD_AT_RESTAURANT",
   "CASH_AT_RESTAURANT",
   "CASH_TO_RESTAURANT_COURIER",
+  "CASH_TO_PLATFORM_DRIVER",
 ];
 
 /**
@@ -148,6 +155,12 @@ function resolveChannelContext(
     }
   | string {
   if (deliveryMode === "PLATFORM_DRIVER") {
+    // Наличные водителю Direct: канал сам определяет фактический поток, поэтому
+    // допустим при любом финансовом режиме ресторана. Деньги экономически
+    // получает ресторан (водитель удерживает только свою доставку).
+    if (paymentChannel === "CASH_TO_PLATFORM_DRIVER") {
+      return { recipient: "RESTAURANT", collector: "RESTAURANT", instrument: "CASH" };
+    }
     if (financialCollectionMode === "RESTAURANT_COLLECTS_ALL") {
       return paymentChannel === "ONLINE_CARD_TO_RESTAURANT"
         ? { recipient: "RESTAURANT", collector: "RESTAURANT", instrument: "CARD" }
@@ -156,6 +169,9 @@ function resolveChannelContext(
     return paymentChannel === "ONLINE_CARD"
       ? { recipient: "DIRECT", collector: "DIRECT", instrument: "CARD" }
       : "Для доставки водителем Direct поддерживается только онлайн-оплата картой.";
+  }
+  if (paymentChannel === "CASH_TO_PLATFORM_DRIVER") {
+    return "Наличные водителю Direct возможны только при доставке водителем Direct.";
   }
   if (deliveryMode === "PICKUP") {
     if (paymentChannel === "CARD_AT_RESTAURANT") {
@@ -299,6 +315,37 @@ export function computeOrderMoneyMovement(
   }
   if (expectedTotal !== input.customerTotalCents) {
     return fail("Суммы заказа не сходятся с суммой клиента.");
+  }
+
+  // v24: наличные водителю Direct — отдельный канал БЕЗ банковской комиссии.
+  // Ресторан получил наличные от водителя (тот удержал свою доставку), поэтому
+  // должен Direct только комиссию + small-order fee; доставка в долг не входит.
+  if (input.paymentChannel === "CASH_TO_PLATFORM_DRIVER") {
+    const owed = addChecked(
+      input.restaurantCommissionCents,
+      input.smallOrderFeeCents,
+    );
+    const restaurantNet = subtractChecked(
+      input.foodSubtotalCents,
+      input.restaurantCommissionCents,
+    );
+    if (owed === null || restaurantNet === null) {
+      return fail("Суммы заказа выходят за безопасный диапазон.");
+    }
+    return {
+      ok: true,
+      movement: {
+        customerMoneyRecipient: "RESTAURANT",
+        paymentChannel: input.paymentChannel,
+        totalBankFeeCents: 0,
+        restaurantBankFeeCents: 0,
+        directBankFeeCents: 0,
+        restaurantOwesDirectCents: owed,
+        directOwesRestaurantCents: 0,
+        restaurantNetCents: restaurantNet,
+        directNetRevenueCents: owed,
+      },
+    };
   }
 
   // Банковская математика — ТОЛЬКО существующий канонический расчёт.

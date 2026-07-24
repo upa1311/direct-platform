@@ -938,3 +938,51 @@ test("summary — проекция того же builder; старые helpers �
   assert.equal(getRestaurantOpenReceivableCents(st, RID), model.restaurantOwesDirectCents);
   assert.equal(getRestaurantOpenPayableCents(st, RID), model.directOwesRestaurantCents);
 });
+
+// CASH_TO_PLATFORM_DRIVER (v24) -----------------------------------------------
+
+/** Наличные водителю Direct: ресторан должен Direct amount (комиссия+small). */
+function moveCashToDriver(amount: number): OrderMoneyMovement {
+  return {
+    customerMoneyRecipient: "RESTAURANT",
+    paymentChannel: "CASH_TO_PLATFORM_DRIVER",
+    totalBankFeeCents: 0,
+    restaurantBankFeeCents: 0,
+    directBankFeeCents: 0,
+    restaurantOwesDirectCents: amount,
+    directOwesRestaurantCents: 0,
+    restaurantNetCents: 0,
+    directNetRevenueCents: amount,
+  };
+}
+
+test("CASH_TO_PLATFORM_DRIVER: read-model принимает RESTAURANT_REMITTANCE и сумму", () => {
+  const order = {
+    ...makeOrder("cash", moveCashToDriver(700)),
+    deliveryMode: "PLATFORM_DRIVER" as const,
+  };
+  const entry = entryFor(order, "RESTAURANT_OWES_DIRECT", 700, {
+    type: "RESTAURANT_REMITTANCE",
+  });
+  const model = okModel(stateWith([order], [entry]));
+  assert.equal(model.restaurantOwesDirectCents, 700);
+  assert.equal(model.directOwesRestaurantCents, 0);
+  assert.equal(model.netDirection, "RESTAURANT_OWES_DIRECT");
+  const row = model.openOrders.find((r) => r.orderId === order.id);
+  assert.ok(row);
+  assert.equal(row.accountingType, "RESTAURANT_REMITTANCE");
+  assert.equal(row.paymentChannel, "CASH_TO_PLATFORM_DRIVER");
+  assert.equal(row.amountCents, 700);
+});
+
+test("CASH_TO_PLATFORM_DRIVER: PLATFORM_COMMISSION-тип противоречит движению", () => {
+  const order = {
+    ...makeOrder("cash2", moveCashToDriver(700)),
+    deliveryMode: "PLATFORM_DRIVER" as const,
+  };
+  const wrong = entryFor(order, "RESTAURANT_OWES_DIRECT", 700, {
+    type: "PLATFORM_COMMISSION",
+  });
+  const result = buildRestaurantFinanceReadModel(stateWith([order], [wrong]), RID);
+  assert.equal(result.ok, false);
+});

@@ -1777,3 +1777,40 @@ test("подтверждение: SETTLED и WAIVED дают разный тек
   const waived = formatAccountingResolutionMessage({ ...base, outcome: "WAIVED" });
   assert.notEqual(settled, waived);
 });
+
+// CASH_TO_PLATFORM_DRIVER (v24) -----------------------------------------------
+
+/** Наличные водителю Direct: ресторан должен Direct комиссию + small-order (700). */
+const CASH_TO_DRIVER: Partial<FinancialSnapshot> = {
+  restaurantCollectedFromCustomerCents: 5000,
+  platformCollectedFromCustomerCents: 0,
+  restaurantPayoutBeforeBankFeeCents: 4300,
+  moneyMovementStatus: "COMPLETE",
+  moneyMovement: {
+    customerMoneyRecipient: "RESTAURANT",
+    paymentChannel: "CASH_TO_PLATFORM_DRIVER",
+    totalBankFeeCents: 0,
+    restaurantBankFeeCents: 0,
+    directBankFeeCents: 0,
+    restaurantOwesDirectCents: 700,
+    directOwesRestaurantCents: 0,
+    restaurantNetCents: 4300,
+    directNetRevenueCents: 700,
+  },
+};
+
+test("CASH_TO_PLATFORM_DRIVER → RESTAURANT_REMITTANCE, сумма из движения", () => {
+  const order = completed("cash1", "PLATFORM_DRIVER", CASH_TO_DRIVER);
+  const res = computeCompletedOrderAccounting(order, []);
+  assert.equal(res.ok, true);
+  assert.equal(res.entries.length, 1);
+  assert.equal(res.entries[0].direction, "RESTAURANT_OWES_DIRECT");
+  // Долг ресторана — перечисление (получил наличные от водителя), не «чистая комиссия».
+  assert.equal(res.entries[0].type, "RESTAURANT_REMITTANCE");
+  assert.equal(res.entries[0].amountCents, 700);
+  assert.equal(
+    res.entries[0].amountCents,
+    order.financials.moneyMovement?.restaurantOwesDirectCents,
+  );
+  assert.equal(res.entries[0].source, "ORDER_FINANCIAL_SNAPSHOT");
+});

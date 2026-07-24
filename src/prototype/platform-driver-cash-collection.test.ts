@@ -38,9 +38,9 @@ const T6 = "2026-07-22T10:10:00.000Z"; // collection / now
 
 const SNAPSHOT = {
   customerCollectionCents: 1000,
-  restaurantHandoffCents: 600,
+  restaurantHandoffCents: 700,
   driverEarningCents: 300,
-  directReceivableFromDriverCents: 100,
+  restaurantOwesDirectCents: 100,
 };
 
 interface Opts {
@@ -169,7 +169,7 @@ function cashState(opts: Opts = {}): PrototypeState {
       driverId: DRIVER,
       restaurantId: REST,
       type: "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF",
-      amountCents: 600,
+      amountCents: 700,
       occurredAt: T2,
       actor: "DRIVER",
       restaurantWorkspaceRole: null,
@@ -182,7 +182,7 @@ function cashState(opts: Opts = {}): PrototypeState {
       driverId: DRIVER,
       restaurantId: REST,
       type: "RESTAURANT_CONFIRMED_CASH_RECEIPT",
-      amountCents: 600,
+      amountCents: 700,
       occurredAt: opts.confirmedAt ?? T3,
       actor: "RESTAURANT",
       restaurantWorkspaceRole: "COMBINED",
@@ -230,8 +230,8 @@ const complete = (s: PrototypeState, now = T6, input = confirmInput) =>
 
 // --- 1–3: schema / defaults ---------------------------------------------------
 
-test("1: схема равна 23", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
+test("1: схема равна 24", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
 });
 test("2/3: default cash выключен, событий нет", () => {
   const d = createDefaultState();

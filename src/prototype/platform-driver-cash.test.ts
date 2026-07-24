@@ -37,9 +37,9 @@ const OK_AMOUNTS: PlatformDriverCashAmountsInput = {
 
 const OK_SNAPSHOT: PlatformDriverCashSnapshot = {
   customerCollectionCents: 1000,
-  restaurantHandoffCents: 600,
+  restaurantHandoffCents: 700,
   driverEarningCents: 300,
-  directReceivableFromDriverCents: 100,
+  restaurantOwesDirectCents: 100,
 };
 
 /** Минимальный заказ для селектора (читает только режимы и financials). */
@@ -78,10 +78,11 @@ test("2: customerCollection берётся из customerTotal", () => {
   assert.equal(r.snapshot.customerCollectionCents, 1000);
 });
 
-test("3: restaurantHandoff из restaurantPayoutBeforeBankFee", () => {
+test("3: restaurantHandoff = customerCollection - driverEarning", () => {
   const r = buildPlatformDriverCashSnapshot(OK_AMOUNTS);
   assert.ok(r.ok);
-  assert.equal(r.snapshot.restaurantHandoffCents, 600);
+  // v24: водитель передаёт ресторану весь остаток (1000 - 300 = 700).
+  assert.equal(r.snapshot.restaurantHandoffCents, 700);
 });
 
 test("4: driverEarning из driverPayout", () => {
@@ -90,21 +91,24 @@ test("4: driverEarning из driverPayout", () => {
   assert.equal(r.snapshot.driverEarningCents, 300);
 });
 
-test("5: directReceivable из platformGrossRevenue", () => {
+test("5: restaurantOwesDirect из platformGrossRevenue", () => {
   const r = buildPlatformDriverCashSnapshot(OK_AMOUNTS);
   assert.ok(r.ok);
-  assert.equal(r.snapshot.directReceivableFromDriverCents, 100);
+  assert.equal(r.snapshot.restaurantOwesDirectCents, 100);
 });
 
-test("6: reconciliation сходится (клиент = ресторан + водитель + Direct)", () => {
+test("6: reconciliation сходится (клиент = передача ресторану + заработок)", () => {
   const r = buildPlatformDriverCashSnapshot(OK_AMOUNTS);
   assert.ok(r.ok);
-  const s = r.snapshot;
+  const snap = r.snapshot;
   assert.equal(
-    s.customerCollectionCents,
-    s.restaurantHandoffCents +
-      s.driverEarningCents +
-      s.directReceivableFromDriverCents,
+    snap.customerCollectionCents,
+    snap.restaurantHandoffCents + snap.driverEarningCents,
+  );
+  // Передача ресторану = его чистая доля + долг ресторана перед Direct.
+  assert.equal(
+    snap.restaurantHandoffCents,
+    OK_AMOUNTS.restaurantPayoutBeforeBankFeeCents + snap.restaurantOwesDirectCents,
   );
 });
 
@@ -144,11 +148,12 @@ test("10: customer total 0 отклоняется", () => {
 });
 
 test("11: restaurant handoff 0 отклоняется", () => {
+  // customer === driverEarning → передача ресторану 0.
   const r = buildPlatformDriverCashSnapshot({
-    customerTotalCents: 400,
-    restaurantPayoutBeforeBankFeeCents: 0,
+    customerTotalCents: 300,
+    restaurantPayoutBeforeBankFeeCents: 200,
     driverPayoutCents: 300,
-    platformGrossRevenueCents: 100,
+    platformGrossRevenueCents: 0,
   });
   assert.equal(r.ok, false);
 });
@@ -163,7 +168,7 @@ test("12: driver earning 0 отклоняется", () => {
   assert.equal(r.ok, false);
 });
 
-test("13: direct receivable может быть 0", () => {
+test("13: restaurant owes Direct может быть 0", () => {
   const r = buildPlatformDriverCashSnapshot({
     customerTotalCents: 1000,
     restaurantPayoutBeforeBankFeeCents: 600,
@@ -171,7 +176,7 @@ test("13: direct receivable может быть 0", () => {
     platformGrossRevenueCents: 0,
   });
   assert.ok(r.ok);
-  assert.equal(r.snapshot.directReceivableFromDriverCents, 0);
+  assert.equal(r.snapshot.restaurantOwesDirectCents, 0);
 });
 
 test("14: расхождение на 1 цент отклоняется", () => {
@@ -398,7 +403,7 @@ test("27: несовпадение direct receivable → null", () => {
     deliveryMode: "PLATFORM_DRIVER",
     paymentMethod: "CASH",
     amounts: OK_AMOUNTS,
-    candidate: { ...OK_SNAPSHOT, directReceivableFromDriverCents: 99 },
+    candidate: { ...OK_SNAPSHOT, restaurantOwesDirectCents: 99 },
   });
   assert.equal(resolved, null);
 });
@@ -541,7 +546,7 @@ test("P11: schema 19 CASH с повреждённым snapshot остаётся 
 
 test("P12: schema 19 CASH с расхождением на 1 цент остаётся CASH, snapshot null", () => {
   const order = persistNative(19, {
-    candidate: { ...OK_SNAPSHOT, directReceivableFromDriverCents: 99 },
+    candidate: { ...OK_SNAPSHOT, restaurantOwesDirectCents: 99 },
     amounts: { platformGrossRevenueCents: 100 },
   });
   assert.equal(order.paymentMethod, "CASH");
@@ -598,7 +603,7 @@ test("P19: обычный новый ONLINE order создаётся с platform
 // --- 29–40: регрессии («наличные остаются выключенными») ----------------------
 
 test("29: schema равна 19", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
 });
 
 test("30: platformDriverCashEnabled остаётся false", () => {
@@ -666,8 +671,6 @@ test("37–40: cash snapshot не влияет на ONLINE lifecycle/pricing/acc
   assert.ok(r.ok);
   assert.equal(
     r.snapshot.customerCollectionCents,
-    r.snapshot.restaurantHandoffCents +
-      r.snapshot.driverEarningCents +
-      r.snapshot.directReceivableFromDriverCents,
+    r.snapshot.restaurantHandoffCents + r.snapshot.driverEarningCents,
   );
 });

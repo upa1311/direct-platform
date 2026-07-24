@@ -216,7 +216,7 @@ test("3: legacy-ресторан без поля получает MIXED_COLLECTI
 });
 
 test("4: схема мигрирует 12 → текущую", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 23);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
   const legacy = createDefaultState() as unknown as Record<string, unknown>;
   legacy.schemaVersion = 12;
   const parsed = parseStoredState(JSON.stringify(legacy));

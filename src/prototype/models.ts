@@ -6,7 +6,7 @@ import type {
 import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 
-export const PROTOTYPE_SCHEMA_VERSION = 23 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 24 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -721,40 +721,48 @@ export interface RestaurantDeliverySnapshot {
 }
 
 /**
- * Неизменяемый снимок будущего НАЛИЧНОГО потока заказа PLATFORM_DRIVER (v19).
- * Описывает только физическое движение денег «клиент → водитель → ресторан /
- * Direct / заработок водителя». Это НЕ банковский расчёт: без bank fee, без
- * комиссий эквайринга, без timestamps передачи. Суммы — проекция уже
- * рассчитанных канонических financials под понятными cash-названиями; ничего
- * не пересчитывается. Обязательное равенство:
+ * Неизменяемый снимок НАЛИЧНОГО потока заказа PLATFORM_DRIVER (v24).
+ *
+ * Экономика: клиент отдаёт водителю всю сумму; водитель оставляет себе только
+ * свою доставку и передаёт ресторану ВЕСЬ остаток. Ресторан оставляет свою
+ * чистую долю и становится должником Direct на комиссию + small-order fee.
+ * Водитель Direct ничего не должен: его заработок уже удержан из наличных.
+ *
+ * Инварианты (проверяются builder'ом fail-closed):
  *   customerCollectionCents === restaurantHandoffCents + driverEarningCents
- *     + directReceivableFromDriverCents.
+ *   restaurantHandoffCents === restaurantPayoutBeforeBankFeeCents
+ *                              + restaurantOwesDirectCents
+ * Суммы — проекция уже рассчитанных immutable financials; ничего не считается
+ * заново и не округляется.
  */
 export interface PlatformDriverCashSnapshot {
   /**
-   * Полная сумма, которую водитель должен получить от клиента.
+   * Полная сумма, которую водитель получает от клиента.
    * Источник: financials.customerTotalCents.
    */
   customerCollectionCents: number;
 
   /**
-   * Точная сумма, которую водитель должен передать ресторану.
-   * Это одновременно необходимый денежный запас водителя до получения заказа.
-   * Источник: financials.restaurantPayoutBeforeBankFeeCents.
+   * Полная сумма, которую водитель передаёт ресторану до получения заказа:
+   * customerCollectionCents - driverEarningCents.
+   *
+   * В ней находятся:
+   * - чистая доля ресторана;
+   * - будущий долг ресторана перед Direct.
    */
   restaurantHandoffCents: number;
 
   /**
-   * Заработок водителя за доставку.
-   * Источник: financials.driverPayoutCents.
+   * Стоимость доставки, которую водитель оставляет себе после получения
+   * наличных от клиента. Источник: financials.driverPayoutCents.
    */
   driverEarningCents: number;
 
   /**
-   * Сумма, которую водитель после завершения наличного заказа должен Direct.
+   * Сумма, которую ресторан после получения денег от водителя должен Direct.
    * Источник: financials.platformGrossRevenueCents.
    */
-  directReceivableFromDriverCents: number;
+  restaurantOwesDirectCents: number;
 }
 
 /**
@@ -791,19 +799,10 @@ export interface PlatformDriverCashEvent {
 
 /**
  * Неизменяемая append-only запись расчёта водителя по ОДНОЙ завершённой
- * наличной доставке (v23). Копирует четыре уже зафиксированные суммы cash
- * snapshot и ничего не пересчитывает.
- *
- * Экономический смысл двух разных категорий:
- *  - driverEarningCents — заработок, который водитель УЖЕ удержал из полученных
- *    наличных (Direct её не выплачивает повторно);
- *  - directReceivableFromDriverCents — деньги Direct, которые пока физически
- *    находятся у водителя и должны быть переданы позднее.
- * Их нельзя складывать, вычитать друг из друга или показывать одним «балансом».
- *
- * Записи не редактируются: будущие погашения станут отдельными append-only
- * событиями, а не изменением этой записи. Поэтому здесь нет status, settledAt,
- * outstandingCents, payoutId и произвольных комментариев.
+ * наличной доставке (v23). Копирует суммы из cash snapshot и ничего не
+ * пересчитывает. Долга водителя перед Direct в корректной модели нет —
+ * directReceivableFromDriverCents здесь остаётся нулём (переход на единый
+ * журнал заработка выполняется отдельным commit'ом).
  */
 export interface DriverCashLedgerEntry {
   id: string;
