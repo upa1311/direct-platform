@@ -288,13 +288,19 @@ function deliveredEvent(
 
 /**
  * Ожидаемая запись заработка для УЖЕ завершённого заказа. Используется repeat
- * completion, проверкой целостности и нормализацией schema 24. Ничего не
- * мутирует и не создаёт задним числом.
+ * completion, проверкой целостности, driver read-model и нормализацией/миграцией.
+ * Ничего не мутирует и не создаёт задним числом.
  *
- * recognizedAt = момент события ORDER_DELIVERED. Для наличного заказа
- * дополнительно доказываются получение денег, передача ресторану, канал
- * CASH_TO_PLATFORM_DRIVER и уже признанное (или законно нулевое) обязательство
- * ресторана.
+ * ONLINE (repair v25): признаётся только при ПОЛНОМ доказательстве жизненного
+ * цикла (ровно по одному ORDER_PICKED_UP / ARRIVING_TO_CUSTOMER / ORDER_DELIVERED
+ * с точными переходами и хронологией pickup ≤ arriving ≤ delivered), COMPLETE
+ * онлайн-движении денег и УЖЕ признанном (или законно нулевом) обязательстве
+ * ресторана. Иначе fail-closed — искусственно/финансово неполный заказ не создаёт
+ * подтверждённый долг Direct перед водителем.
+ *
+ * CASH: recognizedAt = ORDER_DELIVERED; дополнительно доказываются получение
+ * денег, передача ресторану, канал CASH_TO_PLATFORM_DRIVER и уже признанное
+ * (или законно нулевое) обязательство ресторана.
  */
 export function buildCompletedDriverEarningEntry(
   state: PrototypeState,
@@ -307,11 +313,9 @@ export function buildCompletedDriverEarningEntry(
   if (order.status !== "DELIVERED") return fail();
   if (order.paymentStatus !== "PAID") return fail();
 
-  const delivered = deliveredEvent(state, order.id, driverId);
-  if (delivered === null) return fail();
-  const recognizedAt = delivered.occurredAt;
-
   if (order.paymentMethod === "ONLINE") {
+    const evidence = validateCompletedOnlineEvidence(state, order);
+    if (evidence === null) return fail();
     return {
       ok: true,
       entry: makeEntry(
@@ -319,12 +323,16 @@ export function buildCompletedDriverEarningEntry(
         driverId,
         driverPayoutCents,
         "DIRECT_PAYOUT_DUE",
-        recognizedAt,
+        evidence.recognizedAt,
       ),
     };
   }
 
   if (order.paymentMethod === "CASH") {
+    const delivered = deliveredEvent(state, order.id, driverId);
+    if (delivered === null) return fail();
+    const recognizedAt = delivered.occurredAt;
+
     const evidence = validateCompletedCashEvidence(state, order);
     if (evidence === null) return fail();
     if (evidence.recognizedAt !== recognizedAt) return fail();
@@ -350,6 +358,110 @@ export function buildCompletedDriverEarningEntry(
   }
 
   return fail();
+}
+
+/** Driver delivery события данного типа ИМЕННО этого водителя по заказу. */
+function driverEventsOfType(
+  state: PrototypeState,
+  orderId: string,
+  driverId: string,
+  type: "ORDER_PICKED_UP" | "ARRIVING_TO_CUSTOMER" | "ORDER_DELIVERED",
+) {
+  return state.driverDeliveryEvents.filter(
+    (e) => e.orderId === orderId && e.driverId === driverId && e.type === type,
+  );
+}
+
+/**
+ * Полное доказательство завершённого ОНЛАЙН-заказа: точный журнал рабочего пути,
+ * хронология, COMPLETE онлайн-движение денег и уже признанное (или законно
+ * нулевое) обязательство ресторана. Ничего не мутирует и не создаёт. Возвращает
+ * driverId и момент признания (ORDER_DELIVERED.occurredAt), либо null.
+ *
+ * Для завершённого заказа НЕ требуются BUSY_DIRECT и активный заказ водителя:
+ * после доставки водитель законно уходит на подтверждение зоны, а заказ активным
+ * уже не является.
+ */
+function validateCompletedOnlineEvidence(
+  state: PrototypeState,
+  order: Order,
+): { driverId: string; recognizedAt: string } | null {
+  const ctx = baseEarningContext(state, order);
+  if (ctx === null) return null;
+  const { driverId } = ctx;
+  if (order.deliveryMode !== "PLATFORM_DRIVER") return null;
+  if (order.paymentMethod !== "ONLINE") return null;
+  if (order.paymentStatus !== "PAID") return null;
+  if (order.status !== "DELIVERED") return null;
+
+  // Точное количество событий ИМЕННО этого водителя (filter, не find).
+  const picked = driverEventsOfType(state, order.id, driverId, "ORDER_PICKED_UP");
+  const arriving = driverEventsOfType(
+    state,
+    order.id,
+    driverId,
+    "ARRIVING_TO_CUSTOMER",
+  );
+  const delivered = driverEventsOfType(state, order.id, driverId, "ORDER_DELIVERED");
+  if (picked.length !== 1 || arriving.length !== 1 || delivered.length !== 1) {
+    return null;
+  }
+  // Точные переходы статусов.
+  if (
+    picked[0].orderStatusBefore !== "READY" ||
+    picked[0].orderStatusAfter !== "OUT_FOR_DELIVERY"
+  ) {
+    return null;
+  }
+  if (
+    arriving[0].orderStatusBefore !== "OUT_FOR_DELIVERY" ||
+    arriving[0].orderStatusAfter !== "ARRIVING"
+  ) {
+    return null;
+  }
+  if (
+    delivered[0].orderStatusBefore !== "ARRIVING" ||
+    delivered[0].orderStatusAfter !== "DELIVERED"
+  ) {
+    return null;
+  }
+  // Хронология: pickup ≤ arriving ≤ delivered (равное время разрешено).
+  if (
+    !isValidIso(picked[0].occurredAt) ||
+    !isValidIso(arriving[0].occurredAt) ||
+    !isValidIso(delivered[0].occurredAt)
+  ) {
+    return null;
+  }
+  const p = Date.parse(picked[0].occurredAt);
+  const a = Date.parse(arriving[0].occurredAt);
+  const d = Date.parse(delivered[0].occurredAt);
+  if (!(p <= a && a <= d)) return null;
+  const recognizedAt = delivered[0].occurredAt;
+
+  // Каноническое COMPLETE онлайн-движение денег. REVIEW_REQUIRED и
+  // PENDING_PAYMENT_CHANNEL НЕ считаются законным нулевым обязательством.
+  const fin = order.financials;
+  if (fin.moneyMovementStatus !== "COMPLETE") return null;
+  const movement = fin.moneyMovement;
+  if (!movement) return null;
+  if (
+    movement.paymentChannel !== "ONLINE_CARD" &&
+    movement.paymentChannel !== "ONLINE_CARD_TO_RESTAURANT"
+  ) {
+    return null;
+  }
+
+  // Обязательство ресторана уже признано и точно совпадает, либо законно нулевое
+  // (обе стороны COMPLETE-движения нулевые): computeCompletedOrderAccounting не
+  // предлагает новых записей. Формулы не дублируются.
+  const accounting = computeCompletedOrderAccounting(
+    order,
+    state.restaurantAccountingEntries,
+  );
+  if (!accounting.ok || accounting.entries.length !== 0) return null;
+
+  return { driverId, recognizedAt };
 }
 
 /** Полное доказательство исправленного наличного завершения БЕЗ признания
@@ -619,12 +731,19 @@ export function getDriverEarningsView(
   const reviewRequired =
     reviewRequiredOrderCount > 0 || brokenRaw || !totalOk || !cashOk || !dueOk;
 
+  // Неизвестная финансовая позиция: завершённый заказ без валидного заработка
+  // или повреждённая сырая запись водителя означают, что суммы НЕИЗВЕСТНЫ — все
+  // три итога становятся null (не подтверждённый $0.00). История и deliveryCount
+  // сохраняются. Чистое переполнение одного агрегата (без неизвестного заказа)
+  // сохраняет прежнюю независимую семантику: null только у переполненного итога.
+  const unknownPosition = reviewRequiredOrderCount > 0 || brokenRaw;
+
   return {
     entries: views,
     deliveryCount: views.length,
-    totalEarningsCents: totalOk ? total : null,
-    cashReceivedCents: cashOk ? cash : null,
-    dueFromDirectCents: dueOk ? due : null,
+    totalEarningsCents: unknownPosition ? null : totalOk ? total : null,
+    cashReceivedCents: unknownPosition ? null : cashOk ? cash : null,
+    dueFromDirectCents: unknownPosition ? null : dueOk ? due : null,
     reviewRequired,
     reviewRequiredOrderCount,
   };
