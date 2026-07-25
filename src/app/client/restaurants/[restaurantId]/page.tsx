@@ -52,7 +52,7 @@ export default function ClientRestaurantPage() {
   // При открытии ресторана с уже валидным кратким адресом можно тихо
   // подтвердить его (не блокируя переход). Пустой/неполный адрес не мешает
   // открыть ресторан и выбрать блюда — адрес заполняется позже в корзине.
-  const hasValidAddress = isAddressReady(state.cart.address, state);
+  const hasValidAddress = isAddressReady(state.cart.address);
   useEffect(() => {
     if (
       shouldAutoConfirmAddress({

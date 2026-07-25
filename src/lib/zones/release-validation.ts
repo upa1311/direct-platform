@@ -15,17 +15,23 @@ import type {
 /**
  * Fail-closed validation of the vendored zone release. Nothing here trusts the
  * data blindly (no `as unknown as ZoneDataset`): the manifest is checked field
- * by field, every embedded file is re-hashed against the manifest AND the
- * shipped CHECKSUMS.sha256, and the release id/version/K/prices flag must match
- * exactly. On ANY failure this returns { ok: false, reason } and callers treat
- * the whole dataset as DATASET_INVALID — no delivery order can be created.
+ * by field, EVERY file declared in the manifest is re-hashed against the
+ * manifest AND the shipped CHECKSUMS.sha256, and release id/version/K/prices/
+ * approvals/counts must match exactly. On ANY failure this returns
+ * { ok: false, reason } and callers treat the whole dataset as DATASET_INVALID —
+ * no delivery order can be created.
  */
 
 const EXPECTED_RELEASE_ID = "bender-zones-v1.1";
 const EXPECTED_VERSION = "1.1.0";
 const EXPECTED_K = 4;
+const EXPECTED_VERIFIED_ADDRESS_COUNT = 9216;
+const EXPECTED_QA_OBJECT_COUNT = 14013;
 
-// Files the resolver/admin actually consume — must be embedded AND hash-verified.
+// EVERY file declared in the manifest is embedded and re-hashed here (the full
+// release, not a subset). IMMUTABLE, manifest.json and CHECKSUMS.sha256 are not
+// in manifest.files by design (a manifest cannot checksum itself); their
+// presence is enforced at build time by verify-zone-release.mjs.
 const HASH_VERIFIED_FILES = [
   "address-registry.json",
   "admin-qa-objects.json",
@@ -33,6 +39,7 @@ const HASH_VERIFIED_FILES = [
   "zone-polygons.geojson",
   "varnita-village-no-delivery.geojson",
   "varnita-admin-reference.geojson",
+  "severny-route-qa.geojson",
   "schemas/zone-release.schema.json",
 ];
 
@@ -96,15 +103,18 @@ function runValidation(): ReleaseValidation {
   if (manifest.decided_k !== EXPECTED_K) return fail(`decided_k must be ${EXPECTED_K}`);
   if (manifest.prices_included !== false)
     return fail("release must not include prices");
+  if (manifest.approved_for_internal_integration !== true)
+    return fail("release not approved for internal integration");
+  if (manifest.approved_for_customer_address_catalog !== true)
+    return fail("release not approved for customer address catalog");
+  if (manifest.verified_address_count !== EXPECTED_VERIFIED_ADDRESS_COUNT)
+    return fail(`verified_address_count must be ${EXPECTED_VERIFIED_ADDRESS_COUNT}`);
+  if (manifest.qa_object_count !== EXPECTED_QA_OBJECT_COUNT)
+    return fail(`qa_object_count must be ${EXPECTED_QA_OBJECT_COUNT}`);
   if (!Array.isArray(manifest.files) || manifest.files.length === 0)
     return fail("manifest has no files");
   if (!Array.isArray(manifest.required_files) || manifest.required_files.length === 0)
     return fail("manifest has no required_files");
-  if (
-    typeof manifest.verified_address_count !== "number" ||
-    manifest.verified_address_count <= 0
-  )
-    return fail("verified_address_count missing");
 
   // 3. CHECKSUMS.sha256 must agree with the manifest for every declared file.
   const checksums = parseChecksums(RAW_FILES["CHECKSUMS.sha256"] ?? "");
@@ -123,8 +133,10 @@ function runValidation(): ReleaseValidation {
     if (!declared.has(req)) return fail(`required file not declared: ${req}`);
   }
 
-  // 5. Re-hash every consumed file against the manifest. This is the real
-  //    fail-closed gate: a single tampered byte -> DATASET_INVALID.
+  // 5. Re-hash EVERY manifest-declared file against the manifest. This is the
+  //    real fail-closed gate: a single tampered byte -> DATASET_INVALID.
+  if (HASH_VERIFIED_FILES.length !== manifest.files.length)
+    return fail("not every manifest file is hash-verified");
   const byPath = new Map(manifest.files.map((f) => [f.path, f.sha256]));
   for (const path of HASH_VERIFIED_FILES) {
     const raw = RAW_FILES[path];

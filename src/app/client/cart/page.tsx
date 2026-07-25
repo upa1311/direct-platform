@@ -79,7 +79,7 @@ export default function ClientCartPage() {
   const hasAddressInput = Boolean(
     state.cart.address.street.trim() || state.cart.address.house.trim(),
   );
-  const addressIsReady = isAddressReady(state.cart.address, state);
+  const addressIsReady = isAddressReady(state.cart.address);
   const customerNameIsValid = isCustomerNameValid(state.customer.name);
   const customerPhoneIsValid = isCustomerPhoneValid(state.customer.phone);
   const isPickup = state.cart.fulfillmentChoice === "PICKUP";

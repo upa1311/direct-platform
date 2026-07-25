@@ -47,7 +47,7 @@ export function ClientAddressConfirmationProvider({
     state.cart.address.street,
     state.cart.address.house,
   );
-  const addressIsValid = isAddressReady(state.cart.address, state);
+  const addressIsValid = isAddressReady(state.cart.address);
 
   useEffect(() => {
     if (!isHydrated) return;

@@ -55,7 +55,7 @@ function deliverFully(
 
 test("без адреса клиент может открыть ресторан и добавить блюда", () => {
   const s = createDefaultState();
-  assert.equal(isAddressReady(s.cart.address, s), false);
+  assert.equal(isAddressReady(s.cart.address), false);
   const restaurant = getRestaurant(s, "restaurant-3");
   assert.ok(restaurant);
   assert.equal(canPlacePrototypeOrder(restaurant), true);

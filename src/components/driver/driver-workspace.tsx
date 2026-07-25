@@ -1135,9 +1135,7 @@ function RoutePoint({
               {addressExtras(order.address)}
             </span>
           ) : null}
-          <span className={styles.detailRowValue}>
-            {zoneName(order.financials.customerZoneId)}
-          </span>
+          {/* Зона доставки — из snapshot (блок «Зоны»), здесь не дублируется. */}
           {order.address && order.address.comment.trim() !== "" ? (
             <span className={styles.detailRowValue}>
               Комментарий: {order.address.comment}
@@ -1162,8 +1160,7 @@ function RoutePoint({
         </span>
       </div>
       <p className={styles.secondarySummary}>
-        Клиент: {order.address?.street ?? "—"} ·{" "}
-        {zoneName(order.financials.customerZoneId)}
+        Клиент: {order.address?.street ?? "—"}
       </p>
     </>
   );

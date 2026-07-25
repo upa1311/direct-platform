@@ -23,9 +23,12 @@ const EXPECTED = {
   version: "1.1.0",
   decided_k: 4,
   verified_address_count: 9216,
+  qa_object_count: 14013,
 };
 
-// Files embedded into the generated TS (parsed + hashed at runtime too).
+// Files embedded into the generated TS (parsed + hashed at runtime too). This is
+// EVERY file declared in the manifest, so the runtime re-hashes the whole
+// release rather than a subset.
 const EMBED = [
   "manifest.json",
   "address-registry.json",
@@ -34,6 +37,7 @@ const EMBED = [
   "zone-polygons.geojson",
   "varnita-village-no-delivery.geojson",
   "varnita-admin-reference.geojson",
+  "severny-route-qa.geojson",
   "schemas/zone-release.schema.json",
 ];
 
@@ -111,8 +115,14 @@ if (manifest.approved_for_internal_integration !== true)
   die("approved_for_internal_integration must be true");
 if (manifest.approved_for_customer_address_catalog !== true)
   die("approved_for_customer_address_catalog must be true");
+if (manifest.approved_for_internal_integration !== true)
+  die("approved_for_internal_integration must be true");
+if (manifest.approved_for_customer_address_catalog !== true)
+  die("approved_for_customer_address_catalog must be true");
 if (manifest.verified_address_count !== EXPECTED.verified_address_count)
   die(`verified_address_count must be ${EXPECTED.verified_address_count}`);
+if (manifest.qa_object_count !== EXPECTED.qa_object_count)
+  die(`qa_object_count must be ${EXPECTED.qa_object_count}`);
 
 // 3. Required files declared + present, checksums agree (manifest vs CHECKSUMS).
 const checksums = new Map();

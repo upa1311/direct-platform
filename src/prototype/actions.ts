@@ -58,7 +58,6 @@ import {
   calculateCartPricing,
   canPlacePrototypeOrder,
   computeNextOpeningIso,
-  detectZoneId,
   CLIENT_PAID_AWAITING_KITCHEN_CANCEL_TEXT,
   getCartDeliveryMode,
   getCartItemViews,
@@ -246,13 +245,19 @@ export function updateCartAddress(
   patch: Partial<Omit<DeliveryAddress, "zoneId">>,
 ): PrototypeState {
   const addressWithoutZone = { ...state.cart.address, ...patch };
+  // Exact-address Zone Registry is the single source of the cart zone: only a
+  // house confirmed in the verified registry (RESOLVED) gets a zoneId. A street
+  // without a house, an unknown house, an ambiguous district or an invalid
+  // dataset all leave zoneId null. No street/primary-zone fallback.
+  const resolution = resolveAddressZone({
+    settlement: addressWithoutZone.settlement,
+    district: addressWithoutZone.district,
+    street: addressWithoutZone.street,
+    house: addressWithoutZone.house,
+  });
   const address: DeliveryAddress = {
     ...addressWithoutZone,
-    zoneId: detectZoneId(
-      addressWithoutZone.street,
-      state,
-      addressWithoutZone.house,
-    ),
+    zoneId: resolution.status === "RESOLVED" ? resolution.zoneId : null,
   };
 
   return finalizeMutation(state, {
@@ -412,16 +417,29 @@ export function createOrderFromCart(
   }
 
   const isDelivery = deliveryMode !== "PICKUP";
-  const customerZoneId = isDelivery
-    ? detectZoneId(state.cart.address.street, state, state.cart.address.house)
+  // ONE exact resolution for the whole order. It is the single source of the
+  // dropoff zone for the cart check, pricing, order.address.zoneId,
+  // financials.customerZoneId and the immutable zone snapshot — never the legacy
+  // per-street detectZoneId / streetsByPrimaryZone. It selects which existing
+  // tariff cell applies; it changes no money value.
+  const dropoffResolution = isDelivery
+    ? resolveAddressZone({
+        settlement: state.cart.address.settlement,
+        district: state.cart.address.district,
+        street: state.cart.address.street,
+        house: state.cart.address.house,
+      })
     : null;
+  const customerZoneId =
+    dropoffResolution && dropoffResolution.status === "RESOLVED"
+      ? dropoffResolution.zoneId
+      : null;
 
-  // Единственный источник истины для доставки — корректно выбранная улица и
-  // заполненный дом (isAddressReady). Отдельное sessionStorage-подтверждение
-  // адреса больше не требуется (см. §3): заказ не блокируется молча.
+  // Единственный источник истины для доставки — точный подтверждённый дом из
+  // реестра зон (isAddressReady). Заказ не блокируется молча.
   if (
     isDelivery &&
-    (!isAddressReady(state.cart.address, state) || !customerZoneId)
+    (!isAddressReady(state.cart.address) || !customerZoneId)
   ) {
     return fail("Введите адрес доставки");
   }
@@ -430,21 +448,14 @@ export function createOrderFromCart(
   // created for an address that resolves to an EXACT verified house in the
   // vendored registry — never a street guess, a disputed/no_delivery/unaddressed
   // object, or an unknown house. If the release itself is invalid, no order is
-  // created. This gate is independent of and additive to the legacy pricing zone
-  // (customerZoneId): it touches no money.
+  // created.
   if (deliveryMode === "PLATFORM_DRIVER") {
     if (!isDatasetValid()) {
       return fail("Набор зон недоступен (DATASET_INVALID). Заказ создать нельзя.");
     }
-    const dropoffZone = resolveAddressZone({
-      settlement: state.cart.address.settlement,
-      district: state.cart.address.district,
-      street: state.cart.address.street,
-      house: state.cart.address.house,
-    });
-    if (dropoffZone.status !== "RESOLVED") {
+    if (!dropoffResolution || dropoffResolution.status !== "RESOLVED") {
       return fail(
-        dropoffZone.status === "NO_DELIVERY"
+        dropoffResolution?.status === "NO_DELIVERY"
           ? "По этому адресу доставка не выполняется."
           : "Адрес не подтверждён в каталоге зон — укажите точный дом.",
       );
@@ -729,9 +740,24 @@ export function createOrderFromCart(
           pickupZoneId: restaurant.zoneId,
           address: isDelivery ? { ...state.cart.address, zoneId: customerZoneId } : null,
           resolvedAt: now,
+          // Same exact resolution as the pricing/order zone — no recompute.
+          resolution: dropoffResolution,
         })
       : undefined,
   };
+
+  // Strict invariant: for a new PLATFORM_DRIVER order the pricing customer zone
+  // and the immutable snapshot dropoff zone MUST be the same exact zone. If they
+  // ever diverge, the order is NOT created (fail closed) rather than billed on a
+  // different tariff cell than the one recorded.
+  if (
+    deliveryMode === "PLATFORM_DRIVER" &&
+    order.financials.customerZoneId !== order.zoneSnapshot?.dropoffZoneId
+  ) {
+    return fail(
+      "Расхождение зоны доставки и снимка зоны — заказ не создан.",
+    );
+  }
 
   const nextState = finalizeMutation(
     state,

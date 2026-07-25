@@ -80,16 +80,14 @@ export function DriverOfferCard({
 
       <div className={styles.offerSection}>
         <span className={styles.offerSectionLabel}>Доставить</span>
-        {/* До принятия — только улица и зона клиента, без точного адреса. */}
+        {/* До принятия — только улица; зона показывается ниже из snapshot. */}
         <span className={styles.offerSectionValue}>
           {order.address?.street ?? "—"}
         </span>
-        <span className={styles.offerSectionValue}>
-          {zoneName(order.financials.customerZoneId)}
-        </span>
       </div>
 
-      {/* Зоны из версионного набора (только Zone N, без внутренних данных GIS). */}
+      {/* Зоны берутся ТОЛЬКО из неизменяемого order.zoneSnapshot (единый источник);
+          устаревший financials.customerZoneId здесь не дублируется. */}
       <div className={styles.offerSection} data-testid="offer-zones">
         <span className={styles.offerSectionLabel}>Зоны (bender-zones-v1.1)</span>
         <span className={styles.offerSectionValue}>

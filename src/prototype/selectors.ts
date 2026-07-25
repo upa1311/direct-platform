@@ -48,6 +48,7 @@ import {
   shouldApplySmallOrderFee,
 } from "./pricing-engine";
 import { resolvePlatformDriverCashSnapshot } from "./platform-driver-cash";
+import { resolveAddressZone } from "../lib/zones/address-resolver";
 
 export type CatalogSort =
   | "RECOMMENDED"
@@ -837,21 +838,33 @@ export function detectZoneId(
   );
 }
 
+/**
+ * Customer delivery zone for pricing and readiness — the SINGLE source of truth
+ * is the exact-address Zone Registry, not the legacy per-street `detectZoneId`.
+ * Only a house confirmed in the verified registry (RESOLVED) yields a zone; a
+ * street-only address, an unknown house, a split-street house outside the
+ * street's "primary" zone, Varnița, disputed, ambiguous or an invalid dataset
+ * all return null. This never reads or changes a tariff amount — it only selects
+ * which existing matrix cell `tariffs[pickup][dropoff]` applies. The `state`
+ * argument is kept for signature stability; the registry is the authority.
+ */
 export function getValidatedAddressZoneId(
   address: DeliveryAddress,
-  state: Pick<PrototypeState, "zones">,
 ): ZoneId | null {
-  const expectedZoneId = detectZoneId(address.street, state, address.house);
-  return expectedZoneId && expectedZoneId === address.zoneId
-    ? expectedZoneId
-    : null;
+  const resolution = resolveAddressZone({
+    settlement: address.settlement,
+    district: address.district,
+    street: address.street,
+    house: address.house,
+  });
+  return resolution.status === "RESOLVED" ? resolution.zoneId : null;
 }
 
 export function getDeliveryFeeCents(
   state: PrototypeState,
   restaurant: Restaurant,
 ): number | null {
-  const customerZoneId = getValidatedAddressZoneId(state.cart.address, state);
+  const customerZoneId = getValidatedAddressZoneId(state.cart.address);
   const cents = customerZoneId
     ? state.tariffs[restaurant.zoneId]?.[customerZoneId]
     : undefined;
@@ -975,7 +988,7 @@ export function calculateCartPricing(state: PrototypeState): CartPricing {
   }
 
   const isPickup = state.cart.fulfillmentChoice === "PICKUP";
-  const customerZoneId = getValidatedAddressZoneId(state.cart.address, state);
+  const customerZoneId = getValidatedAddressZoneId(state.cart.address);
 
   const base = emptyPricing(deliveryMode, provider);
   base.foodSubtotalBeforeDiscountsCents = foodSubtotalBeforeDiscountsCents;
@@ -1864,11 +1877,13 @@ export function isKitchenBeepDue(params: {
   return params.nowMs - params.lastBeepAtMs >= interval;
 }
 
-export function isAddressReady(
-  address: DeliveryAddress,
-  state: Pick<PrototypeState, "zones">,
-): boolean {
-  return getValidatedAddressZoneId(address, state) !== null;
+/**
+ * True when the delivery address resolves to an EXACT verified house in the zone
+ * registry (RESOLVED). For PLATFORM_DRIVER this is the readiness gate — it
+ * confirms a concrete registered house, not a street "primary zone" match.
+ */
+export function isAddressReady(address: DeliveryAddress): boolean {
+  return getValidatedAddressZoneId(address) !== null;
 }
 
 // --- Самовывоз: ledger и статистика ----------------------------------------

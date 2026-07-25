@@ -92,34 +92,40 @@ export function resolveAddressZone(query: AddressQuery): ZoneResolution {
   // A street without a confirmed house can never resolve to a zone.
   if (!house) return empty("UNVERIFIED_ADDRESS");
 
-  // 1. Exact canonical key (settlement|district|street|house).
-  const key = canonicalAddressKey(settlement, district, street, house);
-  const exact = registryByCanonical(key);
-  if (exact) return resolvedFrom(exact);
-
-  // 2. District unknown/mismatched: match on settlement+street+house.
-  const candidates = registryBySettlementStreetHouse(settlement, street, house);
-  if (candidates.length === 1) return resolvedFrom(candidates[0]);
-  if (candidates.length > 1) {
-    // Same house on the same street name in two districts — do not guess.
-    const zones = new Set(candidates.map((c) => c.zone_id));
-    if (zones.size === 1) return resolvedFrom(candidates[0]);
-    const amb = empty("AMBIGUOUS");
-    amb.matched = {
-      settlement_ru: candidates[0].settlement_ru,
-      district_ru: null,
-      street_ru: candidates[0].street_ru,
-      housenumber: house,
-    };
-    return amb;
+  const districtProvided = district !== null;
+  if (districtProvided) {
+    // District explicitly given: exact canonical (settlement|district|street|house).
+    // A district that does not match a verified house is NOT silently retried
+    // against other districts — it falls through to QA / NOT_FOUND below.
+    const exact = registryByCanonical(
+      canonicalAddressKey(settlement, district, street, house),
+    );
+    if (exact) return resolvedFrom(exact);
+  } else {
+    // No district given: resolve by settlement+street+house across districts.
+    // Exactly one verified house -> RESOLVED. More than one (the same street +
+    // house in different districts) -> AMBIGUOUS even if the zones coincide;
+    // the client must pick a district. Different districts are never merged.
+    const candidates = registryBySettlementStreetHouse(settlement, street, house);
+    if (candidates.length === 1) return resolvedFrom(candidates[0]);
+    if (candidates.length > 1) {
+      const amb = empty("AMBIGUOUS");
+      amb.matched = {
+        settlement_ru: candidates[0].settlement_ru,
+        district_ru: null,
+        street_ru: candidates[0].street_ru,
+        housenumber: house,
+      };
+      return amb;
+    }
   }
 
-  // 3. Not in the registry: is it a known admin/QA object? (disputed / no_delivery
-  //    / unaddressed / excluded / owner-review, including every Северный address —
-  //    the Северный catalog is deliberately incomplete, so those stay owner-review
-  //    and are NOT orderable). Fail closed with its reason. The QA zone number is
-  //    surfaced for admin/driver display only; it never makes the address RESOLVED.
-  const qa = qaByCanonical(key);
+  // Not in the registry: is it a known admin/QA object? (disputed / no_delivery
+  // / unaddressed / excluded / owner-review, including every Северный address —
+  // the Северный catalog is deliberately incomplete, so those stay owner-review
+  // and are NOT orderable). Fail closed with its reason. The QA zone number is
+  // surfaced for admin/driver display only; it never makes the address RESOLVED.
+  const qa = qaByCanonical(canonicalAddressKey(settlement, district, street, house));
   if (qa) {
     const st = empty(qaStatus(qa.service_status));
     st.serviceStatus = qa.service_status;

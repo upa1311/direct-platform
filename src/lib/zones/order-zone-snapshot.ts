@@ -23,6 +23,12 @@ export interface ZoneSnapshotInput {
   pickupZoneId: ZoneId;
   address: DeliveryAddress | null;
   resolvedAt: string;
+  /**
+   * Pre-computed exact resolution for this address. Pass it so the order, its
+   * pricing and this snapshot all use ONE resolution result (no independent
+   * re-computation). Omit to resolve here.
+   */
+  resolution?: ZoneResolution | null;
 }
 
 function dropoffBasis(resolution: ZoneResolution | null): ZoneResolutionBasis {
@@ -31,14 +37,17 @@ function dropoffBasis(resolution: ZoneResolution | null): ZoneResolutionBasis {
 }
 
 export function buildOrderZoneSnapshot(input: ZoneSnapshotInput): OrderZoneSnapshot {
-  const resolution: ZoneResolution | null = input.address
-    ? resolveAddressZone({
-        settlement: input.address.settlement,
-        district: input.address.district,
-        street: input.address.street,
-        house: input.address.house,
-      })
-    : null;
+  const resolution: ZoneResolution | null =
+    input.resolution !== undefined
+      ? input.resolution
+      : input.address
+        ? resolveAddressZone({
+            settlement: input.address.settlement,
+            district: input.address.district,
+            street: input.address.street,
+            house: input.address.house,
+          })
+        : null;
 
   const dropoffZoneId =
     resolution && resolution.status === "RESOLVED" ? resolution.zoneId : null;

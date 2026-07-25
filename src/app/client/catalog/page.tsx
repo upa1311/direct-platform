@@ -47,7 +47,7 @@ export default function ClientCatalogPage() {
   const nowMs = useNowMs();
   const streetFieldRef = useRef<HTMLInputElement>(null);
   const hasValidAddress =
-    getValidatedAddressZoneId(state.cart.address, state) !== null;
+    getValidatedAddressZoneId(state.cart.address) !== null;
   const isDelivery = state.cart.fulfillmentChoice === "DELIVERY";
   const deliveryPricingReady =
     isDelivery && isAddressConfirmed && hasValidAddress;

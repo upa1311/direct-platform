@@ -904,7 +904,12 @@ test("77–78: /driver/offers перенаправляет; предложени
 test("79–81: до принятия видны улица и зоны, но не точный адрес и телефон", () => {
   assert.ok(OFFER_CARD.includes("order.address?.street"));
   assert.ok(OFFER_CARD.includes("zoneName(order.restaurant.zoneId)"));
-  assert.ok(OFFER_CARD.includes("zoneName(order.financials.customerZoneId)"));
+  // Зоны до принятия видны, но берутся из единого источника — неизменяемого
+  // order.zoneSnapshot (через driverOrderZoneView), а не из устаревшего
+  // financials.customerZoneId, который здесь больше не дублируется.
+  assert.ok(OFFER_CARD.includes("driverOrderZoneView"));
+  assert.ok(OFFER_CARD.includes("zoneView.dropoff.label"));
+  assert.ok(!OFFER_CARD.includes("zoneName(order.financials.customerZoneId)"));
   // Точный адрес и контакты клиента в карточке предложения не читаются.
   for (const forbidden of [
     "address.house",
