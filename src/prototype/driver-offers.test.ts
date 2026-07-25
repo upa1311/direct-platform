@@ -145,20 +145,20 @@ const offerFor = (state: PrototypeState, orderId: string, driverId: string) =>
 // --- 1–9: schema и нормализация ------------------------------------------------
 
 test("1: схема прототипа равна 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 25);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
   const base = createDefaultState();
-  for (let version = 7; version <= 24; version += 1) {
+  for (let version = 7; version <= 25; version += 1) {
     const parsed = parseStoredState(
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version}`);
-    assert.equal(parsed.schemaVersion, 24);
+    assert.equal(parsed.schemaVersion, 25);
   }
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 25 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 26 })),
     null,
   );
 });
@@ -1421,7 +1421,7 @@ function parseWith(
 const parsedOffer = (state: PrototypeState) => state.driverOffers[0];
 
 test("cash-31: схема поднята до 24", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 25);
 });
 
 test("cash-32: schema 19 offer получает cashReserveConfirmedAt null", () => {
@@ -1429,9 +1429,17 @@ test("cash-32: schema 19 offer получает cashReserveConfirmedAt null", ()
   assert.equal(parsedOffer(s).cashReserveConfirmedAt, null);
 });
 
-test("cash-33: schema 20 accepted cash offer сохраняет валидный ISO", () => {
-  const s = parseWith(20, cashOrderRaw(), offerRaw());
+test("cash-33: schema 24 accepted cash offer сохраняет валидный ISO", () => {
+  // v25: source ≤ 23 обезврежен (резерв сбрасывается); резерв сохраняется с 24.
+  const s = parseWith(24, cashOrderRaw(), offerRaw());
   assert.equal(parsedOffer(s).cashReserveConfirmedAt, CONFIRMED_AT);
+});
+
+test("cash-33b: schema ≤23 сбрасывает cashReserveConfirmedAt", () => {
+  for (const v of [20, 21, 22, 23]) {
+    const s = parseWith(v, cashOrderRaw(), offerRaw());
+    assert.equal(parsedOffer(s).cashReserveConfirmedAt, null);
+  }
 });
 
 test("cash-34: OPEN offer с timestamp нормализуется в null", () => {
@@ -1473,7 +1481,7 @@ test("cash-37: timestamp не реконструируется из resolvedAt",
 });
 
 test("cash-38: serialize/parse идемпотентен", () => {
-  const s1 = parseWith(20, cashOrderRaw(), offerRaw());
+  const s1 = parseWith(24, cashOrderRaw(), offerRaw());
   const s2 = parseStoredState(JSON.stringify(s1));
   assert.ok(s2);
   assert.deepEqual(s2.driverOffers[0], s1.driverOffers[0]);

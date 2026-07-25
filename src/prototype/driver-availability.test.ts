@@ -183,21 +183,21 @@ function online(
 // --- 1–2: схема ---------------------------------------------------------------
 
 test("1: схема прототипа поднята до 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 25);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
   const base = createDefaultState();
-  for (let version = 7; version <= 24; version += 1) {
+  for (let version = 7; version <= 25; version += 1) {
     const parsed = parseStoredState(
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version} должна парситься`);
-    assert.equal(parsed.schemaVersion, 24, `схема ${version} → 18`);
+    assert.equal(parsed.schemaVersion, 25, `схема ${version} → 18`);
   }
   // Неизвестная будущая версия по-прежнему не принимается.
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 25 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 26 })),
     null,
   );
 });
@@ -652,10 +652,10 @@ test("33: главная водителя — единый экран без в�
 
 test("34: раздел «Расчёты» водителя существует отдельным маршрутом", () => {
   assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("Расчёты"));
-  // v23: заглушка заменена реальным журналом наличных расчётов.
+  // v25: единый журнал заработка (онлайн-выплаты и наличные) с описанием выплат.
   assert.ok(
     DRIVER_SETTLEMENTS_PAGE.includes(
-      "Заработок с наличных доставок и сумма, которую нужно передать Direct.",
+      "Заработок по доставкам, наличные выплаты и сумма, которую должен выплатить Direct.",
     ),
   );
   // Маршрут доступен из верхней навигации, а не карточкой на главной.
@@ -665,11 +665,11 @@ test("34: раздел «Расчёты» водителя существует 
 });
 
 test("35: страница расчётов не выдумывает суммы (только ledger + formatMoney)", () => {
-  // v23: суммы берутся из driver cash ledger и форматируются общим formatMoney;
-  // литеральных сумм в разметке нет.
+  // v25: суммы берутся из единого read-model заработка и форматируются общим
+  // formatMoney; литеральных сумм в разметке нет.
   assert.ok(!/\$\s?\d/.test(DRIVER_SETTLEMENTS_PAGE));
   assert.ok(!/\d+[.,]\d{2}/.test(DRIVER_SETTLEMENTS_PAGE));
-  assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("getDriverCashLedgerView"));
+  assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("getDriverEarningsView"));
   assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("formatMoney"));
   // Никакого netting и обещаний выплат.
   for (const forbidden of [

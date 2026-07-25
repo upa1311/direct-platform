@@ -408,13 +408,13 @@ test("27: несовпадение direct receivable → null", () => {
   assert.equal(resolved, null);
 });
 
-test("28: нормализация идемпотентна (native CASH сохраняется, legacy коэрцится)", () => {
+test("28: нормализация идемпотентна (corrected CASH сохраняется, legacy обезврежен)", () => {
   const base = createDefaultState();
-  // Native schema 19 CASH: снимок и способ оплаты СОХРАНЯЮТСЯ round-trip.
+  // Corrected schema 24 CASH: снимок и способ оплаты СОХРАНЯЮТСЯ round-trip.
   const s1 = parseStoredState(
     JSON.stringify({
       ...base,
-      schemaVersion: 19,
+      schemaVersion: 24,
       orders: [nativeCashRaw({})],
     }),
   );
@@ -425,13 +425,20 @@ test("28: нормализация идемпотентна (native CASH сох�
   assert.equal(s1.orders[0].paymentMethod, "CASH");
   assert.deepEqual(s1.orders[0].financials.platformDriverCash, OK_SNAPSHOT);
 
-  // Legacy schema <19 CASH: коэрцится в ONLINE, снимок null.
+  // v25: старый CASH (source ≤ 23) обезврежен — снимок сбрасывается в null.
   const legacy = parseStoredState(
-    JSON.stringify({ ...base, schemaVersion: 18, orders: [nativeCashRaw({})] }),
+    JSON.stringify({ ...base, schemaVersion: 23, orders: [nativeCashRaw({})] }),
   );
   assert.ok(legacy);
-  assert.equal(legacy.orders[0].paymentMethod, "ONLINE");
   assert.equal(legacy.orders[0].financials.platformDriverCash, null);
+
+  // Совсем старый CASH (< 19) дополнительно коэрцится в ONLINE.
+  const ancient = parseStoredState(
+    JSON.stringify({ ...base, schemaVersion: 18, orders: [nativeCashRaw({})] }),
+  );
+  assert.ok(ancient);
+  assert.equal(ancient.orders[0].paymentMethod, "ONLINE");
+  assert.equal(ancient.orders[0].financials.platformDriverCash, null);
 
   // Product checkout по-прежнему не создаёт CASH-заказов (наличные выключены).
   assert.equal(
@@ -490,41 +497,41 @@ function persistNative(
 }
 
 test("P1: schema 19 PLATFORM_DRIVER CASH сохраняет paymentMethod CASH", () => {
-  assert.equal(persistNative(19).paymentMethod, "CASH");
+  assert.equal(persistNative(24).paymentMethod, "CASH");
 });
 
 test("P2: сохраняет paymentStatus CASH_ON_DELIVERY", () => {
-  assert.equal(persistNative(19).paymentStatus, "CASH_ON_DELIVERY");
+  assert.equal(persistNative(24).paymentStatus, "CASH_ON_DELIVERY");
 });
 
 test("P3: сохраняет валидный platformDriverCash", () => {
-  assert.deepEqual(persistNative(19).financials.platformDriverCash, OK_SNAPSHOT);
+  assert.deepEqual(persistNative(24).financials.platformDriverCash, OK_SNAPSHOT);
 });
 
 test("P4: сохраняет order.status PREPARING", () => {
-  assert.equal(persistNative(19).status, "PREPARING");
+  assert.equal(persistNative(24).status, "PREPARING");
 });
 
 test("P5: сохраняет expectedReadyAt", () => {
-  assert.equal(persistNative(19).expectedReadyAt, NATIVE_READY_AT);
+  assert.equal(persistNative(24).expectedReadyAt, NATIVE_READY_AT);
 });
 
 test("P6: сохраняет paidAt без legacy-перезаписи", () => {
-  assert.equal(persistNative(19).paidAt, NATIVE_PAID_AT);
+  assert.equal(persistNative(24).paidAt, NATIVE_PAID_AT);
 });
 
 test("P7: сохраняет assignedDriverId", () => {
-  assert.equal(persistNative(19).assignedDriverId, "driver-1");
+  assert.equal(persistNative(24).assignedDriverId, "driver-1");
 });
 
 test("P8: сохраняет driverAssignedAt", () => {
-  assert.equal(persistNative(19).driverAssignedAt, NATIVE_DRIVER_AT);
+  assert.equal(persistNative(24).driverAssignedAt, NATIVE_DRIVER_AT);
 });
 
 test("P9: serialize → parse → serialize → parse идемпотентен", () => {
   const base = createDefaultState();
   const s1 = parseStoredState(
-    JSON.stringify({ ...base, schemaVersion: 19, orders: [nativeCashRaw({})] }),
+    JSON.stringify({ ...base, schemaVersion: 24, orders: [nativeCashRaw({})] }),
   );
   assert.ok(s1);
   const s2 = parseStoredState(JSON.stringify(s1));
@@ -533,19 +540,19 @@ test("P9: serialize → parse → serialize → parse идемпотентен",
 });
 
 test("P10: schema 19 CASH без snapshot остаётся CASH, snapshot null", () => {
-  const order = persistNative(19, { candidate: null });
+  const order = persistNative(24, { candidate: null });
   assert.equal(order.paymentMethod, "CASH");
   assert.equal(order.financials.platformDriverCash, null);
 });
 
 test("P11: schema 19 CASH с повреждённым snapshot остаётся CASH, snapshot null", () => {
-  const order = persistNative(19, { candidate: { customerCollectionCents: "1000" } });
+  const order = persistNative(24, { candidate: { customerCollectionCents: "1000" } });
   assert.equal(order.paymentMethod, "CASH");
   assert.equal(order.financials.platformDriverCash, null);
 });
 
 test("P12: schema 19 CASH с расхождением на 1 цент остаётся CASH, snapshot null", () => {
-  const order = persistNative(19, {
+  const order = persistNative(24, {
     candidate: { ...OK_SNAPSHOT, restaurantOwesDirectCents: 99 },
     amounts: { platformGrossRevenueCents: 100 },
   });
@@ -603,7 +610,7 @@ test("P19: обычный новый ONLINE order создаётся с platform
 // --- 29–40: регрессии («наличные остаются выключенными») ----------------------
 
 test("29: schema равна 19", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 25);
 });
 
 test("30: platformDriverCashEnabled остаётся false", () => {

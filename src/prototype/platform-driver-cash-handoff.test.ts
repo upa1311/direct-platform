@@ -193,7 +193,7 @@ const theOrder = (state: PrototypeState): Order => state.orders[0];
 // --- 1–3: schema / default ----------------------------------------------------
 
 test("1: схема равна 24", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 25);
 });
 test("2: default platformDriverCashEvents пуст", () => {
   assert.deepEqual(createDefaultState().platformDriverCashEvents, []);
@@ -568,28 +568,28 @@ function persist(schemaVersion: number, events: unknown[]): PrototypeState {
   return parsed;
 }
 
-test("44: schema 7–20 получают platformDriverCashEvents []", () => {
-  for (const v of [7, 12, 18, 20]) {
+test("44: schema ≤23 получают platformDriverCashEvents [] (старый CASH обезврежен)", () => {
+  for (const v of [7, 12, 18, 20, 21, 22, 23]) {
     assert.deepEqual(persist(v, [reportRaw()]).platformDriverCashEvents, []);
   }
 });
-test("45/46: schema <21 не принимает события; 21 сохраняет валидный report", () => {
-  assert.deepEqual(persist(20, [reportRaw()]).platformDriverCashEvents, []);
-  const kept = persist(21, [reportRaw()]).platformDriverCashEvents;
+test("45/46: schema ≤23 не принимает события; 24 сохраняет валидный report", () => {
+  assert.deepEqual(persist(23, [reportRaw()]).platformDriverCashEvents, []);
+  const kept = persist(24, [reportRaw()]).platformDriverCashEvents;
   assert.equal(kept.length, 1);
   assert.equal(kept[0].type, "DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF");
 });
 test("47: schema 21 сохраняет confirmation после report", () => {
-  const kept = persist(21, [reportRaw(), confirmRaw()]).platformDriverCashEvents;
+  const kept = persist(24, [reportRaw(), confirmRaw()]).platformDriverCashEvents;
   assert.equal(kept.length, 2);
 });
 test("48–56: невалидные события удаляются", () => {
   const bad = (over: Record<string, unknown>) =>
-    persist(21, [reportRaw(over)]).platformDriverCashEvents.length;
+    persist(24, [reportRaw(over)]).platformDriverCashEvents.length;
   assert.equal(bad({ type: "ЧТО-ТО" }), 0); // 48 неизвестный тип
   assert.equal(bad({ actor: "RESTAURANT" }), 0); // 49 неправильный actor
   assert.equal(
-    persist(21, [confirmRaw({ restaurantWorkspaceRole: "KITCHEN" }), reportRaw()]).platformDriverCashEvents.filter(
+    persist(24, [confirmRaw({ restaurantWorkspaceRole: "KITCHEN" }), reportRaw()]).platformDriverCashEvents.filter(
       (e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT",
     ).length,
     0,
@@ -604,7 +604,7 @@ test("48–56: невалидные события удаляются", () => {
 test("57: event для ONLINE order удаляется", () => {
   const s = cashState({ paymentMethod: "ONLINE", paymentStatus: "PAID", arrived: true });
   const parsed = parseStoredState(
-    JSON.stringify({ ...s, schemaVersion: 21, platformDriverCashEvents: [reportRaw()] }),
+    JSON.stringify({ ...s, schemaVersion: 24, platformDriverCashEvents: [reportRaw()] }),
   );
   assert.ok(parsed);
   assert.deepEqual(parsed.platformDriverCashEvents, []);
@@ -612,7 +612,7 @@ test("57: event для ONLINE order удаляется", () => {
 test("58: event без valid snapshot удаляется", () => {
   const s = cashState({ snapshot: null, arrived: true });
   const parsed = parseStoredState(
-    JSON.stringify({ ...s, schemaVersion: 21, platformDriverCashEvents: [reportRaw()] }),
+    JSON.stringify({ ...s, schemaVersion: 24, platformDriverCashEvents: [reportRaw()] }),
   );
   assert.ok(parsed);
   assert.deepEqual(parsed.platformDriverCashEvents, []);
@@ -620,24 +620,24 @@ test("58: event без valid snapshot удаляется", () => {
 test("59: event без accepted confirmed cash offer удаляется", () => {
   const s = cashState({ reserveConfirmedAt: null, arrived: true });
   const parsed = parseStoredState(
-    JSON.stringify({ ...s, schemaVersion: 21, platformDriverCashEvents: [reportRaw()] }),
+    JSON.stringify({ ...s, schemaVersion: 24, platformDriverCashEvents: [reportRaw()] }),
   );
   assert.ok(parsed);
   assert.deepEqual(parsed.platformDriverCashEvents, []);
 });
 test("60: confirmation без report удаляется", () => {
-  const kept = persist(21, [confirmRaw()]).platformDriverCashEvents;
+  const kept = persist(24, [confirmRaw()]).platformDriverCashEvents;
   assert.equal(kept.length, 0);
 });
 test("61: confirmation раньше report удаляется", () => {
-  const kept = persist(21, [
+  const kept = persist(24, [
     reportRaw({ occurredAt: T3 }),
     confirmRaw({ occurredAt: T2 }),
   ]).platformDriverCashEvents;
   assert.equal(kept.filter((e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT").length, 0);
 });
 test("61b: равное время confirmation === report сохраняется", () => {
-  const kept = persist(21, [
+  const kept = persist(24, [
     reportRaw({ occurredAt: T2 }),
     confirmRaw({ occurredAt: T2 }),
   ]).platformDriverCashEvents;
@@ -645,7 +645,7 @@ test("61b: равное время confirmation === report сохраняетс�
 });
 
 test("61c: позднее время confirmation > report сохраняется", () => {
-  const kept = persist(21, [
+  const kept = persist(24, [
     reportRaw({ occurredAt: T2 }),
     confirmRaw({ occurredAt: T3 }),
   ]).platformDriverCashEvents;
@@ -655,7 +655,7 @@ test("61c: позднее время confirmation > report сохраняетс�
 });
 
 test("62/63: дубль report/confirmation — первый валидный сохраняется", () => {
-  const kept = persist(21, [
+  const kept = persist(24, [
     reportRaw(),
     reportRaw({ id: "other", occurredAt: T3 }),
     confirmRaw(),
@@ -665,7 +665,7 @@ test("62/63: дубль report/confirmation — первый валидный с
   assert.equal(kept.filter((e) => e.type === "RESTAURANT_CONFIRMED_CASH_RECEIPT").length, 1);
 });
 test("64: повторный serialize/parse идемпотентен", () => {
-  const s1 = persist(21, [reportRaw(), confirmRaw()]);
+  const s1 = persist(24, [reportRaw(), confirmRaw()]);
   const s2 = parseStoredState(JSON.stringify(s1));
   assert.ok(s2);
   assert.deepEqual(s2.platformDriverCashEvents, s1.platformDriverCashEvents);

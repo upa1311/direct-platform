@@ -7,7 +7,7 @@ import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 import type { OrderZoneSnapshot } from "@/lib/zones/types";
 
-export const PROTOTYPE_SCHEMA_VERSION = 24 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 25 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -807,27 +807,6 @@ export interface PlatformDriverCashEvent {
 }
 
 /**
- * Неизменяемая append-only запись расчёта водителя по ОДНОЙ завершённой
- * наличной доставке (v23). Копирует суммы из cash snapshot и ничего не
- * пересчитывает. Долга водителя перед Direct в корректной модели нет —
- * directReceivableFromDriverCents здесь остаётся нулём (переход на единый
- * журнал заработка выполняется отдельным commit'ом).
- */
-export interface DriverCashLedgerEntry {
-  id: string;
-  orderId: string;
-  driverId: string;
-  restaurantId: string;
-  currencyCode: CurrencyCode;
-  customerCollectionCents: number;
-  restaurantHandoffCents: number;
-  driverEarningCents: number;
-  directReceivableFromDriverCents: number;
-  recognizedAt: string;
-  source: "PLATFORM_DRIVER_CASH_ORDER";
-}
-
-/**
  * Как признан заработок водителя за одну завершённую доставку PLATFORM_DRIVER
  * (v24, единый журнал):
  *  - DIRECT_PAYOUT_DUE — онлайн-заказ: клиент заплатил онлайн, деньги у Direct,
@@ -1133,12 +1112,11 @@ export interface PrototypeState {
   driverDeliveryEvents: DriverDeliveryEvent[];
   /** Append-only аудит передачи наличных водителем ресторану (v21). */
   platformDriverCashEvents: PlatformDriverCashEvent[];
-  /** Append-only расчёты водителя по завершённым наличным доставкам (v23). */
-  driverCashLedgerEntries: DriverCashLedgerEntry[];
   /**
    * Единый append-only журнал заработка водителя по завершённым доставкам
-   * PLATFORM_DRIVER (v24): онлайн (Direct должен выплатить) и наличные (водитель
-   * уже удержал). Одна запись на завершённый заказ.
+   * PLATFORM_DRIVER (v24, финализирован v25): онлайн (Direct должен выплатить) и
+   * наличные (водитель уже удержал). Одна запись на завершённый заказ. Старый
+   * driver cash ledger удалён — водитель никогда не должен Direct.
    */
   driverEarningEntries: DriverEarningEntry[];
   cart: Cart;

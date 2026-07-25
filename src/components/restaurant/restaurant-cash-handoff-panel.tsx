@@ -6,7 +6,10 @@ import kds from "@/components/kitchen/kitchen.module.css";
 import sheet from "@/app/driver/driver.module.css";
 import { DriverControlSheet } from "@/components/driver/driver-control-sheet";
 import { usePrototype } from "@/prototype/prototype-provider";
-import { getPlatformDriverCashHandoffView } from "@/prototype/platform-driver-cash-handoff";
+import {
+  getPlatformDriverCashHandoffView,
+  getRestaurantCashHandoffBreakdown,
+} from "@/prototype/platform-driver-cash-handoff";
 import { formatMoney } from "@/prototype/selectors";
 import type { Order, RestaurantWorkspaceRole } from "@/prototype/models";
 
@@ -41,6 +44,11 @@ export function RestaurantCashHandoffPanel({
       ? formatMoney(view.amountCents, order.financials.currencyCode)
       : "—";
 
+  // Расшифровка трёх РАЗНЫХ сумм. React ничего не считает — только читает
+  // валидированный доменный breakdown из неизменяемого снимка заказа.
+  const breakdown = getRestaurantCashHandoffBreakdown(order);
+  const currency = order.financials.currencyCode;
+
   const openConfirm = (event: React.MouseEvent<HTMLButtonElement>) => {
     triggerRef.current = event.currentTarget;
     setError(null);
@@ -71,6 +79,27 @@ export function RestaurantCashHandoffPanel({
     <div className={kds.cashPanel}>
       <h4 className={kds.cashPanelTitle}>Наличные водителя</h4>
       <p className={kds.cashPanelAmount}>Сумма к получению: {amount}</p>
+
+      {breakdown.ok ? (
+        <dl className={kds.cashBreakdown}>
+          <div className={kds.cashBreakdownRow}>
+            <dt>Получено от водителя</dt>
+            <dd>{formatMoney(breakdown.receivedFromDriverCents ?? 0, currency)}</dd>
+          </div>
+          <div className={kds.cashBreakdownRow}>
+            <dt>Остаётся ресторану</dt>
+            <dd>
+              {formatMoney(breakdown.retainedByRestaurantCents ?? 0, currency)}
+            </dd>
+          </div>
+          <div className={kds.cashBreakdownRow}>
+            <dt>К перечислению Direct</dt>
+            <dd>{formatMoney(breakdown.owedToDirectCents ?? 0, currency)}</dd>
+          </div>
+        </dl>
+      ) : (
+        <p className={kds.metaLine}>{breakdown.error}</p>
+      )}
 
       {view.status === "DRIVER_ACTION_REQUIRED" ? (
         <p className={kds.metaLine}>Ожидаем передачу наличных водителем</p>

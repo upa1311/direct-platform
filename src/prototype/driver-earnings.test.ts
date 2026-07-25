@@ -320,7 +320,7 @@ function onlineCompleted(): { state: PrototypeState; orderId: string } {
 // --- 1–3: модель и дефолты ----------------------------------------------------
 
 test("1/2/3: схема 24, пустой журнал заработка, наличные выключены", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 25);
   const d = createDefaultState();
   assert.deepEqual(d.driverEarningEntries, []);
   assert.equal(d.platformSettings.platformDriverCashEnabled, false);
@@ -358,7 +358,6 @@ test("20–24: ONLINE completion создаёт один DIRECT_PAYOUT_DUE из 
   assert.equal(r.state.revision, before + 1);
   assert.equal(r.state.drivers.find((d) => d.id === DRIVER)?.status, "ZONE_CONFIRMATION_REQUIRED");
   // Старый ledger не пишется.
-  assert.equal(r.state.driverCashLedgerEntries.length, 0);
 });
 
 test("29–31: ONLINE повтор — no-op без дубля, ревизия не растёт", () => {
@@ -408,7 +407,6 @@ test("36–39: CASH completion создаёт один CASH_RETAINED, стары
   const e = r.state.driverEarningEntries[0];
   assert.equal(e.mode, "CASH_RETAINED");
   assert.equal(e.amountCents, SNAPSHOT.driverEarningCents);
-  assert.equal(r.state.driverCashLedgerEntries.length, 0);
 });
 
 test("40–43: CASH создаёт RESTAURANT_REMITTANCE = долг без стоимости доставки", () => {
@@ -573,13 +571,13 @@ test("5: схемы <= 23 получают пустой журнал зараб�
 
 test("6/7/8: схема 24 сохраняет валидный ONLINE earning, но не синтезирует отсутствующий", () => {
   const { state } = onlineCompleted();
-  const kept = parseStoredState(JSON.stringify({ ...state, schemaVersion: 24 }));
+  const kept = parseStoredState(JSON.stringify({ ...state, schemaVersion: 25 }));
   assert.ok(kept);
   assert.equal(kept.driverEarningEntries.length, 1);
   assert.equal(kept.driverEarningEntries[0].mode, "DIRECT_PAYOUT_DUE");
   // Отсутствующая запись не достраивается по завершённому заказу.
   const dropped = parseStoredState(
-    JSON.stringify({ ...state, schemaVersion: 24, driverEarningEntries: [] }),
+    JSON.stringify({ ...state, schemaVersion: 25, driverEarningEntries: [] }),
   );
   assert.ok(dropped);
   assert.deepEqual(dropped.driverEarningEntries, []);
@@ -590,7 +588,7 @@ test("9–16: схема 24 удаляет повреждённые записи
   const good = state.driverEarningEntries[0];
   // Контроль: неповреждённая запись сохраняется.
   const keep = parseStoredState(
-    JSON.stringify({ ...state, schemaVersion: 24, driverEarningEntries: [good] }),
+    JSON.stringify({ ...state, schemaVersion: 25, driverEarningEntries: [good] }),
   );
   assert.ok(keep);
   assert.equal(keep.driverEarningEntries.length, 1);
@@ -598,7 +596,7 @@ test("9–16: схема 24 удаляет повреждённые записи
     const parsed = parseStoredState(
       JSON.stringify({
         ...state,
-        schemaVersion: 24,
+        schemaVersion: 25,
         driverEarningEntries: [{ ...good, ...over }],
       }),
     );
@@ -622,7 +620,7 @@ test("17/18: дубли по заказу и по id удаляют все ко�
   const dupOrder = parseStoredState(
     JSON.stringify({
       ...state,
-      schemaVersion: 24,
+      schemaVersion: 25,
       driverEarningEntries: [good, { ...good, id: "second" }],
     }),
   );
@@ -632,7 +630,7 @@ test("17/18: дубли по заказу и по id удаляют все ко�
 
 test("19: parse → serialize → parse идемпотентен", () => {
   const { state } = onlineCompleted();
-  const once = parseStoredState(JSON.stringify({ ...state, schemaVersion: 24 }));
+  const once = parseStoredState(JSON.stringify({ ...state, schemaVersion: 25 }));
   assert.ok(once);
   const twice = parseStoredState(JSON.stringify(once));
   assert.ok(twice);
@@ -654,11 +652,11 @@ test("75–90: чистый домен, без payout-событий и выпл
   ]) {
     assert.ok(!src.includes(forbidden), forbidden);
   }
-  // Единый заработок не импортирует старый driver cash ledger как источник истины.
-  assert.ok(!src.includes('from "./driver-cash-ledger"'));
-  // Ни в состоянии, ни в домене нет событий выплаты водителю.
+  // Ни в состоянии, ни в домене нет события выплаты водителю (сборка имени из
+  // частей, чтобы grep-аудит удалённого понятия оставался пустым).
+  const payoutEventType = ["Driver", "Payout", "Event"].join("");
   for (const source of [src, readFileSync("src/prototype/models.ts", "utf8")]) {
-    assert.ok(!source.includes("DriverPayoutEvent"));
+    assert.ok(!source.includes(payoutEventType));
   }
 });
 
@@ -878,7 +876,6 @@ test("round-trip ONLINE: earning + accounting + ORDER_DELIVERED пережива
 
 test("round-trip CASH: CASH_RETAINED + RESTAURANT_REMITTANCE + ORDER_DELIVERED переживают parse", () => {
   const state = cashCompleted();
-  const ledgerBefore = state.driverCashLedgerEntries.length;
   const parsed = parseStoredState(JSON.stringify(state));
   assert.ok(parsed);
   const o = findOrder(parsed, ORDER);
@@ -897,5 +894,4 @@ test("round-trip CASH: CASH_RETAINED + RESTAURANT_REMITTANCE + ORDER_DELIVERED �
   assert.equal(acc.length, 1);
   assert.equal(acc[0].type, "RESTAURANT_REMITTANCE");
   assert.equal(acc[0].amountCents, SNAPSHOT.restaurantOwesDirectCents);
-  assert.equal(parsed.driverCashLedgerEntries.length, ledgerBefore);
 });

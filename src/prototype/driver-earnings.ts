@@ -5,6 +5,7 @@ import type {
   PrototypeState,
 } from "./models";
 import { getPlatformDriverCashSnapshot, getDriverActiveOrder } from "./selectors";
+import { addChecked, isSafeCents } from "./bank-fee";
 import { computeCompletedOrderAccounting } from "./restaurant-accounting";
 import {
   customerCashCollectionEventId,
@@ -14,7 +15,7 @@ import {
 import { getPlatformDriverCashHandoffView } from "./platform-driver-cash-handoff";
 
 /**
- * Единый журнал заработка водителя (v24).
+ * Единый журнал заработка водителя (v24, финализирован v25).
  *
  * Чистый модуль: без React, provider, localStorage, finalizeMutation, UI,
  * Date.now и new Date — момент времени всегда приходит аргументом. Сумма
@@ -27,8 +28,8 @@ import { getPlatformDriverCashHandoffView } from "./platform-driver-cash-handoff
  *  - CASH    → CASH_RETAINED: водитель уже удержал заработок из наличных.
  * Водитель никогда не должен Direct по этой модели.
  *
- * Модуль НЕ импортирует старый driver-cash-ledger и не использует его как
- * источник истины: единый заработок вычисляется только из снимка заказа.
+ * Единый заработок вычисляется только из неизменяемого снимка заказа — это
+ * единственный журнал расчёта водителя (старый ledger удалён в v25).
  */
 
 /** Fail-closed ошибка границы расчёта заработка водителя. */
@@ -293,7 +294,7 @@ function deliveredEvent(
  * recognizedAt = момент события ORDER_DELIVERED. Для наличного заказа
  * дополнительно доказываются получение денег, передача ресторану, канал
  * CASH_TO_PLATFORM_DRIVER и уже признанное (или законно нулевое) обязательство
- * ресторана — без обращения к старому driver-cash-ledger.
+ * ресторана.
  */
 export function buildCompletedDriverEarningEntry(
   state: PrototypeState,
@@ -324,28 +325,9 @@ export function buildCompletedDriverEarningEntry(
   }
 
   if (order.paymentMethod === "CASH") {
-    const snapshot = getPlatformDriverCashSnapshot(order);
-    if (snapshot === null) return fail();
-    if (snapshot.driverEarningCents !== driverPayoutCents) return fail();
-
-    // Доказанное получение денег от клиента (внутри — и подтверждённая передача
-    // ресторану, и согласованное завершённое состояние).
-    if (!hasValidPlatformDriverCustomerCashCollection(state, order)) return fail();
-    const handoff = getPlatformDriverCashHandoffView(state, order);
-    if (handoff.status !== "CONFIRMED" || !isValidIso(handoff.restaurantConfirmedAt)) {
-      return fail();
-    }
-
-    // Каноническое движение денег наличного заказа.
-    const fin = order.financials;
-    if (fin.moneyMovementStatus !== "COMPLETE") return fail();
-    const movement = fin.moneyMovement;
-    if (!movement) return fail();
-    if (movement.paymentChannel !== "CASH_TO_PLATFORM_DRIVER") return fail();
-    if (movement.restaurantOwesDirectCents !== snapshot.restaurantOwesDirectCents) {
-      return fail();
-    }
-    if (movement.directOwesRestaurantCents !== 0) return fail();
+    const evidence = validateCompletedCashEvidence(state, order);
+    if (evidence === null) return fail();
+    if (evidence.recognizedAt !== recognizedAt) return fail();
 
     // Обязательство ресторана уже признано и совпадает, либо законно нулевое:
     // computeCompletedOrderAccounting возвращает пустой список новых записей.
@@ -355,25 +337,12 @@ export function buildCompletedDriverEarningEntry(
     );
     if (!accounting.ok || accounting.entries.length !== 0) return fail();
 
-    // Момент получения денег совпадает с признанием и оплатой.
-    const collectionEvents = state.platformDriverCashEvents.filter(
-      (e) =>
-        e.orderId === order.id &&
-        e.type === "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION",
-    );
-    if (collectionEvents.length !== 1) return fail();
-    const collectionEvent = collectionEvents[0];
-    if (collectionEvent.id !== customerCashCollectionEventId(order.id)) return fail();
-    if (!isValidIso(collectionEvent.occurredAt)) return fail();
-    if (collectionEvent.occurredAt !== recognizedAt) return fail();
-    if (order.paidAt !== recognizedAt) return fail();
-
     return {
       ok: true,
       entry: makeEntry(
         order,
         driverId,
-        snapshot.driverEarningCents,
+        evidence.snapshot.driverEarningCents,
         "CASH_RETAINED",
         recognizedAt,
       ),
@@ -381,6 +350,80 @@ export function buildCompletedDriverEarningEntry(
   }
 
   return fail();
+}
+
+/** Полное доказательство исправленного наличного завершения БЕЗ признания
+ * обязательства ресторана (accounting проверяется отдельно). Возвращает снимок и
+ * момент признания, либо null. */
+function validateCompletedCashEvidence(
+  state: PrototypeState,
+  order: Order,
+): {
+  driverId: string;
+  snapshot: NonNullable<ReturnType<typeof getPlatformDriverCashSnapshot>>;
+  recognizedAt: string;
+} | null {
+  const ctx = baseEarningContext(state, order);
+  if (ctx === null) return null;
+  const { driverId, driverPayoutCents } = ctx;
+  if (order.deliveryMode !== "PLATFORM_DRIVER") return null;
+  if (order.paymentMethod !== "CASH") return null;
+  if (order.status !== "DELIVERED") return null;
+  if (order.paymentStatus !== "PAID") return null;
+
+  const delivered = deliveredEvent(state, order.id, driverId);
+  if (delivered === null) return null;
+  const recognizedAt = delivered.occurredAt;
+
+  const snapshot = getPlatformDriverCashSnapshot(order);
+  if (snapshot === null) return null;
+  if (snapshot.driverEarningCents !== driverPayoutCents) return null;
+
+  // Доказанное получение денег от клиента (внутри — и подтверждённая передача
+  // ресторану, и согласованное завершённое состояние).
+  if (!hasValidPlatformDriverCustomerCashCollection(state, order)) return null;
+  const handoff = getPlatformDriverCashHandoffView(state, order);
+  if (handoff.status !== "CONFIRMED" || !isValidIso(handoff.restaurantConfirmedAt)) {
+    return null;
+  }
+
+  // Каноническое движение денег наличного заказа.
+  const fin = order.financials;
+  if (fin.moneyMovementStatus !== "COMPLETE") return null;
+  const movement = fin.moneyMovement;
+  if (!movement) return null;
+  if (movement.paymentChannel !== "CASH_TO_PLATFORM_DRIVER") return null;
+  if (movement.restaurantOwesDirectCents !== snapshot.restaurantOwesDirectCents) {
+    return null;
+  }
+  if (movement.directOwesRestaurantCents !== 0) return null;
+
+  // Момент получения денег совпадает с признанием и оплатой.
+  const collectionEvents = state.platformDriverCashEvents.filter(
+    (e) =>
+      e.orderId === order.id &&
+      e.type === "DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION",
+  );
+  if (collectionEvents.length !== 1) return null;
+  const collectionEvent = collectionEvents[0];
+  if (collectionEvent.id !== customerCashCollectionEventId(order.id)) return null;
+  if (!isValidIso(collectionEvent.occurredAt)) return null;
+  if (collectionEvent.occurredAt !== recognizedAt) return null;
+  if (order.paidAt !== recognizedAt) return null;
+
+  return { driverId, snapshot, recognizedAt };
+}
+
+/**
+ * Доказано ли исправленное наличное завершение заказа (без требования уже
+ * признанного обязательства ресторана). Используется миграцией schema 24 для
+ * решения, можно ли детерминированно добавить каноническую RESTAURANT_REMITTANCE.
+ */
+export function hasProvenCorrectedCashCompletion(
+  state: PrototypeState,
+  order: Order,
+): boolean {
+  return validateCompletedCashEvidence(state, order) !== null;
 }
 
 /**
@@ -420,4 +463,169 @@ export function hasValidDriverEarningEntry(
     return false;
   }
   return true;
+}
+
+// --- Read-model расчётов водителя (v25) ---------------------------------------
+
+/**
+ * Безопасная строка журнала заработка для UI. Показываются только допустимые
+ * поля: публичный номер заказа, название ресторана, способ оплаты и — для
+ * наличного заказа — физические суммы получения/передачи из НЕИЗМЕНЯЕМОГО cash
+ * snapshot (не копируются в запись заработка). Внутренний orderId и любые
+ * клиентские данные (имя, телефон, адрес) наружу не выводятся.
+ */
+export interface DriverEarningEntryView {
+  entry: DriverEarningEntry;
+  publicNumber: string;
+  restaurantName: string;
+  paymentMethod: "ONLINE" | "CASH";
+  /** Только для наличного заказа: полная сумма, полученная от клиента. */
+  customerCollectionCents: number | null;
+  /** Только для наличного заказа: сумма, переданная ресторану. */
+  restaurantHandoffCents: number | null;
+}
+
+/**
+ * Read-model раздела «Расчёты» водителя. Три РАЗНЫХ итога не складываются и не
+ * взаимозачитываются: весь заработок, часть уже полученная наличными и часть,
+ * которую Direct ещё должен выплатить. Водитель никогда не должен Direct.
+ * При переполнении одного итога он становится null и требует проверки, но
+ * история доставок и остальные безопасные итоги сохраняются.
+ */
+export interface DriverEarningsView {
+  entries: DriverEarningEntryView[];
+  deliveryCount: number;
+  /** Стоимость всех валидных завершённых доставок; null при переполнении. */
+  totalEarningsCents: number | null;
+  /** Заработок наличными (CASH_RETAINED); null при переполнении. */
+  cashReceivedCents: number | null;
+  /** Безналичный заработок, который Direct ещё должен выплатить; null при переполнении. */
+  dueFromDirectCents: number | null;
+  reviewRequired: boolean;
+  reviewRequiredOrderCount: number;
+}
+
+const emptyEarningsView = (): DriverEarningsView => ({
+  entries: [],
+  deliveryCount: 0,
+  totalEarningsCents: 0,
+  cashReceivedCents: 0,
+  dueFromDirectCents: 0,
+  reviewRequired: false,
+  reviewRequiredOrderCount: 0,
+});
+
+/**
+ * Раздел «Расчёты» водителя: только его записи, только завершённые доставки
+ * PLATFORM_DRIVER с валидным заработком. Ничего не мутирует и не пересчитывает
+ * тариф. Наличные суммы получения/передачи берутся из cash snapshot заказа.
+ */
+export function getDriverEarningsView(
+  state: PrototypeState,
+  driverId: string,
+): DriverEarningsView {
+  if (!state.drivers.some((d) => d.id === driverId)) return emptyEarningsView();
+
+  const driverEntries = state.driverEarningEntries.filter(
+    (e) => e.driverId === driverId,
+  );
+
+  // Повреждённая сырая запись выбранного водителя: дубли id/orderId, запись без
+  // существующего заказа/назначения или не совпадающая с ожидаемой.
+  let brokenRaw = false;
+  const idCounts = new Map<string, number>();
+  const orderCounts = new Map<string, number>();
+  for (const e of driverEntries) {
+    idCounts.set(e.id, (idCounts.get(e.id) ?? 0) + 1);
+    orderCounts.set(e.orderId, (orderCounts.get(e.orderId) ?? 0) + 1);
+  }
+
+  const views: DriverEarningEntryView[] = [];
+  for (const e of driverEntries) {
+    if ((idCounts.get(e.id) ?? 0) > 1 || (orderCounts.get(e.orderId) ?? 0) > 1) {
+      brokenRaw = true;
+      continue;
+    }
+    const order = state.orders.find((o) => o.id === e.orderId);
+    if (!order || order.assignedDriverId !== driverId) {
+      brokenRaw = true;
+      continue;
+    }
+    if (!hasValidDriverEarningEntry(state, order)) {
+      brokenRaw = true;
+      continue;
+    }
+    const isCash = e.mode === "CASH_RETAINED";
+    const snapshot = isCash ? getPlatformDriverCashSnapshot(order) : null;
+    views.push({
+      entry: e,
+      publicNumber: order.publicNumber,
+      restaurantName: order.restaurant.name,
+      paymentMethod: isCash ? "CASH" : "ONLINE",
+      customerCollectionCents: snapshot ? snapshot.customerCollectionCents : null,
+      restaurantHandoffCents: snapshot ? snapshot.restaurantHandoffCents : null,
+    });
+  }
+
+  // Завершённый заказ PLATFORM_DRIVER этого водителя без валидного заработка —
+  // требует проверки (в т.ч. старый CASH, который нельзя достоверно мигрировать).
+  let reviewRequiredOrderCount = 0;
+  for (const order of state.orders) {
+    if (order.assignedDriverId !== driverId) continue;
+    if (order.deliveryMode !== "PLATFORM_DRIVER") continue;
+    if (order.status !== "DELIVERED") continue;
+    if (!hasValidDriverEarningEntry(state, order)) reviewRequiredOrderCount += 1;
+  }
+
+  // Новые записи сверху; стабильный tie-breaker по id записи.
+  views.sort((a, b) => {
+    const ta = Date.parse(a.entry.recognizedAt);
+    const tb = Date.parse(b.entry.recognizedAt);
+    if (ta !== tb) return tb - ta;
+    return a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0;
+  });
+
+  // Итоги считаются независимо безопасной арифметикой: переполнение одного
+  // итога обнуляет только его (null), не трогая историю и другие итоги.
+  let total = 0;
+  let cash = 0;
+  let due = 0;
+  let totalOk = true;
+  let cashOk = true;
+  let dueOk = true;
+  for (const view of views) {
+    const amount = view.entry.amountCents;
+    if (!isSafeCents(amount)) {
+      brokenRaw = true;
+      continue;
+    }
+    if (totalOk) {
+      const next = addChecked(total, amount);
+      if (next === null) totalOk = false;
+      else total = next;
+    }
+    if (view.entry.mode === "CASH_RETAINED" && cashOk) {
+      const next = addChecked(cash, amount);
+      if (next === null) cashOk = false;
+      else cash = next;
+    }
+    if (view.entry.mode === "DIRECT_PAYOUT_DUE" && dueOk) {
+      const next = addChecked(due, amount);
+      if (next === null) dueOk = false;
+      else due = next;
+    }
+  }
+
+  const reviewRequired =
+    reviewRequiredOrderCount > 0 || brokenRaw || !totalOk || !cashOk || !dueOk;
+
+  return {
+    entries: views,
+    deliveryCount: views.length,
+    totalEarningsCents: totalOk ? total : null,
+    cashReceivedCents: cashOk ? cash : null,
+    dueFromDirectCents: dueOk ? due : null,
+    reviewRequired,
+    reviewRequiredOrderCount,
+  };
 }

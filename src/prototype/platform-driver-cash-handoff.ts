@@ -8,6 +8,7 @@ import type {
 import type { ActionResult } from "./actions";
 import { finalizeMutation } from "./prototype-store";
 import { getPlatformDriverCashSnapshot } from "./selectors";
+import { addChecked, isSafeCents } from "./bank-fee";
 import {
   canRestaurantWorkspacePerformAction,
   resolveRestaurantWorkspaceRole,
@@ -173,6 +174,59 @@ export function getPlatformDriverCashHandoffView(
     amountCents,
     driverReportedAt: report.occurredAt,
     restaurantConfirmedAt: confirm.occurredAt,
+  };
+}
+
+/**
+ * Расшифровка наличной передачи для ресторана (v25): три РАЗНЫЕ суммы, которые
+ * нельзя смешивать. Читается ТОЛЬКО из неизменяемого cash snapshot и
+ * restaurantPayoutBeforeBankFeeCents; React ничего не считает и ручной ввод не
+ * принимается. Инвариант: полученная от водителя сумма = остаётся ресторану +
+ * к перечислению Direct. Любое расхождение (даже ±1 цент) — reviewRequired, а не
+ * правдоподобные частичные суммы.
+ */
+export interface RestaurantCashHandoffBreakdown {
+  ok: boolean;
+  /** Получено от водителя (вся сумма физической передачи). */
+  receivedFromDriverCents: number | null;
+  /** Остаётся ресторану (его чистая доля). */
+  retainedByRestaurantCents: number | null;
+  /** К перечислению Direct (комиссия + доплата за небольшой заказ). */
+  owedToDirectCents: number | null;
+  error: string | null;
+}
+
+const CASH_HANDOFF_REVIEW_ERROR =
+  "Данные наличного расчёта требуют проверки Direct.";
+
+export function getRestaurantCashHandoffBreakdown(
+  order: Order,
+): RestaurantCashHandoffBreakdown {
+  const review: RestaurantCashHandoffBreakdown = {
+    ok: false,
+    receivedFromDriverCents: null,
+    retainedByRestaurantCents: null,
+    owedToDirectCents: null,
+    error: CASH_HANDOFF_REVIEW_ERROR,
+  };
+  const snapshot = getPlatformDriverCashSnapshot(order);
+  if (snapshot === null) return review;
+  const received = snapshot.restaurantHandoffCents;
+  const retained = order.financials.restaurantPayoutBeforeBankFeeCents;
+  const owed = snapshot.restaurantOwesDirectCents;
+  if (!isSafeCents(received) || !isSafeCents(retained) || !isSafeCents(owed)) {
+    return review;
+  }
+  // handoff amount != accounting debt: сумма передачи содержит и чистую долю
+  // ресторана, и его будущий долг перед Direct. Проверяем инвариант.
+  const expected = addChecked(retained, owed);
+  if (expected === null || expected !== received) return review;
+  return {
+    ok: true,
+    receivedFromDriverCents: received,
+    retainedByRestaurantCents: retained,
+    owedToDirectCents: owed,
+    error: null,
   };
 }
 

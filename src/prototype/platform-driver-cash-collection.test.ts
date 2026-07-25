@@ -253,7 +253,7 @@ const complete = (s: PrototypeState, now = T6, input = confirmInput) =>
 // --- 1–3: schema / defaults ---------------------------------------------------
 
 test("1: схема равна 24", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 24);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 25);
 });
 test("2/3: default cash выключен, событий нет", () => {
   const d = createDefaultState();
@@ -330,7 +330,6 @@ test("22–37: успех — событие, PAID, paidAt, DELIVERED, один 
   for (const forbidden of [
     "restaurantHandoffCents",
     "driverEarningCents",
-    "directReceivableFromDriverCents",
     "changeCents",
   ]) {
     assert.ok(!keys.includes(forbidden), forbidden);
@@ -376,10 +375,9 @@ test("40–43: CASH создаёт перечисление ресторана �
   assert.equal(acc.amountCents, 100);
   assert.deepEqual(r.state.settlements, s.settlements);
   assert.deepEqual(r.state.restaurantSettlementRecords, s.restaurantSettlementRecords);
-  // Единый заработок CASH_RETAINED признан; старый driver cash ledger не пишется.
+  // Единый заработок CASH_RETAINED признан.
   assert.equal(r.state.driverEarningEntries.length, 1);
   assert.equal(r.state.driverEarningEntries[0].mode, "CASH_RETAINED");
-  assert.equal(r.state.driverCashLedgerEntries.length, 0);
 });
 
 test("44–46: повторное завершение — idempotent no-op без дублей", () => {
@@ -551,16 +549,16 @@ test("61: схемы 7–20 получают пустой cash-журнал", ()
   }
 });
 
-test("62–64: схема 21 хранит два события, но отбрасывает customer collection", () => {
-  const parsed = persistCompleted(21);
-  const types = parsed.platformDriverCashEvents.map((e) => e.type);
-  assert.ok(types.includes("DRIVER_REPORTED_RESTAURANT_CASH_HANDOFF"));
-  assert.ok(types.includes("RESTAURANT_CONFIRMED_CASH_RECEIPT"));
-  assert.ok(!types.includes("DRIVER_CONFIRMED_CUSTOMER_CASH_COLLECTION"));
+test("62–64: схема ≤23 обезвреживает старый CASH — cash-журнал пуст", () => {
+  // v25: старая наличная модель недостоверна, снимок сбрасывается, поэтому и
+  // все три cash-события удаляются нормализатором.
+  for (const v of [21, 22, 23]) {
+    assert.deepEqual(persistCompleted(v).platformDriverCashEvents, []);
+  }
 });
 
-test("65/90: схема 22 хранит три события в каноническом порядке", () => {
-  const parsed = persistCompleted(22);
+test("65/90: схема 24 хранит три события в каноническом порядке", () => {
+  const parsed = persistCompleted(24);
   assert.deepEqual(
     parsed.platformDriverCashEvents.map((e) => e.type),
     [
@@ -589,7 +587,7 @@ function parseCollected(
   const parsed = parseStoredState(
     JSON.stringify({
       ...done,
-      schemaVersion: 22,
+      schemaVersion: 24,
       platformDriverCashEvents: events,
       driverDeliveryEvents: de,
       orders: done.orders.map((o) => ({ ...o, ...orderOver })),
@@ -638,7 +636,7 @@ test("66–72: без предшествующих событий customer colle
     const parsed = parseStoredState(
       JSON.stringify({
         ...done,
-        schemaVersion: 22,
+        schemaVersion: 24,
         platformDriverCashEvents: done.platformDriverCashEvents.filter(
           (e) => !dropCash.includes(e.type),
         ),
@@ -669,7 +667,7 @@ test("88: дубликат customer collection — сохраняется пер
   const parsed = parseStoredState(
     JSON.stringify({
       ...done,
-      schemaVersion: 22,
+      schemaVersion: 24,
       platformDriverCashEvents: [
         ...done.platformDriverCashEvents,
         { ...ev, id: "duplicate-id" },
@@ -901,7 +899,7 @@ test("r9–r12: schema 22 удаляет collection без/с некоррект
     fn: (e: PrototypeState["driverDeliveryEvents"][number]) => unknown | null,
   ) => {
     const parsed = parseStoredState(
-      JSON.stringify({ ...mapDelivery(done, fn), schemaVersion: 22 }),
+      JSON.stringify({ ...mapDelivery(done, fn), schemaVersion: 24 }),
     );
     assert.ok(parsed);
     return collectionCount(parsed);
@@ -938,12 +936,12 @@ test("r13/r14: равное и более позднее время collection �
   const sameMs = mapDelivery(equal, (e) =>
     e.type === "ORDER_PICKED_UP" ? { ...e, occurredAt: T6 } : e,
   );
-  const p1 = parseStoredState(JSON.stringify({ ...sameMs, schemaVersion: 22 }));
+  const p1 = parseStoredState(JSON.stringify({ ...sameMs, schemaVersion: 24 }));
   assert.ok(p1);
   assert.equal(collectionCount(p1), 1);
 
   const later = complete(cashState()).state;
-  const p2 = parseStoredState(JSON.stringify({ ...later, schemaVersion: 22 }));
+  const p2 = parseStoredState(JSON.stringify({ ...later, schemaVersion: 24 }));
   assert.ok(p2);
   assert.equal(collectionCount(p2), 1);
 });

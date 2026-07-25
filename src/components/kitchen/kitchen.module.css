@@ -1198,6 +1198,37 @@
   color: var(--kds-text);
 }
 
+/* Расшифровка трёх наличных сумм: получено / остаётся / к перечислению Direct.
+   Одна колонка строк «подпись — сумма»; на узком экране подпись переносится. */
+.cashBreakdown {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.cashBreakdownRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  min-width: 0;
+}
+
+.cashBreakdownRow dt {
+  font-size: 13px;
+  color: var(--kds-muted, #66706a);
+  overflow-wrap: anywhere;
+}
+
+.cashBreakdownRow dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .pickupAmount {
   margin: 0;
   font-size: 18px;

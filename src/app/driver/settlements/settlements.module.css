@@ -1,6 +1,6 @@
-/* Раздел «Расчёты» водителя: наличный заработок и сумма к передаче Direct.
-   Наследует KDS-переменные экрана; отдельные примитивы, чтобы не засорять
-   кухонные стили. Одна колонка на телефоне, без горизонтального скролла. */
+/* Раздел «Расчёты» водителя: заработок по доставкам, наличные выплаты и сумма к
+   выплате Direct. Наследует KDS-переменные экрана; отдельные примитивы, чтобы не
+   засорять кухонные стили. Одна колонка на телефоне, без горизонтального скролла. */
 
 .wrap {
   display: flex;
@@ -21,7 +21,7 @@
   overflow-wrap: anywhere;
 }
 
-/* Сводка: на телефоне одна колонка, на широком экране — три. */
+/* Сводка: на телефоне одна колонка, на планшете — две, на десктопе — четыре. */
 .summaryGrid {
   display: grid;
   grid-template-columns: 1fr;
@@ -31,7 +31,13 @@
 
 @media (min-width: 640px) {
   .summaryGrid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 960px) {
+  .summaryGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
@@ -132,10 +138,19 @@
 .amountRow {
   display: flex;
   flex-wrap: wrap;
+  align-items: baseline;
   gap: 4px 16px;
   font-size: 15px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+/* Статус выплаты: длинная подпись переносится, а не растягивает карточку. */
+.statusLabel {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--kds-muted, #66706a);
+  overflow-wrap: anywhere;
 }
 
 .secondaryRow {
