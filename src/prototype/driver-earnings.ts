@@ -13,6 +13,7 @@ import {
   validatePreparedPlatformDriverCashCompletion,
 } from "./platform-driver-cash-collection";
 import { getPlatformDriverCashHandoffView } from "./platform-driver-cash-handoff";
+import { getDriverPayoutsView } from "./driver-payouts";
 
 /**
  * Единый журнал заработка водителя (v24, финализирован v25).
@@ -609,10 +610,25 @@ export interface DriverEarningsView {
   deliveryCount: number;
   /** Стоимость всех валидных завершённых доставок; null при переполнении. */
   totalEarningsCents: number | null;
-  /** Заработок наличными (CASH_RETAINED); null при переполнении. */
+  /**
+   * Заработок, удержанный из клиентских НАЛИЧНЫХ заказов (CASH_RETAINED) — деньги
+   * клиента, которые водитель оставил себе на месте. Это НЕ выплата Direct
+   * наличными. null при переполнении.
+   */
   cashReceivedCents: number | null;
-  /** Безналичный заработок, который Direct ещё должен выплатить; null при переполнении. */
+  /**
+   * Безналичный заработок (DIRECT_PAYOUT_DUE), который Direct ещё должен
+   * выплатить И который ещё НЕ включён ни в один payout batch. null при
+   * переполнении/проверке.
+   */
   dueFromDirectCents: number | null;
+  /** Выплаты, отправленные Direct и ожидающие подтверждения водителем; null при проверке. */
+  sentByDirectCents: number | null;
+  /**
+   * Выплаты, которые Direct отдельно передал водителю и водитель ПОДТВЕРДИЛ
+   * получение (не путать с cashReceivedCents). null при проверке.
+   */
+  receivedFromDirectCents: number | null;
   reviewRequired: boolean;
   reviewRequiredOrderCount: number;
 }
@@ -623,6 +639,8 @@ const emptyEarningsView = (): DriverEarningsView => ({
   totalEarningsCents: 0,
   cashReceivedCents: 0,
   dueFromDirectCents: 0,
+  sentByDirectCents: 0,
+  receivedFromDirectCents: 0,
   reviewRequired: false,
   reviewRequiredOrderCount: 0,
 });
@@ -701,10 +719,8 @@ export function getDriverEarningsView(
   // итога обнуляет только его (null), не трогая историю и другие итоги.
   let total = 0;
   let cash = 0;
-  let due = 0;
   let totalOk = true;
   let cashOk = true;
-  let dueOk = true;
   for (const view of views) {
     const amount = view.entry.amountCents;
     if (!isSafeCents(amount)) {
@@ -721,19 +737,24 @@ export function getDriverEarningsView(
       if (next === null) cashOk = false;
       else cash = next;
     }
-    if (view.entry.mode === "DIRECT_PAYOUT_DUE" && dueOk) {
-      const next = addChecked(due, amount);
-      if (next === null) dueOk = false;
-      else due = next;
-    }
   }
 
+  // v26: суммы выплат Direct берутся из единого payout read-model (формулы не
+  // дублируются). dueFromDirect теперь означает ТОЛЬКО DIRECT_PAYOUT_DUE
+  // заработок, ещё НЕ включённый ни в один payout batch; отправленные и
+  // подтверждённые выплаты — отдельные итоги.
+  const payouts = getDriverPayoutsView(state, driverId);
+
   const reviewRequired =
-    reviewRequiredOrderCount > 0 || brokenRaw || !totalOk || !cashOk || !dueOk;
+    reviewRequiredOrderCount > 0 ||
+    brokenRaw ||
+    !totalOk ||
+    !cashOk ||
+    payouts.reviewRequired;
 
   // Неизвестная финансовая позиция: завершённый заказ без валидного заработка
   // или повреждённая сырая запись водителя означают, что суммы НЕИЗВЕСТНЫ — все
-  // три итога становятся null (не подтверждённый $0.00). История и deliveryCount
+  // итоги становятся null (не подтверждённый $0.00). История и deliveryCount
   // сохраняются. Чистое переполнение одного агрегата (без неизвестного заказа)
   // сохраняет прежнюю независимую семантику: null только у переполненного итога.
   const unknownPosition = reviewRequiredOrderCount > 0 || brokenRaw;
@@ -743,7 +764,11 @@ export function getDriverEarningsView(
     deliveryCount: views.length,
     totalEarningsCents: unknownPosition ? null : totalOk ? total : null,
     cashReceivedCents: unknownPosition ? null : cashOk ? cash : null,
-    dueFromDirectCents: unknownPosition ? null : dueOk ? due : null,
+    dueFromDirectCents: unknownPosition ? null : payouts.dueFromDirectCents,
+    sentByDirectCents: unknownPosition ? null : payouts.sentAwaitingConfirmationCents,
+    receivedFromDirectCents: unknownPosition
+      ? null
+      : payouts.confirmedReceivedCents,
     reviewRequired,
     reviewRequiredOrderCount,
   };

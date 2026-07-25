@@ -7,7 +7,7 @@ import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 import type { OrderZoneSnapshot } from "@/lib/zones/types";
 
-export const PROTOTYPE_SCHEMA_VERSION = 25 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 26 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -836,6 +836,66 @@ export interface DriverEarningEntry {
   source: "PLATFORM_DRIVER_ORDER";
 }
 
+/**
+ * Способ фактической выплаты Direct водителю (v26):
+ *  - BANK_TRANSFER — Direct отправил деньги на карту/банковский счёт;
+ *  - CASH — Direct передал наличные водителю.
+ * Реального банковского перевода система НЕ выполняет — это административная
+ * фиксация факта отправки/передачи.
+ */
+export type DriverPayoutMethod = "BANK_TRANSFER" | "CASH";
+
+/**
+ * Неизменяемый append-only батч фактической выплаты Direct водителю за набор
+ * завершённых ОНЛАЙН-доставок (v26). В батч входят ТОЛЬКО заработки с
+ * DriverEarningEntry.mode === "DIRECT_PAYOUT_DUE": наличный заработок
+ * (CASH_RETAINED) водитель уже получил из наличного заказа и повторной выплате
+ * не подлежит. amountCents — точная сумма выбранных earningEntryIds; вручную не
+ * вводится и по заказам не пересчитывается. Статус батча НЕ хранится: он всегда
+ * выводится из наличия строгого DriverPayoutReceiptEvent.
+ */
+export interface DriverPayoutBatch {
+  id: string;
+  driverId: string;
+  currencyCode: "USD";
+  /** Точный immutable состав выплаты (только DIRECT_PAYOUT_DUE, канонически отсортирован). */
+  earningEntryIds: string[];
+  /** Точная сумма выбранных earningEntryIds. Не ручной ввод, не пересчёт по заказам. */
+  amountCents: number;
+  method: DriverPayoutMethod;
+  /** Момент, когда администратор отметил отправку/передачу денег. */
+  sentAt: string;
+  createdBy: "ADMIN";
+  /** Необязательный номер операции/чека/внутренней ссылки (≤120 символов) либо null. */
+  externalReference: string | null;
+  /** Короткий административный комментарий (≤300 символов) либо null. */
+  note: string | null;
+}
+
+/**
+ * Append-only подтверждение водителем ФАКТИЧЕСКОГО получения выплаты (v26).
+ * Окончательный статус «получено» возникает только после этого события —
+ * администратор подтвердить получение за водителя не может. Не более одного
+ * валидного события на батч.
+ */
+export interface DriverPayoutReceiptEvent {
+  id: string;
+  payoutBatchId: string;
+  driverId: string;
+  occurredAt: string;
+  actor: "DRIVER";
+}
+
+/**
+ * Производный статус батча выплаты (не хранится, выводится из receipt event):
+ *  - AWAITING_DRIVER_CONFIRMATION — Direct отметил выплату, водитель ещё не
+ *    подтвердил получение;
+ *  - CONFIRMED_RECEIVED — водитель подтвердил фактическое получение.
+ */
+export type DriverPayoutStatus =
+  | "AWAITING_DRIVER_CONFIRMATION"
+  | "CONFIRMED_RECEIVED";
+
 export interface FinancialSnapshot {
   currencyCode: CurrencyCode;
   deliveryMode: DeliveryMode;
@@ -1119,6 +1179,14 @@ export interface PrototypeState {
    * driver cash ledger удалён — водитель никогда не должен Direct.
    */
   driverEarningEntries: DriverEarningEntry[];
+  /**
+   * Append-only батчи фактических выплат Direct водителям (v26). Строгая
+   * двусторонняя фиксация: администратор отмечает отправку/передачу, водитель
+   * подтверждает получение отдельным событием. Статус выводится, не хранится.
+   */
+  driverPayoutBatches: DriverPayoutBatch[];
+  /** Append-only подтверждения водителями получения выплат (v26). */
+  driverPayoutReceiptEvents: DriverPayoutReceiptEvent[];
   cart: Cart;
   orders: Order[];
   settlements: SettlementEntry[];

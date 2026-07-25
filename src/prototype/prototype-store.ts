@@ -55,6 +55,10 @@ import {
   driverEarningEntryId,
   hasProvenCorrectedCashCompletion,
 } from "./driver-earnings";
+import {
+  keepValidPayoutBatches,
+  keepValidPayoutReceiptEvents,
+} from "./driver-payouts";
 
 export const PROTOTYPE_STORAGE_KEY = "direct-prototype-state-v7";
 export const PROTOTYPE_CHANNEL_NAME = "direct-prototype-channel-v7";
@@ -134,7 +138,7 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
-  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+  7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -1710,6 +1714,36 @@ export function normalizePrototypeState(
     } as unknown as PrototypeState,
     sourceSchemaVersion,
   );
+  // Выплаты Direct водителю (v26): schema ≤ 25 — пустые массивы (ничего не
+  // синтезируется из заработков/истории); schema ≥ 26 — только строго валидные
+  // сырые батчи и подтверждения. Payout зависит от УЖЕ нормализованного журнала
+  // заработка: батч поглощает только валидные DIRECT_PAYOUT_DUE заработки.
+  const payoutEvidence = {
+    ...evidenceState,
+    restaurantAccountingEntries: normalizedRestaurantAccountingEntries,
+    driverEarningEntries: normalizedDriverEarningEntries,
+    driverPayoutBatches: [],
+    driverPayoutReceiptEvents: [],
+  } as unknown as PrototypeState;
+  const normalizedDriverPayoutBatches =
+    sourceSchemaVersion <= 25
+      ? []
+      : keepValidPayoutBatches({
+          ...payoutEvidence,
+          driverPayoutBatches: Array.isArray(state.driverPayoutBatches)
+            ? (state.driverPayoutBatches as PrototypeState["driverPayoutBatches"])
+            : [],
+        });
+  const normalizedDriverPayoutReceiptEvents =
+    sourceSchemaVersion <= 25
+      ? []
+      : keepValidPayoutReceiptEvents({
+          ...payoutEvidence,
+          driverPayoutBatches: normalizedDriverPayoutBatches,
+          driverPayoutReceiptEvents: Array.isArray(state.driverPayoutReceiptEvents)
+            ? (state.driverPayoutReceiptEvents as PrototypeState["driverPayoutReceiptEvents"])
+            : [],
+        });
   // v25: итоговое состояние собирается из ЯВНО перечисленных полей (без `...state`),
   // поэтому удалённый старый driver cash ledger не переносится из сырых данных
   // schema ≤ 24, а неизвестные лишние поля не «протекают» в нормализованный state.
@@ -1756,6 +1790,10 @@ export function normalizePrototypeState(
     // детерминированная миграция из доказательства завершения; source ≥ 25 —
     // только строго валидные сырые записи. Старый driver cash ledger удалён.
     driverEarningEntries: normalizedDriverEarningEntries,
+    // Выплаты Direct водителю (v26): source ≤ 25 — пусто; source ≥ 26 — только
+    // строго валидные батчи/подтверждения (см. keepValidPayout*).
+    driverPayoutBatches: normalizedDriverPayoutBatches,
+    driverPayoutReceiptEvents: normalizedDriverPayoutReceiptEvents,
     cart: normalizeCart(state.cart, defaults.cart),
     orders: normalizedOrders,
     settlements: normalizedSettlements,

@@ -126,6 +126,12 @@ import {
   type RestaurantAccountingResolutionResult,
 } from "./restaurant-accounting";
 import {
+  createDriverPayoutBatch,
+  confirmDriverPayoutReceipt,
+  type CreateDriverPayoutBatchInput,
+  type DriverPayoutActionResult,
+} from "./driver-payouts";
+import {
   confirmFullRestaurantSettlement,
   confirmRestaurantSettlement,
   type ConfirmFullRestaurantSettlementInput,
@@ -354,6 +360,19 @@ export interface PrototypeContextValue {
   confirmSettlement: (
     input: Omit<ConfirmRestaurantSettlementInput, "nowIso">,
   ) => Promise<RestaurantSettlementConfirmResult>;
+  /**
+   * Driver payouts v1 (v26). Администратор фиксирует факт отправки/передачи
+   * выплаты по набору невыплаченных DIRECT_PAYOUT_DUE заработков; момент выплаты
+   * создаётся ВНУТРИ сериализованной мутации. Реального перевода денег нет.
+   */
+  createDriverPayoutBatch: (
+    input: CreateDriverPayoutBatchInput,
+  ) => Promise<DriverPayoutActionResult>;
+  /** Водитель подтверждает ФАКТИЧЕСКОЕ получение выплаты из своей сессии. */
+  confirmDriverPayoutReceipt: (
+    driverId: string,
+    payoutBatchId: string,
+  ) => Promise<DriverPayoutActionResult>;
   /**
    * Полный расчёт всей открытой позиции ресторана (v15). Момент отсечки
    * создаётся ВНУТРИ сериализованной мутации над свежим состоянием — UI его не
@@ -1417,6 +1436,39 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  const createDriverPayout = useCallback(
+    (input: CreateDriverPayoutBatchInput) => {
+      // Момент выплаты создаётся ВНУТРИ транзакции над свежим состоянием и
+      // формирует детерминированный id батча — UI его не передаёт.
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) => createDriverPayoutBatch(baseState, input, nowIso),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          payoutBatchId: null,
+        }),
+      });
+    },
+    [runSerializedActionMutation],
+  );
+
+  const confirmDriverPayout = useCallback(
+    (driverId: string, payoutBatchId: string) => {
+      const nowIso = new Date().toISOString();
+      return runSerializedActionMutation({
+        mutation: (baseState) =>
+          confirmDriverPayoutReceipt(baseState, driverId, payoutBatchId, nowIso),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          payoutBatchId: null,
+        }),
+      });
+    },
+    [runSerializedActionMutation],
+  );
+
   const confirmSettlement = useCallback(
     (input: Omit<ConfirmRestaurantSettlementInput, "nowIso">) => {
       // Один канонический момент операции на всю транзакцию: он попадёт в
@@ -1998,6 +2050,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resolvePreparationProblem,
       requestRestaurantCancellation,
       resolveAccountingEntry,
+      createDriverPayoutBatch: createDriverPayout,
+      confirmDriverPayoutReceipt: confirmDriverPayout,
       confirmSettlement,
       confirmFullSettlement,
       completePickup,
@@ -2075,6 +2129,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resolvePreparationProblem,
       requestRestaurantCancellation,
       resolveAccountingEntry,
+      createDriverPayout,
+      confirmDriverPayout,
       confirmSettlement,
       confirmFullSettlement,
       completePickup,
