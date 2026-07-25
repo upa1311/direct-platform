@@ -26,7 +26,7 @@ function acceptedOrder(
   s = setCartFulfillmentChoice(s, fulfillment);
   if (fulfillment === "DELIVERY") {
     s = updateCartAddress(s, {
-      street: "Тестовая улица 1",
+      street: "Садовый переулок",
       house: "4",
       apartment: "12",
     });

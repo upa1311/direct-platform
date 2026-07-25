@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Gift } from "lucide-react";
 
+import { ClientAddressPicker } from "@/components/client/client-address-picker";
 import { REPEAT_NOTICE_KEY } from "@/components/order-flow/client-order-actions";
 import { RestaurantAvailabilityBadge } from "@/components/order-flow/restaurant-availability-badge";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
@@ -69,7 +70,7 @@ export default function ClientCartPage() {
     }
   }, []);
   const addressSectionRef = useRef<HTMLElement>(null);
-  const streetFieldRef = useRef<HTMLSelectElement>(null);
+  const streetFieldRef = useRef<HTMLInputElement>(null);
   const houseFieldRef = useRef<HTMLInputElement>(null);
   const itemViews = getCartItemViews(state);
   const restaurant = getRestaurant(state, state.cart.restaurantId);
@@ -380,40 +381,20 @@ export default function ClientCartPage() {
               ref={addressSectionRef}
             >
               <h2>Адрес доставки</h2>
+              <p className={flowStyles.summaryHint}>
+                Только подтверждённые адреса из каталога зон Бендер
+                (bender-zones-v1.1). Стоимость доставки здесь не показывается.
+              </p>
               <div className={flowStyles.fieldGrid}>
-                <label
-                  className={`${flowStyles.field} ${flowStyles.fieldFull}`}
-                >
-                  <span>Улица</span>
-                  <select
-                    ref={streetFieldRef}
-                    value={state.cart.address.street}
-                    onChange={(event) => {
-                      void updateAddress({ street: event.target.value });
-                      setAddressError("");
-                    }}
-                  >
-                    <option value="">Выберите улицу</option>
-                    {state.zones.flatMap((zone) =>
-                      zone.streets.map((street) => (
-                        <option value={street} key={street}>
-                          {street}
-                        </option>
-                      )),
-                    )}
-                  </select>
-                </label>
-                <label className={flowStyles.field}>
-                  <span>Дом</span>
-                  <input
-                    ref={houseFieldRef}
-                    value={state.cart.address.house}
-                    onChange={(event) => {
-                      void updateAddress({ house: event.target.value });
-                      setAddressError("");
-                    }}
-                  />
-                </label>
+                <ClientAddressPicker
+                  address={state.cart.address}
+                  streetRef={streetFieldRef}
+                  houseRef={houseFieldRef}
+                  onChange={(partial) => {
+                    void updateAddress(partial);
+                    setAddressError("");
+                  }}
+                />
                 <label className={flowStyles.field}>
                   <span>Квартира</span>
                   <input

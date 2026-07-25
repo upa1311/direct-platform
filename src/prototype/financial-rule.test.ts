@@ -38,7 +38,7 @@ import type { FinancialSnapshot, Order, PrototypeState } from "./models.ts";
  */
 
 const V1 = FINANCIAL_RULES.DIRECT_FINANCIAL_RULE_V1;
-const ADDR = { street: "Тестовая улица 1", house: "1" };
+const ADDR = { street: "Садовый переулок", house: "1" };
 
 /** Гипотетическое будущее правило с другой ставкой (в registry его нет). */
 const FUTURE_RULE_2X: FinancialRuleSnapshot = {

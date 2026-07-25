@@ -531,6 +531,14 @@ export interface DeliveryAddress {
   floor: string;
   comment: string;
   zoneId: ZoneId | null;
+  /**
+   * Населённый пункт и район из verified registry (bender-zones-v1.1). Опциональны
+   * для обратной совместимости со старыми заказами; при отсутствии населённый
+   * пункт трактуется как «Бендеры». Нужны, чтобы точный resolver зон различал
+   * одинаковые улицы в разных населённых пунктах/районах. Денег не содержат.
+   */
+  settlement?: string;
+  district?: string | null;
 }
 
 export interface SavedAddress extends DeliveryAddress {

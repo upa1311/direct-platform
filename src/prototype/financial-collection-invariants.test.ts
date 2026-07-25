@@ -23,7 +23,7 @@ function makeOrder(
   let s = createDefaultState();
   s = setCartFulfillmentChoice(s, fulfillment);
   if (fulfillment === "DELIVERY") {
-    s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+    s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   }
   // Несколько единиц, чтобы гарантированно превысить минимальную сумму доставки.
   for (let i = 0; i < 6; i += 1) {

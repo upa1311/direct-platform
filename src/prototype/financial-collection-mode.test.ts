@@ -53,7 +53,7 @@ import { FINANCE_CHANNEL_LABELS } from "../app/restaurant/settlements/overview-p
  */
 
 const V1_RULE = FINANCIAL_RULES.DIRECT_FINANCIAL_RULE_V1;
-const ADDR = { street: "Тестовая улица 1", house: "1" };
+const ADDR = { street: "Садовый переулок", house: "1" };
 const NOW = "2026-07-21T10:00:00.000Z";
 
 const ALL = "RESTAURANT_COLLECTS_ALL" as const;

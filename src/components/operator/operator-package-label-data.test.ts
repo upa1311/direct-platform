@@ -40,7 +40,7 @@ function acceptedOrder(
   s = setCartFulfillmentChoice(s, fulfillment);
   if (fulfillment === "DELIVERY") {
     s = updateCartAddress(s, {
-      street: "Тестовая улица 1",
+      street: "Садовый переулок",
       house: "15",
       apartment: "24",
       entrance: "2",
@@ -257,7 +257,7 @@ test("адрес присутствует для доставки водител
     paymentStatus: "PAID",
   });
   const data = buildOk(order);
-  assert.equal(data.addressMain, "Тестовая улица 1, дом 15, кв. 24");
+  assert.equal(data.addressMain, "Садовый переулок, дом 15, кв. 24");
   assert.equal(data.addressAccess, "Подъезд 2 · этаж 6");
 });
 
@@ -270,7 +270,7 @@ test("адрес присутствует для доставки рестора
     paymentStatus: "DUE_TO_RESTAURANT_COURIER",
   });
   const data = buildOk(order);
-  assert.equal(data.addressMain, "Тестовая улица 1, дом 15, кв. 24");
+  assert.equal(data.addressMain, "Садовый переулок, дом 15, кв. 24");
 });
 
 test("для самовывоза адреса нет совсем", () => {

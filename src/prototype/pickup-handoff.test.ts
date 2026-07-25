@@ -293,7 +293,7 @@ test("несуществующий заказ: ошибка", () => {
 test("не-PICKUP заказ: ошибка", () => {
   let s = createDefaultState();
   s = addCartItem(s, "restaurant-1-item-1", "size-standard").state;
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   const created = createOrderFromCart(s);
   s = created.state;
   const orderId = created.result.orderId as string;
@@ -565,7 +565,7 @@ test("невыкуп: некорректный nowIso — ошибка", () => {
 test("невыкуп: не-PICKUP — ошибка", () => {
   let s = createDefaultState();
   s = addCartItem(s, "restaurant-1-item-1", "size-standard").state;
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   const created = createOrderFromCart(s);
   s = created.state;
   const orderId = created.result.orderId as string;
@@ -723,7 +723,7 @@ test("создание PICKUP: pickupPaidWith = null", () => {
 test("создание доставки: снимок = []", () => {
   let s = createDefaultState();
   s = addCartItem(s, "restaurant-1-item-1", "size-standard").state;
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   const created = createOrderFromCart(s);
   const orderId = created.result.orderId as string;
   assert.deepEqual(

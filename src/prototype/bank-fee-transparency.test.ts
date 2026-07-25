@@ -31,7 +31,7 @@ import {
  * между сторонами в презентации не пересчитываются.
  */
 
-const ADDR = { street: "Тестовая улица 1", house: "1" };
+const ADDR = { street: "Садовый переулок", house: "1" };
 const TZ = "Europe/Chisinau";
 const RID = "restaurant-2";
 const ALL = "RESTAURANT_COLLECTS_ALL" as const;

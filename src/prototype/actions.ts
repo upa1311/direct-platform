@@ -51,6 +51,9 @@ import {
   canRestaurantWorkspacePerformAction,
   resolveRestaurantWorkspaceRole,
 } from "./restaurant-workflow";
+import { resolveAddressZone } from "../lib/zones/address-resolver";
+import { buildOrderZoneSnapshot } from "../lib/zones/order-zone-snapshot";
+import { isDatasetValid } from "../lib/zones/zone-registry";
 import {
   calculateCartPricing,
   canPlacePrototypeOrder,
@@ -423,6 +426,31 @@ export function createOrderFromCart(
     return fail("Введите адрес доставки");
   }
 
+  // Versioned Bender zones (fail closed). A PLATFORM_DRIVER order can only be
+  // created for an address that resolves to an EXACT verified house in the
+  // vendored registry — never a street guess, a disputed/no_delivery/unaddressed
+  // object, or an unknown house. If the release itself is invalid, no order is
+  // created. This gate is independent of and additive to the legacy pricing zone
+  // (customerZoneId): it touches no money.
+  if (deliveryMode === "PLATFORM_DRIVER") {
+    if (!isDatasetValid()) {
+      return fail("Набор зон недоступен (DATASET_INVALID). Заказ создать нельзя.");
+    }
+    const dropoffZone = resolveAddressZone({
+      settlement: state.cart.address.settlement,
+      district: state.cart.address.district,
+      street: state.cart.address.street,
+      house: state.cart.address.house,
+    });
+    if (dropoffZone.status !== "RESOLVED") {
+      return fail(
+        dropoffZone.status === "NO_DELIVERY"
+          ? "По этому адресу доставка не выполняется."
+          : "Адрес не подтверждён в каталоге зон — укажите точный дом.",
+      );
+    }
+  }
+
   const pricing = calculateCartPricing(state);
 
   if (deliveryMode === "RESTAURANT_DELIVERY") {
@@ -692,6 +720,17 @@ export function createOrderFromCart(
             : "Заказ с доставкой отправлен ресторану на проверку.",
       },
     ],
+    // Неизменяемый снимок зон, снятый при создании. Для PLATFORM_DRIVER он
+    // обязателен и содержит подтверждённую зону назначения (dropoffZoneId из
+    // registry); для самовывоза адреса нет, поэтому назначение пустое. Денег не
+    // содержит и на финансовый снимок не влияет.
+    zoneSnapshot: isDatasetValid()
+      ? buildOrderZoneSnapshot({
+          pickupZoneId: restaurant.zoneId,
+          address: isDelivery ? { ...state.cart.address, zoneId: customerZoneId } : null,
+          resolvedAt: now,
+        })
+      : undefined,
   };
 
   const nextState = finalizeMutation(

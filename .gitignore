@@ -45,3 +45,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Generated ONLY by verify:zones after fail-closed validation of the vendored release.
+/src/vendor/bender-zones-v1.1/dataset.generated.ts

@@ -31,7 +31,7 @@ function cart(
   let s = createDefaultState();
   s = setCartFulfillmentChoice(s, fulfillment);
   if (fulfillment === "DELIVERY") {
-    s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+    s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   }
   for (let i = 0; i < units; i += 1) {
     s = addCartItem(s, itemId).state;

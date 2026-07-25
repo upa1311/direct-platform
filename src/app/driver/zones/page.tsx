@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { resolveAddressZone } from "@/lib/zones/address-resolver";
 import {
+  isDatasetValid,
   listZones,
   zoneColor,
   zoneRelease,
@@ -99,16 +100,25 @@ export default function DriverZonesPage() {
             Проверить
           </button>
         </div>
+        {!isDatasetValid() && (
+          <p style={{ color: "#b91c1c", fontWeight: 700, fontSize: 13 }}>
+            Набор зон недоступен (DATASET_INVALID).
+          </p>
+        )}
         {result && (
           <div style={{ marginTop: 10, fontSize: 14 }}>
-            {result.status === "no_delivery" ? (
+            {result.status === "NO_DELIVERY" ? (
               <b style={{ color: "#b91c1c" }}>Без доставки</b>
-            ) : result.zoneNumber != null ? (
+            ) : result.status === "RESOLVED" && result.zoneNumber != null ? (
               <b style={{ color: zoneColor(result.zoneNumber) ?? "#333" }}>
                 Zone {result.zoneNumber}
               </b>
             ) : (
-              <span>Зона не определена ({result.status})</span>
+              <span>
+                Зона не подтверждена ({result.status}
+                {result.zoneNumber != null ? `, территория Zone ${result.zoneNumber}` : ""}
+                )
+              </span>
             )}
           </div>
         )}

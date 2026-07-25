@@ -27,7 +27,7 @@ const ASOF_FAR = "2030-01-01T00:00:00.000Z";
 function realOrderTemplate(): Order {
   let s = createDefaultState();
   s = setCartFulfillmentChoice(s, "DELIVERY");
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   for (let i = 0; i < 6; i += 1) {
     s = addCartItem(s, "restaurant-1-item-1").state;
   }

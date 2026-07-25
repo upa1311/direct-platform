@@ -36,7 +36,7 @@ import type {
  */
 
 const RID = "restaurant-1";
-const ADDR = { street: "Тестовая улица 1", house: "1" };
+const ADDR = { street: "Садовый переулок", house: "1" };
 const T1 = "2026-07-17T10:00:00.000Z";
 const T2 = "2026-07-17T11:00:00.000Z";
 const T3 = "2026-07-17T12:00:00.000Z";

@@ -44,6 +44,7 @@ import { BellOff, BellRing, CarFront, MapPin } from "lucide-react";
 
 import { useDriverOfferSoundPreference } from "./driver-offer-sound";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
+import { driverOrderZoneView } from "@/lib/zones/driver-zone-view";
 import { useDismissable } from "./use-popover";
 import { DriverControlSheet } from "./driver-control-sheet";
 import styles from "@/app/driver/driver.module.css";
@@ -1075,7 +1076,39 @@ function ActiveOrderCard({
 
       {/* Блок 3: детали заказа и связь с клиентом. */}
       <OrderMeta order={order} />
+
+      {/* Блок 4: зоны версионного набора — доступны после принятия заказа. */}
+      <DriverOrderZoneDetails order={order} />
     </>
+  );
+}
+
+/**
+ * Технические детали зон принятого заказа (после принятия): зона забора и
+ * доставки, Северный, транзит через Варницу и версия набора зон. Без
+ * внутренних данных GIS (OSM id, полигоны). На выплату не влияет.
+ */
+function DriverOrderZoneDetails({ order }: { order: Order }) {
+  const view = driverOrderZoneView(order);
+  return (
+    <div className={styles.detailCard} data-testid="active-order-zones">
+      <span className={styles.detailRowLabel}>Зоны (bender-zones-v1.1)</span>
+      <span className={styles.detailRowValue}>
+        Забор: {view.pickup.label} · Доставка: {view.dropoff.label}
+      </span>
+      {view.isSeverny ? (
+        <span className={styles.detailRowValue}>Северный (анклав Zone 4)</span>
+      ) : null}
+      {view.requiresVarnitaTransit ? (
+        <span className={styles.detailRowValue}>Требуется транзит через Варницу</span>
+      ) : null}
+      {view.warning ? (
+        <span className={styles.detailRowValue}>{view.warning}</span>
+      ) : null}
+      <span className={styles.detailRowValue} style={{ color: "#888", fontSize: 12 }}>
+        Набор зон: {view.releaseId} · версия данных: {view.datasetVersion}
+      </span>
+    </div>
   );
 }
 

@@ -94,7 +94,7 @@ function cartReadyState(fulfillment: "PICKUP" | "DELIVERY"): PrototypeState {
   };
   s = setCartFulfillmentChoice(s, fulfillment);
   if (fulfillment === "DELIVERY") {
-    s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+    s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   }
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;

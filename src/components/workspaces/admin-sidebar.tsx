@@ -6,18 +6,10 @@ import { usePrototype } from "@/prototype/prototype-provider";
 import { getPendingMenuSubmissions } from "@/prototype/selectors";
 import { BrandLink } from "./brand-link";
 import { WorkspaceNav } from "./workspace-nav";
+import { ADMIN_NAVIGATION } from "./admin-navigation";
 import styles from "./workspace-shell.module.css";
 
-const adminNavigation = [
-  { href: "/admin", label: "Обзор" },
-  { href: "/admin/orders", label: "Заказы" },
-  { href: "/admin/restaurants", label: "Рестораны" },
-  { href: "/admin/restaurant-builder", label: "Конструктор ресторанов" },
-  { href: "/admin/menu-review", label: "Меню на проверке" },
-  { href: "/admin/drivers", label: "Водители" },
-  { href: "/admin/settlements", label: "Расчёты" },
-  { href: "/admin/zones", label: "Зоны и тарифы" },
-] as const;
+const adminNavigation = ADMIN_NAVIGATION;
 
 export function AdminSidebar() {
   const { state, isHydrated } = usePrototype();

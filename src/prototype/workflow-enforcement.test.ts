@@ -549,7 +549,7 @@ function splitCourierReadyState(): { state: PrototypeState; orderId: string } {
     ),
   };
   s = setCartFulfillmentChoice(s, "DELIVERY");
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
@@ -590,7 +590,7 @@ test("SPLIT: ONLINE lifecycle сохраняет AWAITING_PAYMENT (оплата 
     ),
   };
   s = setCartFulfillmentChoice(s, "DELIVERY");
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart(s);

@@ -2,6 +2,7 @@
 
 import { formatMoney } from "@/prototype/selectors";
 import type { Order, PrototypeState, ZoneId } from "@/prototype/models";
+import { driverOrderZoneView } from "@/lib/zones/driver-zone-view";
 import styles from "@/app/driver/driver.module.css";
 
 /**
@@ -30,6 +31,10 @@ export function DriverOfferCard({
   onDecline: () => void;
 }) {
   const isCash = cashHandoffCents !== null;
+  // Версионные зоны Bender (bender-zones-v1.1): зона забора и зона доставки,
+  // признак Северного и транзита через Варницу. Без GIS-внутренностей (OSM id,
+  // полигоны) и без влияния на выплату.
+  const zoneView = driverOrderZoneView(order);
   const readiness =
     order.status === "READY"
       ? "Готовность: Готов"
@@ -82,6 +87,25 @@ export function DriverOfferCard({
         <span className={styles.offerSectionValue}>
           {zoneName(order.financials.customerZoneId)}
         </span>
+      </div>
+
+      {/* Зоны из версионного набора (только Zone N, без внутренних данных GIS). */}
+      <div className={styles.offerSection} data-testid="offer-zones">
+        <span className={styles.offerSectionLabel}>Зоны (bender-zones-v1.1)</span>
+        <span className={styles.offerSectionValue}>
+          Забор: {zoneView.pickup.label} · Доставка: {zoneView.dropoff.label}
+        </span>
+        {zoneView.isSeverny ? (
+          <span className={styles.offerSectionValue}>Северный (анклав Zone 4)</span>
+        ) : null}
+        {zoneView.requiresVarnitaTransit ? (
+          <span className={styles.offerSectionValue}>
+            Требуется транзит через Варницу
+          </span>
+        ) : null}
+        {zoneView.warning ? (
+          <span className={styles.offerSectionValue}>{zoneView.warning}</span>
+        ) : null}
       </div>
 
       <div className={styles.offerSection}>

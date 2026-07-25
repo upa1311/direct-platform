@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://upa1311.github.io/bender-delivery-zones/schemas/zone-release.schema.json",
+  "title": "Immutable Bender zone release manifest",
+  "description": "Manifest for a versioned, immutable zone release. Zones only — NO pricing schema, no fee, no payout, no currency. A consumer must validate this manifest fail-closed (release_id, version, decided_k=4, prices_included=false, and every file's SHA-256) before using the zones.",
+  "type": "object",
+  "required": ["release_id", "version", "immutable", "decided_k", "prices_included",
+               "source_dataset_version", "approved_for_internal_integration",
+               "approved_for_customer_address_catalog",
+               "severny_address_catalog_complete", "verified_address_count",
+               "qa_object_count", "files"],
+  "properties": {
+    "release_id": { "const": "bender-zones-v1.1" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "immutable": { "const": true },
+    "created_at": { "type": "string", "format": "date-time" },
+    "decided_k": { "const": 4 },
+    "scenario": { "const": "A" },
+    "prices_included": { "const": false },
+    "source_dataset_version": { "type": "string" },
+    "approved_for_internal_integration": { "type": "boolean" },
+    "approved_for_customer_address_catalog": { "type": "boolean" },
+    "severny_address_catalog_complete": { "const": false },
+    "verified_address_count": { "type": "integer", "minimum": 0 },
+    "qa_object_count": { "type": "integer", "minimum": 0 },
+    "zone_edges_km": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+    "zone_colors": { "type": "object" },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "required_files": { "type": "array", "items": { "type": "string" } }
+  }
+}

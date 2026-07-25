@@ -137,7 +137,7 @@ test("контакты и график сохраняются после обн�
 
 test("изменение контактов ресторана не пересчитывает существующие заказы", () => {
   let s = createDefaultState();
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
   assert.equal(created.result.error, null);

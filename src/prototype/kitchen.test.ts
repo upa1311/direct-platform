@@ -28,7 +28,7 @@ import type {
   PrototypeState,
 } from "./models.ts";
 
-const ADDR = { street: "Тестовая улица 1", house: "1" };
+const ADDR = { street: "Садовый переулок", house: "1" };
 
 /** Добавляет к состоянию новый PICKUP-заказ (RESTAURANT_REVIEW). */
 function addPickupOrder(

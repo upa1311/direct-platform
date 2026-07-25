@@ -269,7 +269,7 @@ function cashCompleted(): PrototypeState {
 function onlineAssigned(): { state: PrototypeState; orderId: string } {
   let s = goDriverOnline(createDefaultState(), DRIVER, REST_ZONE).state;
   s = updateCartAddress(s, {
-    street: "Тестовая улица 1",
+    street: "Садовый переулок",
     house: "5",
     apartment: "12",
     entrance: "2",

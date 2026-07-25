@@ -47,7 +47,7 @@ function preparingOrder(
   };
   s = setCartFulfillmentChoice(s, fulfillment);
   if (fulfillment === "DELIVERY") {
-    s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+    s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   }
   s = addCartItem(s, `${RID}-item-1`, "size-standard").state;
   const created = createOrderFromCart(s);

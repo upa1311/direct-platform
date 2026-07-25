@@ -50,7 +50,7 @@ function makePreparingOrder(
   state = setCartFulfillmentChoice(state, fulfillment);
   if (fulfillment === "DELIVERY") {
     state = updateCartAddress(state, {
-      street: "Тестовая улица 1",
+      street: "Садовый переулок",
       house: "1",
     });
   }

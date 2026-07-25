@@ -9,6 +9,7 @@ import {
   useClientAddressConfirmation,
 } from "@/components/order-flow/client-address-confirmation";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
+import { ClientAddressPicker } from "@/components/client/client-address-picker";
 import { RestaurantAvailabilityBadge } from "@/components/order-flow/restaurant-availability-badge";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
@@ -44,7 +45,7 @@ export default function ClientCatalogPage() {
   } = useClientAddressConfirmation();
   const [sort, setSort] = useState<CatalogSort>("RECOMMENDED");
   const nowMs = useNowMs();
-  const streetFieldRef = useRef<HTMLSelectElement>(null);
+  const streetFieldRef = useRef<HTMLInputElement>(null);
   const hasValidAddress =
     getValidatedAddressZoneId(state.cart.address, state) !== null;
   const isDelivery = state.cart.fulfillmentChoice === "DELIVERY";
@@ -125,36 +126,11 @@ export default function ClientCatalogPage() {
                 </div>
                 <p>Стоимость доставки зависит от адреса.</p>
                 <div className={flowStyles.catalogAddressFields}>
-                  <label className={flowStyles.field}>
-                    <span>Улица</span>
-                    <select
-                      ref={streetFieldRef}
-                      value={state.cart.address.street}
-                      onChange={(event) =>
-                        void updateAddress({ street: event.target.value })
-                      }
-                    >
-                      <option value="">Выберите улицу</option>
-                      {state.zones.flatMap((zone) =>
-                        zone.streets.map((street) => (
-                          <option value={street} key={street}>
-                            {street}
-                          </option>
-                        )),
-                      )}
-                    </select>
-                  </label>
-                  <label className={flowStyles.field}>
-                    <span>Дом</span>
-                    <input
-                      required
-                      value={state.cart.address.house}
-                      onChange={(event) =>
-                        void updateAddress({ house: event.target.value })
-                      }
-                      placeholder="Номер дома"
-                    />
-                  </label>
+                  <ClientAddressPicker
+                    address={state.cart.address}
+                    streetRef={streetFieldRef}
+                    onChange={(partial) => void updateAddress(partial)}
+                  />
                 </div>
                 <button
                   className={`${flowStyles.compactTextButton} ${flowStyles.confirmAddressButton}`}

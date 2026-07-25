@@ -11,6 +11,7 @@ import {
   type WeeklySchedule,
   type Zone,
 } from "./models";
+import { streetsByPrimaryZone } from "../lib/zones/zone-registry";
 
 const INITIAL_TIMESTAMP = "2026-07-12T00:00:00.000Z";
 
@@ -120,11 +121,23 @@ export function createSizeVariants(): MenuItemVariant[] {
   ];
 }
 
+// Zone→street lists come from the validated verified registry (bender-zones-v1.1)
+// so the client address picker and detectZoneId share ONE source of truth. If the
+// release is invalid the lists are empty and delivery is blocked fail-closed;
+// a minimal fallback keeps the demo usable in that degraded state. This maps a
+// street to a zone for the legacy pricing lookup only — the exact per-house zone
+// still comes from the registry resolver. No money here.
+const REGISTRY_STREETS_BY_ZONE = streetsByPrimaryZone();
+function zoneStreets(zoneNumber: number, fallback: string): string[] {
+  const streets = REGISTRY_STREETS_BY_ZONE[zoneNumber] ?? [];
+  return streets.length > 0 ? streets : [fallback];
+}
+
 export const defaultZones: Zone[] = [
-  { id: "zone-1", name: "Зона 1", streets: ["Тестовая улица 1"] },
-  { id: "zone-2", name: "Зона 2", streets: ["Тестовая улица 2"] },
-  { id: "zone-3", name: "Зона 3", streets: ["Тестовая улица 3"] },
-  { id: "zone-4", name: "Зона 4", streets: ["Тестовая улица 4"] },
+  { id: "zone-1", name: "Зона 1", streets: zoneStreets(1, "Садовый переулок") },
+  { id: "zone-2", name: "Зона 2", streets: zoneStreets(2, "1-й Братский переулок") },
+  { id: "zone-3", name: "Зона 3", streets: zoneStreets(3, "1-й Измаильский переулок") },
+  { id: "zone-4", name: "Зона 4", streets: zoneStreets(4, "Деповская улица") },
 ];
 
 export function createDefaultTariffs(): TariffMatrix {
@@ -534,7 +547,7 @@ export function createDefaultState(): PrototypeState {
         {
           id: "address-1",
           label: "Тестовый адрес",
-          street: "Тестовая улица 1",
+          street: "Садовый переулок",
           house: "1",
           apartment: "",
           entrance: "",

@@ -1,0 +1,83 @@
+{
+  "approved_for_customer_address_catalog": true,
+  "approved_for_internal_integration": true,
+  "created_at": "2026-07-25T00:13:26Z",
+  "decided_k": 4,
+  "files": [
+    {
+      "bytes": 3284569,
+      "path": "address-registry.json",
+      "sha256": "bc66ad113a6ba5706bb6d2797ddc543e5b576482051d0d981551f014561c1817"
+    },
+    {
+      "bytes": 4643851,
+      "path": "admin-qa-objects.json",
+      "sha256": "c7415e3729d26b13981999d1da4ee857a9d59a9c9f9513879b6f974b4a3fea8e"
+    },
+    {
+      "bytes": 2154,
+      "path": "schemas/zone-release.schema.json",
+      "sha256": "bd69037223311c927191e5c43d451e65b024d4a39d46b4ce7216e07bbb98045e"
+    },
+    {
+      "bytes": 25297,
+      "path": "severny-route-qa.geojson",
+      "sha256": "94a5634419d6c6c544e6585d60136058166f0402bfc52d94254766c945aa373b"
+    },
+    {
+      "bytes": 147400,
+      "path": "street-index.json",
+      "sha256": "929247a78e79171dcb0612c28429a018c5d6e00f9f064c8e681c7ae7e2b708d2"
+    },
+    {
+      "bytes": 2187,
+      "path": "varnita-admin-reference.geojson",
+      "sha256": "7479c276369f32cb9a5fe0c3f2903d465fb1433a3c7b7a4ea940cf26e0d03260"
+    },
+    {
+      "bytes": 8504,
+      "path": "varnita-village-no-delivery.geojson",
+      "sha256": "4dd4ccf2c53a24594a599c3c46aa5aed6f313452d2aa83134af9a6764b48b3ca"
+    },
+    {
+      "bytes": 221412,
+      "path": "zone-polygons.geojson",
+      "sha256": "cfc80697a7300890321319845704f1601f9a35317d80c99ec909d4be68e9db00"
+    }
+  ],
+  "immutable": true,
+  "notes": "Zones only. No pricing schema, no money. Immutable — a new version is a new release folder. See docs/product/ZONE_PRICING_SEPARATION.md.",
+  "prices_included": false,
+  "qa_object_count": 14013,
+  "release_id": "bender-zones-v1.1",
+  "required_files": [
+    "manifest.json",
+    "CHECKSUMS.sha256",
+    "IMMUTABLE",
+    "address-registry.json",
+    "street-index.json",
+    "admin-qa-objects.json",
+    "zone-polygons.geojson",
+    "varnita-village-no-delivery.geojson",
+    "varnita-admin-reference.geojson",
+    "severny-route-qa.geojson",
+    "schemas/zone-release.schema.json"
+  ],
+  "scenario": "A",
+  "severny_address_catalog_complete": false,
+  "source_dataset_version": "moldova-pbf:09ba0c058e89",
+  "verified_address_count": 9216,
+  "version": "1.1.0",
+  "zone_colors": {
+    "1": "#2a9d3f",
+    "2": "#f2c500",
+    "3": "#f07f14",
+    "4": "#d62828"
+  },
+  "zone_edges_km": [
+    2.424,
+    4.076,
+    5.577,
+    9.692
+  ]
+}

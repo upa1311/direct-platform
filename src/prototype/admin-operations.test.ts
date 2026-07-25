@@ -69,7 +69,7 @@ function seedOnline(): PrototypeState {
 
 function makePlatformOrder(): { state: PrototypeState; orderId: string } {
   let s = seedOnline();
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
   assert.equal(created.result.error, null);
@@ -109,7 +109,7 @@ function makeRestaurantDeliveryArriving(): {
   orderId: string;
 } {
   let s = createDefaultState();
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
   const created = createOrderFromCart(s);

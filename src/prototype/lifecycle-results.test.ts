@@ -65,7 +65,7 @@ function deliveryOrderState(restaurantId: "restaurant-2" | "restaurant-3"): {
   // v16: назначить можно только онлайн-водителя с подтверждённой зоной.
   let s = goDriverOnline(createDefaultState(), "driver-1", "zone-1").state;
   s = setCartFulfillmentChoice(s, "DELIVERY");
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, `${restaurantId}-item-1`).state;
   s = addCartItem(s, `${restaurantId}-item-1`).state;
   s = addCartItem(s, `${restaurantId}-item-1`).state;

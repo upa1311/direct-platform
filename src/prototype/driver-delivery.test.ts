@@ -58,7 +58,7 @@ function assignedState(): { state: PrototypeState; orderId: string } {
   let s = goDriverOnline(createDefaultState(), D1, REST_ZONE).state;
   s = goDriverOnline(s, D2, REST_ZONE).state;
   s = updateCartAddress(s, {
-    street: "Тестовая улица 1",
+    street: "Садовый переулок",
     house: "5",
     apartment: "12",
     entrance: "2",
@@ -78,7 +78,7 @@ function assignedState(): { state: PrototypeState; orderId: string } {
 /** Как assignedState, но заказ остаётся PREPARING (назначение при PREPARING). */
 function assignedPreparingState(): { state: PrototypeState; orderId: string } {
   let s = goDriverOnline(createDefaultState(), D1, REST_ZONE).state;
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "5" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "5" });
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
   const orderId = created.result.orderId as string;
@@ -618,7 +618,7 @@ test("43: ресторан не может двигать PLATFORM_DRIVER по �
 
 test("44: RESTAURANT_DELIVERY продолжает работать", () => {
   // Собственная доставка ресторана-3: READY → OUT → ARRIVING → DELIVERED.
-  let s = updateCartAddress(createDefaultState(), { street: "Тестовая улица 1", house: "1" });
+  let s = updateCartAddress(createDefaultState(), { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
   const created = createOrderFromCart(s);

@@ -28,7 +28,7 @@ import {
 } from "./selectors.ts";
 import type { Order, PrototypeState } from "./models.ts";
 
-const ADDR = { street: "Тестовая улица 1", house: "1" };
+const ADDR = { street: "Садовый переулок", house: "1" };
 
 function orderOf(state: PrototypeState, orderId: string): Order {
   const order = state.orders.find((o) => o.id === orderId);

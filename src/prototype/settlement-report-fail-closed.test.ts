@@ -33,7 +33,7 @@ import {
  * сложением — при переполнении отчёт отказывается целиком.
  */
 
-const ADDR = { street: "Тестовая улица 1", house: "1" };
+const ADDR = { street: "Садовый переулок", house: "1" };
 const NOW = "2026-07-21T10:00:00.000Z";
 const TZ = "Europe/Chisinau";
 const RID = "restaurant-2";

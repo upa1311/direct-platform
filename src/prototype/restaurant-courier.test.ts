@@ -30,7 +30,7 @@ function makeRestaurantDeliveryOrder(): {
 } {
   let s = createDefaultState();
   // Валидный адрес доставки в обслуживаемой зоне.
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   // Две позиции по 710 = 1420 ≥ минимум 1000.
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
   s = addCartItem(s, "restaurant-3-item-1", "size-standard").state;
@@ -73,7 +73,7 @@ test("оформление доставки без адреса возвраща
 
 test("после заполнения адреса заказ создаётся без отдельного подтверждения", () => {
   let s = createDefaultState();
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
   assert.equal(created.result.error, null);
@@ -223,7 +223,7 @@ test("PICKUP остаётся с комиссией Direct 15%", () => {
 
 test("PLATFORM_DRIVER остаётся с оплатой ONLINE", () => {
   let s = createDefaultState();
-  s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+  s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
   assert.equal(created.result.error, null);

@@ -84,7 +84,7 @@ function eligibleState(base: PrototypeState = createDefaultState()): {
   state: PrototypeState;
   orderId: string;
 } {
-  let s = updateCartAddress(base, { street: "Тестовая улица 1", house: "1" });
+  let s = updateCartAddress(base, { street: "Садовый переулок", house: "1" });
   s = addCartItem(s, "restaurant-2-item-1", "size-standard").state;
   const created = createOrderFromCart(s);
   const orderId = created.result.orderId as string;
@@ -120,7 +120,7 @@ function order(overrides: Partial<Order> = {}): Order {
     status: "PREPARING",
     assignedDriverId: null,
     address: {
-      street: "Тестовая улица 1",
+      street: "Садовый переулок",
       house: "1",
       apartment: "",
       entrance: "",

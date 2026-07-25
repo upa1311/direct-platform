@@ -1,16 +1,27 @@
 import type { ZoneId } from "@/prototype/models";
 
 import {
-  findStreets,
+  canonicalAddressKey,
+  isDatasetValid,
   normalizeName,
+  qaByCanonical,
+  registryByCanonical,
+  registryBySettlementStreetHouse,
   toZoneId,
 } from "./zone-registry";
-import type { ZoneResolution, ZoneStreet } from "./types";
+import type {
+  AddressRegistryEntry,
+  ZoneResolution,
+  ZoneResolutionStatus,
+  ZoneServiceStatus,
+} from "./types";
 
 /**
- * Real address -> zone resolver over the versioned dataset. The HOUSE is the
- * source of truth: a street-only lookup on a split street is ambiguous, never a
- * single guessed zone. Carries no money. Varnița is always no_delivery.
+ * Real address -> zone resolver over the versioned release. The EXACT VERIFIED
+ * HOUSE is the only source of a working zone: this resolver reads ONLY the
+ * address registry. A street without a house, an unknown house on a known
+ * street, or a house absent from the registry never yields a zone. There is no
+ * `resolved_by_street` — that guess has been removed entirely. Carries no money.
  */
 
 export interface AddressQuery {
@@ -22,13 +33,14 @@ export interface AddressQuery {
 
 const DEFAULT_SETTLEMENT = "Бендеры";
 
-function empty(status: ZoneResolution["status"]): ZoneResolution {
+function empty(status: ZoneResolutionStatus): ZoneResolution {
   return {
     status,
     zoneId: null,
     zoneNumber: null,
-    zones: [],
     serviceStatus: null,
+    canonicalAddressKey: null,
+    routeFlags: null,
     matched: null,
   };
 }
@@ -37,100 +49,94 @@ function isVarnita(settlement: string | null | undefined): boolean {
   return normalizeName(settlement).startsWith("варниц");
 }
 
-function houseZone(entry: ZoneStreet, house: string): number | null {
-  const wanted = normalizeName(house);
-  for (const hz of entry.houses_by_zone) {
-    for (const h of hz.houses) {
-      if (normalizeName(h) === wanted) return hz.zone_id;
-    }
-  }
-  return null;
-}
-
-function resolved(
-  entry: ZoneStreet,
-  zoneNumber: number,
-  house: string | null,
-  status: ZoneResolution["status"],
-): ZoneResolution {
+function resolvedFrom(entry: AddressRegistryEntry): ZoneResolution {
   return {
-    status,
-    zoneId: toZoneId(zoneNumber) as ZoneId,
-    zoneNumber,
-    zones: entry.zones,
+    status: "RESOLVED",
+    zoneId: toZoneId(entry.zone_id) as ZoneId,
+    zoneNumber: entry.zone_id,
     serviceStatus: entry.service_status,
+    canonicalAddressKey: entry.canonical_address_key,
+    routeFlags: entry.route_flags,
     matched: {
       settlement_ru: entry.settlement_ru,
       district_ru: entry.district_ru,
       street_ru: entry.street_ru,
-      housenumber: house,
+      housenumber: entry.housenumber,
     },
   };
 }
 
+/** Map a QA object's service status to a fail-closed resolution status. */
+function qaStatus(serviceStatus: ZoneServiceStatus): ZoneResolutionStatus {
+  if (serviceStatus === "no_delivery") return "NO_DELIVERY";
+  if (serviceStatus === "disputed") return "DISPUTED";
+  return "UNVERIFIED_ADDRESS";
+}
+
 export function resolveAddressZone(query: AddressQuery): ZoneResolution {
+  // Fail closed: an invalid vendored release resolves nothing.
+  if (!isDatasetValid()) return empty("DATASET_INVALID");
+
   const settlement = (query.settlement ?? "").trim() || DEFAULT_SETTLEMENT;
+  const district = (query.district ?? "").trim() || null;
   const street = (query.street ?? "").trim();
   const house = (query.house ?? "").trim() || null;
-  if (!street) return empty("not_found");
 
-  // Varnița is never served, whatever the street resolves to.
+  // Varnița village is never served (transit only).
   if (isVarnita(settlement)) {
-    const nd = empty("no_delivery");
+    const nd = empty("NO_DELIVERY");
     nd.serviceStatus = "no_delivery";
     return nd;
   }
 
-  const matches = findStreets(settlement, street, query.district);
-  if (matches.length === 0) return empty("not_found");
-  if (matches.length > 1) {
-    const amb = empty("ambiguous_district");
-    amb.zones = [...new Set(matches.flatMap((m) => m.zones))].sort((a, b) => a - b);
-    return amb;
-  }
+  // A street without a confirmed house can never resolve to a zone.
+  if (!house) return empty("UNVERIFIED_ADDRESS");
 
-  const entry = matches[0];
-  if (entry.service_status === "no_delivery") {
-    const nd = empty("no_delivery");
-    nd.serviceStatus = "no_delivery";
-    nd.matched = {
-      settlement_ru: entry.settlement_ru,
-      district_ru: entry.district_ru,
-      street_ru: entry.street_ru,
-      housenumber: house,
-    };
-    return nd;
-  }
+  // 1. Exact canonical key (settlement|district|street|house).
+  const key = canonicalAddressKey(settlement, district, street, house);
+  const exact = registryByCanonical(key);
+  if (exact) return resolvedFrom(exact);
 
-  if (house) {
-    const z = houseZone(entry, house);
-    if (z != null) return resolved(entry, z, house, "resolved");
-    // House not in the confirmed list: fall back only if the street is a single
-    // zone; a split street with an unknown house stays ambiguous.
-    if (entry.zones.length === 1) {
-      return resolved(entry, entry.zones[0], house, "resolved_by_street");
-    }
-    const amb = empty("ambiguous_street");
-    amb.zones = entry.zones;
+  // 2. District unknown/mismatched: match on settlement+street+house.
+  const candidates = registryBySettlementStreetHouse(settlement, street, house);
+  if (candidates.length === 1) return resolvedFrom(candidates[0]);
+  if (candidates.length > 1) {
+    // Same house on the same street name in two districts — do not guess.
+    const zones = new Set(candidates.map((c) => c.zone_id));
+    if (zones.size === 1) return resolvedFrom(candidates[0]);
+    const amb = empty("AMBIGUOUS");
     amb.matched = {
-      settlement_ru: entry.settlement_ru,
-      district_ru: entry.district_ru,
-      street_ru: entry.street_ru,
+      settlement_ru: candidates[0].settlement_ru,
+      district_ru: null,
+      street_ru: candidates[0].street_ru,
       housenumber: house,
     };
     return amb;
   }
 
-  if (entry.zones.length === 1) {
-    return resolved(entry, entry.zones[0], null, "resolved_by_street");
+  // 3. Not in the registry: is it a known admin/QA object? (disputed / no_delivery
+  //    / unaddressed / excluded / owner-review, including every Северный address —
+  //    the Северный catalog is deliberately incomplete, so those stay owner-review
+  //    and are NOT orderable). Fail closed with its reason. The QA zone number is
+  //    surfaced for admin/driver display only; it never makes the address RESOLVED.
+  const qa = qaByCanonical(key);
+  if (qa) {
+    const st = empty(qaStatus(qa.service_status));
+    st.serviceStatus = qa.service_status;
+    st.canonicalAddressKey = qa.canonical_address_key;
+    if (qa.zone_id != null && qa.zone_id >= 1 && qa.zone_id <= 4) {
+      st.zoneNumber = qa.zone_id;
+      st.zoneId = toZoneId(qa.zone_id) as ZoneId;
+    }
+    st.matched = {
+      settlement_ru: qa.settlement_ru,
+      district_ru: qa.district_ru,
+      street_ru: qa.street_ru,
+      housenumber: qa.housenumber,
+    };
+    return st;
   }
-  const amb = empty("ambiguous_street");
-  amb.zones = entry.zones;
-  amb.matched = {
-    settlement_ru: entry.settlement_ru,
-    district_ru: entry.district_ru,
-    street_ru: entry.street_ru,
-    housenumber: null,
-  };
-  return amb;
+
+  // 4. Genuinely unknown address.
+  return empty("NOT_FOUND");
 }

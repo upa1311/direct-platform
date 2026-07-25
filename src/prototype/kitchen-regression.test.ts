@@ -77,7 +77,7 @@ function makeOrder(
     .state;
   s = setCartFulfillmentChoice(s, fulfillment);
   if (fulfillment === "DELIVERY") {
-    s = updateCartAddress(s, { street: "Тестовая улица 1", house: "1" });
+    s = updateCartAddress(s, { street: "Садовый переулок", house: "1" });
   }
   s = addCartItem(s, `${restaurantId}-item-1`).state;
   s = addCartItem(s, `${restaurantId}-item-1`).state;

@@ -37,7 +37,7 @@ import { buildRestaurantFinanceReadModel } from "./restaurant-finance-read-model
  * заказы по текущим условиям.
  */
 
-const ADDR = { street: "Тестовая улица 1", house: "1" };
+const ADDR = { street: "Садовый переулок", house: "1" };
 const DIRECT_RID = "restaurant-2";
 const OWN_DELIVERY_RID = "restaurant-3";
 const ALL = "RESTAURANT_COLLECTS_ALL" as const;
