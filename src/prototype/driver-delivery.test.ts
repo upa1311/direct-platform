@@ -110,7 +110,7 @@ function toArriving(state: PrototypeState, orderId: string): PrototypeState {
 // --- 1–9: schema и нормализация ------------------------------------------------
 
 test("1: схема прототипа равна 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
@@ -118,9 +118,9 @@ test("2: нормализатор принимает схемы 7–18", () => {
   for (let v = 7; v <= 18; v += 1) {
     const parsed = parseStoredState(JSON.stringify({ ...base, schemaVersion: v }));
     assert.ok(parsed, `схема ${v}`);
-    assert.equal(parsed.schemaVersion, 28);
+    assert.equal(parsed.schemaVersion, 29);
   }
-  assert.equal(parseStoredState(JSON.stringify({ ...base, schemaVersion: 29 })), null);
+  assert.equal(parseStoredState(JSON.stringify({ ...base, schemaVersion: 30 })), null);
 });
 
 test("3: состояние до v18 получает пустой журнал", () => {

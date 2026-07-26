@@ -1,0 +1,322 @@
+.utilities {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.utilityButtons {
+  display: flex;
+  gap: 8px;
+}
+
+.utilityButtons > button,
+.closeButton,
+.calendarToolbar button {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d8ddd8;
+  border-radius: 10px;
+  background: #fff;
+  color: #59625c;
+  cursor: pointer;
+}
+
+.utilityButtons > button:hover,
+.closeButton:hover,
+.calendarToolbar button:hover,
+.todayButton:hover {
+  border-color: #b9c0ba;
+  color: #202522;
+}
+
+.utilityButtons > button:focus-visible,
+.closeButton:focus-visible,
+.calendarToolbar button:focus-visible,
+.calendarCell:focus-visible,
+.todayButton:focus-visible,
+.calculatorKeys button:focus-visible {
+  outline: 3px solid rgb(198 102 45 / 25%);
+  outline-offset: 2px;
+}
+
+.utilityButtons > button svg,
+.closeButton svg,
+.calendarToolbar svg {
+  width: 19px;
+  height: 19px;
+}
+
+.utilityButtons > .utilityButtonActive {
+  border-color: #303632;
+  background: #303632;
+  color: #fff;
+}
+
+.panel {
+  width: min(350px, calc(100vw - 24px));
+  max-height: min(680px, calc(100vh - 104px));
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 10px);
+  right: 0;
+  overflow-y: auto;
+  padding: 18px;
+  border: 1px solid #dfe3df;
+  border-radius: 16px;
+  background: #fff;
+  color: #202522;
+  box-shadow: 0 18px 40px rgb(34 43 37 / 12%);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.panelHeader h2,
+.panelHeader p {
+  margin: 0;
+}
+
+.panelHeader h2 {
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.panelHeader p {
+  margin-top: 5px;
+  color: #68716b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.closeButton {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+}
+
+.backdrop {
+  display: none;
+}
+
+.calendar {
+  display: grid;
+  gap: 14px;
+}
+
+.calendarToolbar {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendarToolbar button {
+  width: 36px;
+  height: 36px;
+}
+
+.calendarToolbar strong {
+  min-width: 0;
+  font-size: 14px;
+  text-align: center;
+}
+
+.calendarGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.weekday {
+  display: grid;
+  place-items: center;
+  min-height: 28px;
+  color: #707872;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.weekday abbr {
+  text-decoration: none;
+}
+
+.calendarCell {
+  aspect-ratio: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: #303632;
+  cursor: pointer;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.calendarCell:hover {
+  background: #f0f2ef;
+}
+
+.calendarCellMuted {
+  color: #a7ada8;
+}
+
+.calendarCellWeekend::after {
+  content: "";
+  width: 3px;
+  height: 3px;
+  display: block;
+  margin: 1px auto 0;
+  border-radius: 50%;
+  background: currentcolor;
+  opacity: 0.5;
+}
+
+.calendarCellSelected {
+  border-color: #909892;
+  background: #f0f2ef;
+}
+
+.calendarCell[aria-current="date"] {
+  border-color: #303632;
+  background: #303632;
+  color: #fff;
+  font-weight: 800;
+}
+
+.todayButton {
+  min-height: 36px;
+  justify-self: start;
+  padding: 7px 12px;
+  border: 1px solid #d8ddd8;
+  border-radius: 9px;
+  background: #fff;
+  color: #59625c;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.calculator {
+  display: grid;
+  gap: 12px;
+}
+
+.calculatorDisplay {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid #e1e5e1;
+  border-radius: 12px;
+  background: #f7f8f6;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.calculatorDisplay span {
+  min-height: 16px;
+  overflow: hidden;
+  color: #707872;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calculatorDisplay strong {
+  overflow: hidden;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: clamp(22px, 8vw, 30px);
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calculator > p {
+  margin: 0;
+  color: #b3401f;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.calculatorKeys {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.calculatorKeys button {
+  min-width: 0;
+  min-height: 46px;
+  border: 1px solid #dfe3df;
+  border-radius: 10px;
+  background: #fff;
+  color: #303632;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.calculatorKeys button:hover {
+  border-color: #b9c0ba;
+  background: #f6f7f5;
+}
+
+.calculatorKeys button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.calculatorKeys .operationKey,
+.calculatorKeys .equalsKey {
+  border-color: #303632;
+  background: #303632;
+  color: #fff;
+}
+
+.calculatorKeys .operationKey:hover,
+.calculatorKeys .equalsKey:hover {
+  background: #202522;
+}
+
+@media (max-width: 760px) {
+  .backdrop {
+    position: fixed;
+    z-index: 45;
+    inset: 0;
+    display: block;
+    border: 0;
+    background: rgb(32 37 34 / 32%);
+  }
+
+  .panel {
+    width: 100%;
+    max-height: min(82vh, 680px);
+    position: fixed;
+    z-index: 50;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    padding: 20px 18px calc(18px + env(safe-area-inset-bottom));
+    border-width: 1px 0 0;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -12px 30px rgb(34 43 37 / 12%);
+  }
+
+  .calculatorKeys button {
+    min-height: 48px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  .backdrop {
+    scroll-behavior: auto;
+  }
+}

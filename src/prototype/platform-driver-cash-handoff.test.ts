@@ -23,6 +23,10 @@ import {
   markDriverDeliveredOrder,
 } from "./driver-delivery.ts";
 import { canRestaurantWorkspacePerformAction } from "./restaurant-workflow.ts";
+import {
+  DRIVER_ORDER_INCIDENT_BLOCK_ERROR,
+  reportDriverOrderIncident,
+} from "./driver-order-incidents.ts";
 
 /**
  * CASH DIRECT — часть 3: двусторонняя передача наличных ресторану. Домен чистый:
@@ -193,7 +197,7 @@ const theOrder = (state: PrototypeState): Order => state.orders[0];
 // --- 1–3: schema / default ----------------------------------------------------
 
 test("1: схема равна 24", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
 });
 test("2: default platformDriverCashEvents пуст", () => {
   assert.deepEqual(createDefaultState().platformDriverCashEvents, []);
@@ -237,6 +241,45 @@ test("10: report разрешён после прибытия при PREPARING",
 test("11: report разрешён после прибытия при READY", () => {
   const s = cashState({ status: "READY", arrived: true });
   assert.equal(reportDriverCashHandoffToRestaurant(s, DRIVER, ORDER, T2).result.ok, true);
+});
+
+test("incident: open блокирует driver cash handoff report", () => {
+  const base = cashState({ status: "READY", arrived: true });
+  const reported = reportDriverOrderIncident(base, {
+    driverId: DRIVER,
+    orderId: ORDER,
+    reason: "CASH_PROBLEM",
+    details: "Нет сдачи",
+  });
+  assert.equal(reported.result.ok, true);
+  const result = reportDriverCashHandoffToRestaurant(
+    reported.state,
+    DRIVER,
+    ORDER,
+    T2,
+  );
+  assert.equal(result.result.ok, false);
+  assert.equal(result.result.error, DRIVER_ORDER_INCIDENT_BLOCK_ERROR);
+  assert.equal(result.state, reported.state);
+});
+
+test("incident: restaurant cash confirmation не блокируется", () => {
+  const base = cashState({ status: "READY", arrived: true, reported: true });
+  const incident = reportDriverOrderIncident(base, {
+    driverId: DRIVER,
+    orderId: ORDER,
+    reason: "CASH_PROBLEM",
+    details: "Проверка передачи",
+  });
+  assert.equal(incident.result.ok, true);
+  const result = confirmRestaurantDriverCashReceipt(
+    incident.state,
+    REST,
+    ORDER,
+    "COMBINED",
+    T3,
+  );
+  assert.equal(result.result.ok, true);
 });
 test("12/13/14: amount из snapshot; action не принимает amount; одно событие", () => {
   const s = cashState({ arrived: true });

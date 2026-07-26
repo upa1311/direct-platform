@@ -7,7 +7,7 @@ import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 import type { OrderZoneSnapshot } from "@/lib/zones/types";
 
-export const PROTOTYPE_SCHEMA_VERSION = 28 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 29 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -1182,6 +1182,51 @@ export interface CancellationRequest {
   preparationProblemId?: string;
 }
 
+export type DriverOrderIncidentReason =
+  | "RESTAURANT_CLOSED"
+  | "RESTAURANT_ORDER_MISSING"
+  | "ORDER_DELAYED"
+  | "CUSTOMER_UNREACHABLE"
+  | "WRONG_ADDRESS"
+  | "CUSTOMER_REFUSED"
+  | "CASH_PROBLEM"
+  | "VEHICLE_PROBLEM"
+  | "OTHER";
+
+export type DriverOrderIncidentResolutionOutcome =
+  | "CONTINUE_ORDER"
+  | "ORDER_CANCELED"
+  | "DRIVER_REASSIGNED"
+  | "ORDER_COMPLETED";
+
+/** Append-only сообщение назначенного водителя о проблеме активного заказа. */
+export interface DriverOrderIncident {
+  id: string;
+  revision: number;
+  orderId: string;
+  driverId: string;
+  restaurantId: string;
+  reason: DriverOrderIncidentReason;
+  details: string | null;
+  reportedAt: string;
+  orderStatusAtReport: OrderStatus;
+  paymentMethodAtReport: PaymentMethod;
+}
+
+/** Append-only административное решение по водительскому incident. */
+export interface DriverOrderIncidentResolutionEvent {
+  id: string;
+  incidentId: string;
+  orderId: string;
+  driverId: string;
+  resolvedAt: string;
+  actor: "ADMIN";
+  outcome: DriverOrderIncidentResolutionOutcome;
+  note: string;
+  orderStatusAtResolution: OrderStatus;
+  assignedDriverIdAtResolution: string | null;
+}
+
 export interface PrototypeState {
   schemaVersion: typeof PROTOTYPE_SCHEMA_VERSION;
   revision: number;
@@ -1201,6 +1246,10 @@ export interface PrototypeState {
   driverOffers: DriverOffer[];
   /** Append-only журнал шагов доставки назначенных водителей (v18). */
   driverDeliveryEvents: DriverDeliveryEvent[];
+  /** Append-only сообщения водителей о проблемах активных заказов (v29). */
+  driverOrderIncidents: DriverOrderIncident[];
+  /** Append-only административные решения по водительским incidents (v29). */
+  driverOrderIncidentResolutionEvents: DriverOrderIncidentResolutionEvent[];
   /** Append-only аудит передачи наличных водителем ресторану (v21). */
   platformDriverCashEvents: PlatformDriverCashEvent[];
   /**

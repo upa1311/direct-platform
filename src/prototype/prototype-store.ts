@@ -9,6 +9,8 @@ import {
   type DriverOffer,
   type DriverOfferStatus,
   type DriverOperationalEvent,
+  type DriverOrderIncident,
+  type DriverOrderIncidentResolutionEvent,
   type DriverStatus,
   type FinancialSnapshot,
   type OrderStatus,
@@ -28,6 +30,12 @@ import {
   type WeeklySchedule,
   type ZoneId,
 } from "./models";
+import {
+  driverOrderIncidentId,
+  driverOrderIncidentResolutionId,
+  isDriverOrderIncidentReason,
+  isDriverOrderIncidentResolutionOutcome,
+} from "./driver-order-incidents";
 import {
   normalizeOptionalCategory,
   validateMenuPortion,
@@ -205,13 +213,15 @@ function hasPrototypeStateShape(value: unknown): boolean {
  * v23 — append-only расчёты водителя по завершённым наличным доставкам,
  * v24 — единый журнал заработка водителя и corrected CASH accounting,
  * v25 — финализация: старый driver cash ledger удалён, безопасная миграция
- * старых earnings/CASH-состояний, финальный read-model расчётов),
+ * старых earnings/CASH-состояний, финальный read-model расчётов, v26 — выплаты
+ * водителям, v27 — заметка водителя, v28 — рабочее время, v29 — append-only
+ * водительские incidents и решения),
  * поэтому состояние прежней версии безопасно принимается и доводится
  * нормализацией до текущей без потери данных. Ключ хранилища не меняется.
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
   7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-  27, 28,
+  27, 28, 29,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -1792,6 +1802,147 @@ function normalizeDriverOperationalEvents(
   return kept;
 }
 
+const INCIDENT_PAYMENT_METHODS: ReadonlySet<string> = new Set([
+  "ONLINE",
+  "CASH",
+  "PAY_AT_RESTAURANT",
+  "CASH_TO_RESTAURANT_COURIER",
+]);
+
+/**
+ * v29 report normalization. Старые схемы получают пустой список, прошлое из
+ * истории заказа не синтезируется. Структурно валидные дубли сохраняются: их
+ * обязан показать integrity/read-model слой как REVIEW_REQUIRED.
+ */
+function normalizeDriverOrderIncidents(
+  value: unknown,
+  orders: readonly Order[],
+  driverIds: ReadonlySet<string>,
+  restaurantIds: ReadonlySet<string>,
+  stateRevision: number,
+  sourceSchemaVersion: number,
+): DriverOrderIncident[] {
+  if (sourceSchemaVersion <= 28 || !Array.isArray(value)) return [];
+  const orderById = new Map(orders.map((order) => [order.id, order]));
+  const kept: DriverOrderIncident[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    if (typeof raw.id !== "string" || raw.id === "") continue;
+    if (
+      typeof raw.revision !== "number" ||
+      !Number.isSafeInteger(raw.revision) ||
+      raw.revision <= 0 ||
+      raw.revision > stateRevision
+    ) {
+      continue;
+    }
+    if (typeof raw.orderId !== "string" || !orderById.has(raw.orderId)) {
+      continue;
+    }
+    if (typeof raw.driverId !== "string" || !driverIds.has(raw.driverId)) {
+      continue;
+    }
+    if (
+      typeof raw.restaurantId !== "string" ||
+      !restaurantIds.has(raw.restaurantId) ||
+      orderById.get(raw.orderId)?.restaurant.id !== raw.restaurantId
+    ) {
+      continue;
+    }
+    if (raw.id !== driverOrderIncidentId(raw.orderId, raw.revision)) continue;
+    if (!isDriverOrderIncidentReason(raw.reason)) continue;
+    if (!isValidIso(raw.reportedAt)) continue;
+    if (typeof raw.orderStatusAtReport !== "string") continue;
+    if (!ORDER_STATUSES.has(raw.orderStatusAtReport)) continue;
+    if (
+      typeof raw.paymentMethodAtReport !== "string" ||
+      !INCIDENT_PAYMENT_METHODS.has(raw.paymentMethodAtReport)
+    ) {
+      continue;
+    }
+    if (raw.details !== null && typeof raw.details !== "string") continue;
+    const details = raw.details === null ? null : raw.details.trim();
+    if (raw.details !== details || (details?.length ?? 0) > 240) continue;
+    if (raw.reason === "OTHER" && (details === null || details === "")) {
+      continue;
+    }
+    kept.push({
+      id: raw.id,
+      revision: raw.revision,
+      orderId: raw.orderId,
+      driverId: raw.driverId,
+      restaurantId: raw.restaurantId,
+      reason: raw.reason,
+      details,
+      reportedAt: raw.reportedAt,
+      orderStatusAtReport: raw.orderStatusAtReport as OrderStatus,
+      paymentMethodAtReport: raw.paymentMethodAtReport as PaymentMethod,
+    });
+  }
+  return kept;
+}
+
+/** v29 resolution normalization; orphan/malformed events are discarded. */
+function normalizeDriverOrderIncidentResolutions(
+  value: unknown,
+  incidents: readonly DriverOrderIncident[],
+  driverIds: ReadonlySet<string>,
+  sourceSchemaVersion: number,
+): DriverOrderIncidentResolutionEvent[] {
+  if (sourceSchemaVersion <= 28 || !Array.isArray(value)) return [];
+  const kept: DriverOrderIncidentResolutionEvent[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    if (typeof raw.id !== "string" || raw.id === "") continue;
+    if (typeof raw.incidentId !== "string" || raw.incidentId === "") continue;
+    if (raw.id !== driverOrderIncidentResolutionId(raw.incidentId)) continue;
+    if (typeof raw.orderId !== "string" || typeof raw.driverId !== "string") {
+      continue;
+    }
+    const matchingReports = incidents.filter(
+      (incident) => incident.id === raw.incidentId,
+    );
+    if (matchingReports.length === 0) continue;
+    if (raw.actor !== "ADMIN") continue;
+    if (!isDriverOrderIncidentResolutionOutcome(raw.outcome)) continue;
+    if (typeof raw.note !== "string") continue;
+    const note = raw.note.trim();
+    if (note !== raw.note || note.length < 3 || note.length > 300) continue;
+    if (!isValidIso(raw.resolvedAt)) continue;
+    if (typeof raw.orderStatusAtResolution !== "string") continue;
+    if (!ORDER_STATUSES.has(raw.orderStatusAtResolution)) continue;
+    if (
+      raw.assignedDriverIdAtResolution !== null &&
+      (typeof raw.assignedDriverIdAtResolution !== "string" ||
+        !driverIds.has(raw.assignedDriverIdAtResolution))
+    ) {
+      continue;
+    }
+    const hasMatchingFoundation = matchingReports.some(
+      (incident) =>
+        incident.orderId === raw.orderId &&
+        incident.driverId === raw.driverId &&
+        Date.parse(raw.resolvedAt as string) >= Date.parse(incident.reportedAt),
+    );
+    if (!hasMatchingFoundation) continue;
+    kept.push({
+      id: raw.id,
+      incidentId: raw.incidentId,
+      orderId: raw.orderId,
+      driverId: raw.driverId,
+      resolvedAt: raw.resolvedAt,
+      actor: "ADMIN",
+      outcome: raw.outcome,
+      note,
+      orderStatusAtResolution: raw.orderStatusAtResolution as OrderStatus,
+      assignedDriverIdAtResolution: raw.assignedDriverIdAtResolution as
+        | string
+        | null,
+    });
+  }
+  return kept;
+}
+
 export function normalizePrototypeState(
   state: PrototypeState,
 ): PrototypeState {
@@ -1924,6 +2075,24 @@ export function normalizePrototypeState(
     num(state.revision, 0),
     sourceSchemaVersion,
   );
+  const normalizedRestaurantIds = new Set(
+    restaurants.map((restaurant) => restaurant.id),
+  );
+  const normalizedDriverOrderIncidents = normalizeDriverOrderIncidents(
+    state.driverOrderIncidents,
+    normalizedOrders,
+    normalizedDriverIds,
+    normalizedRestaurantIds,
+    num(state.revision, 0),
+    sourceSchemaVersion,
+  );
+  const normalizedDriverOrderIncidentResolutionEvents =
+    normalizeDriverOrderIncidentResolutions(
+      state.driverOrderIncidentResolutionEvents,
+      normalizedDriverOrderIncidents,
+      normalizedDriverIds,
+      sourceSchemaVersion,
+    );
   // v25: итоговое состояние собирается из ЯВНО перечисленных полей (без `...state`),
   // поэтому удалённый старый driver cash ledger не переносится из сырых данных
   // schema ≤ 24, а неизвестные лишние поля не «протекают» в нормализованный state.
@@ -1965,6 +2134,9 @@ export function normalizePrototypeState(
     // до v17/v18 получает пустой список.
     driverOffers: normalizedDriverOffers,
     driverDeliveryEvents: normalizedDriverDeliveryEvents,
+    driverOrderIncidents: normalizedDriverOrderIncidents,
+    driverOrderIncidentResolutionEvents:
+      normalizedDriverOrderIncidentResolutionEvents,
     platformDriverCashEvents: normalizedPlatformDriverCashEvents,
     // Единый журнал заработка водителя (финализирован v25): source ≤ 24 —
     // детерминированная миграция из доказательства завершения; source ≥ 25 —

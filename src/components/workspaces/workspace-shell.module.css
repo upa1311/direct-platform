@@ -827,12 +827,39 @@
 
   .adminHeader {
     min-height: 68px;
+    flex-wrap: wrap;
     padding: 14px 18px;
+  }
+
+  .adminHeader .headerActions {
+    margin-left: auto;
   }
 
   .adminContent {
     width: min(100% - 28px, 1120px);
     padding-block: 36px 56px;
+  }
+}
+
+@media (max-width: 520px) {
+  .adminHeader {
+    gap: 10px;
+    padding-inline: 14px;
+  }
+
+  .adminHeader .headerActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .adminRole {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
   }
 }
 

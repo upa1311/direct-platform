@@ -114,6 +114,11 @@ import {
   type PlatformDriverCashHandoffActionResult,
 } from "./platform-driver-cash-handoff";
 import {
+  reportDriverOrderIncident,
+  resolveDriverOrderIncident,
+  type DriverOrderIncidentActionResult,
+} from "./driver-order-incidents";
+import {
   markDriverArrivedAtRestaurant,
   markDriverArrivingToCustomer,
   markDriverDeliveredOrder,
@@ -150,6 +155,8 @@ import {
 import { createDefaultState } from "./default-state";
 import type {
   DeliveryAddress,
+  DriverOrderIncidentReason,
+  DriverOrderIncidentResolutionOutcome,
   FulfillmentChoice,
   MenuItemVariant,
   OperationalActor,
@@ -444,6 +451,17 @@ export interface PrototypeContextValue {
     orderId: string,
     input: CompleteDriverDeliveryInput,
   ) => Promise<DriverDeliveryActionResult>;
+  driverReportOrderIncident: (
+    driverId: string,
+    orderId: string,
+    reason: DriverOrderIncidentReason,
+    details: string,
+  ) => Promise<DriverOrderIncidentActionResult>;
+  adminResolveDriverOrderIncident: (
+    incidentId: string,
+    outcome: DriverOrderIncidentResolutionOutcome,
+    note: string,
+  ) => Promise<DriverOrderIncidentActionResult>;
   setPreparationMinutes: (orderId: string, minutes: number) => MutationAckPromise;
   setRestaurantAccepting: (
     restaurantId: string,
@@ -1740,6 +1758,52 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedActionMutation],
   );
 
+  const driverReportOrderIncident = useCallback(
+    (
+      driverId: string,
+      orderId: string,
+      reason: DriverOrderIncidentReason,
+      details: string,
+    ) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          reportDriverOrderIncident(baseState, {
+            driverId,
+            orderId,
+            reason,
+            details,
+          }),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          incidentId: null,
+        }),
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const adminResolveDriverOrderIncident = useCallback(
+    (
+      incidentId: string,
+      outcome: DriverOrderIncidentResolutionOutcome,
+      note: string,
+    ) =>
+      runSerializedActionMutation({
+        mutation: (baseState) =>
+          resolveDriverOrderIncident(baseState, {
+            incidentId,
+            outcome,
+            note,
+          }),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          incidentId: null,
+        }),
+      }),
+    [runSerializedActionMutation],
+  );
+
   const setPreparationMinutes = useCallback(
     (orderId: string, minutes: number) =>
       runSerializedResultMutation({
@@ -2089,6 +2153,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       driverPickUpOrder,
       driverMarkArriving,
       driverCompleteDelivery,
+      driverReportOrderIncident,
+      adminResolveDriverOrderIncident,
       setPreparationMinutes,
       setRestaurantAccepting,
       setRestaurantWorkflow,
@@ -2169,6 +2235,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       driverPickUpOrder,
       driverMarkArriving,
       driverCompleteDelivery,
+      driverReportOrderIncident,
+      adminResolveDriverOrderIncident,
       setPreparationMinutes,
       setRestaurantAccepting,
       setRestaurantWorkflow,

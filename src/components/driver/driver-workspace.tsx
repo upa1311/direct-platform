@@ -4,10 +4,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
+  formatDateTime,
   formatMoney,
   getDriverActiveOrder,
   getPlatformDriverCashSnapshot,
 } from "@/prototype/selectors";
+import {
+  DRIVER_ORDER_INCIDENT_REASONS,
+  DRIVER_ORDER_INCIDENT_REASON_LABELS,
+  getDriverActiveOrderIncidentView,
+} from "@/prototype/driver-order-incidents";
 import {
   getOpenDriverOffersForDriver,
   getOrderForOffer,
@@ -34,6 +40,7 @@ import { getDriverShiftAnalyticsView } from "@/prototype/driver-shift-analytics"
 import type {
   DeliveryAddress,
   DriverOffer,
+  DriverOrderIncidentReason,
   DriverProfile,
   Order,
   Zone,
@@ -46,7 +53,7 @@ import {
   useAuthenticatedDriverId,
   writeAuthenticatedDriverId,
 } from "./driver-session";
-import { Banknote, BellOff, BellRing, CarFront, Clock3, CreditCard, MapPin } from "lucide-react";
+import { Banknote, BellOff, BellRing, CarFront, CircleAlert, Clock3, CreditCard, MapPin } from "lucide-react";
 
 import { useDriverOfferSoundPreference } from "./driver-offer-sound";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
@@ -1250,9 +1257,23 @@ function ActiveOrderCard({
     driverPickUpOrder,
     driverMarkArriving,
     driverCompleteDelivery,
+    driverReportOrderIncident,
   } = usePrototype();
   const { pending, error, run } = useAction();
+  const [incidentOpen, setIncidentOpen] = useState(false);
+  const [incidentReason, setIncidentReason] =
+    useState<DriverOrderIncidentReason | null>(null);
+  const [incidentDetails, setIncidentDetails] = useState("");
+  const [incidentError, setIncidentError] = useState<string | null>(null);
+  const [incidentPending, setIncidentPending] = useState(false);
+  const incidentPendingRef = useRef(false);
+  const incidentTriggerRef = useRef<HTMLButtonElement>(null);
   const stage = resolveDriverDeliveryStage(state, driverId, order.id);
+  const incidentView = getDriverActiveOrderIncidentView(
+    state,
+    order.id,
+    driverId,
+  );
   const activeIndex = activeStepIndex(stage);
   // После получения заказа главная точка маршрута — клиент, а не ресторан.
   const pickedUp =
@@ -1260,11 +1281,65 @@ function ActiveOrderCard({
   // Наличный заказ ведёт отдельный блок с передачей денег ресторану.
   const cashView = getPlatformDriverCashHandoffView(state, order);
   const isCash = cashView.status !== "NOT_APPLICABLE";
+  const canReportIncident = ["READY", "OUT_FOR_DELIVERY", "ARRIVING"].includes(
+    order.status,
+  );
+
+  const closeIncidentSheet = () => {
+    if (!incidentPendingRef.current) setIncidentOpen(false);
+  };
+
+  const submitIncident = async () => {
+    if (incidentPendingRef.current) return;
+    if (incidentReason === null) {
+      setIncidentError("Выберите причину проблемы.");
+      return;
+    }
+    incidentPendingRef.current = true;
+    setIncidentPending(true);
+    setIncidentError(null);
+    try {
+      const result = await driverReportOrderIncident(
+        driverId,
+        order.id,
+        incidentReason,
+        incidentDetails,
+      );
+      if (!result.ok) {
+        setIncidentError(result.error ?? "Не удалось сообщить о проблеме.");
+        return;
+      }
+      setIncidentOpen(false);
+      setIncidentReason(null);
+      setIncidentDetails("");
+    } finally {
+      incidentPendingRef.current = false;
+      setIncidentPending(false);
+    }
+  };
 
   return (
     <>
       {/* Блок 1: текущий этап и одна главная кнопка — вверху активного заказа. */}
-      {isCash ? (
+      {incidentView.status === "OPEN" && incidentView.incident !== null ? (
+        <div className={styles.incidentOpenCard} role="status">
+          <span className={styles.incidentStateTitle}>Direct разбирается</span>
+          <span>Не выполняйте следующий шаг, пока Direct не закроет проблему.</span>
+          <dl className={styles.incidentStateDetails}>
+            <div><dt>Заказ</dt><dd>{order.publicNumber}</dd></div>
+            <div><dt>Причина</dt><dd>{DRIVER_ORDER_INCIDENT_REASON_LABELS[incidentView.incident.reason]}</dd></div>
+            {incidentView.incident.details !== null ? (
+              <div><dt>Комментарий</dt><dd>{incidentView.incident.details}</dd></div>
+            ) : null}
+            <div><dt>Сообщено</dt><dd>{formatDateTime(incidentView.incident.reportedAt)}</dd></div>
+          </dl>
+        </div>
+      ) : incidentView.status === "REVIEW_REQUIRED" ? (
+        <div className={styles.incidentReviewCard} role="alert">
+          <span className={styles.incidentStateTitle}>Данные проблемы требуют проверки Direct</span>
+          <span>Не выполняйте следующий шаг, пока данные не будут проверены.</span>
+        </div>
+      ) : isCash ? (
         <DriverCashHandoffBlock
           driverId={driverId}
           order={order}
@@ -1296,6 +1371,88 @@ function ActiveOrderCard({
           ) : null}
         </>
       )}
+
+      {(incidentView.status === "NONE" || incidentView.status === "RESOLVED") &&
+      canReportIncident ? (
+        <button
+          type="button"
+          className={styles.incidentReportButton}
+          ref={incidentTriggerRef}
+          onClick={() => {
+            setIncidentError(null);
+            setIncidentOpen(true);
+          }}
+        >
+          <CircleAlert size={18} aria-hidden="true" />
+          Проблема с заказом
+        </button>
+      ) : null}
+
+      <DriverControlSheet
+        open={incidentOpen}
+        title="Проблема с заказом"
+        onClose={closeIncidentSheet}
+        triggerRef={incidentTriggerRef}
+      >
+        <form
+          className={styles.incidentForm}
+          aria-busy={incidentPending}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitIncident();
+          }}
+        >
+          <fieldset className={styles.incidentReasons} disabled={incidentPending}>
+            <legend>Что произошло</legend>
+            {DRIVER_ORDER_INCIDENT_REASONS.filter(
+              (reason) => order.paymentMethod === "CASH" || reason !== "CASH_PROBLEM",
+            ).map((reason) => (
+              <label className={styles.incidentReason} key={reason}>
+                <input
+                  type="radio"
+                  name="driver-order-incident-reason"
+                  value={reason}
+                  checked={incidentReason === reason}
+                  onChange={() => setIncidentReason(reason)}
+                />
+                <span>{DRIVER_ORDER_INCIDENT_REASON_LABELS[reason]}</span>
+              </label>
+            ))}
+          </fieldset>
+          <label className={styles.incidentCommentLabel} htmlFor="driver-incident-details">
+            Комментарий для Direct
+          </label>
+          <textarea
+            id="driver-incident-details"
+            className={styles.incidentTextarea}
+            maxLength={240}
+            rows={3}
+            placeholder="Опишите, что произошло"
+            value={incidentDetails}
+            disabled={incidentPending}
+            onChange={(event) => setIncidentDetails(event.target.value)}
+          />
+          <span className={styles.incidentCounter} aria-live="polite">
+            {incidentDetails.length} / 240
+          </span>
+          {incidentError ? (
+            <p className={styles.error} role="alert">{incidentError}</p>
+          ) : null}
+          <div className={styles.incidentFormActions}>
+            <button type="submit" className={styles.primaryButton} disabled={incidentPending}>
+              Сообщить Direct
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={incidentPending}
+              onClick={closeIncidentSheet}
+            >
+              Отмена
+            </button>
+          </div>
+        </form>
+      </DriverControlSheet>
 
       <ol className={styles.progress} aria-label="Этапы доставки">
         {PROGRESS_STEPS.map((label, index) => (

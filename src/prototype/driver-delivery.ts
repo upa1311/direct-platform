@@ -25,6 +25,10 @@ import {
 } from "./driver-earnings";
 import { getPlatformDriverCashSnapshot } from "./selectors";
 import type { PlatformDriverCashEvent } from "./models";
+import {
+  DRIVER_ORDER_INCIDENT_BLOCK_ERROR,
+  hasBlockingDriverOrderIncident,
+} from "./driver-order-incidents";
 
 /** Явный ввод завершения доставки: наличные требуют подтверждения получения. */
 export interface CompleteDriverDeliveryInput {
@@ -128,6 +132,9 @@ function guardDriverOrder(
   }
   if (order.assignedDriverId !== driverId) {
     return { ok: false, error: "Этот заказ назначен другому водителю." };
+  }
+  if (hasBlockingDriverOrderIncident(state, orderId, driverId)) {
+    return { ok: false, error: DRIVER_ORDER_INCIDENT_BLOCK_ERROR };
   }
   if (TERMINAL_STATUSES.has(order.status)) {
     return { ok: false, error: "Действие недоступно на текущем этапе заказа." };
@@ -399,6 +406,12 @@ export function markDriverDeliveredOrder(
   // No-op ДО guard: после доставки водитель уже не BUSY_DIRECT и заказ не
   // активен, поэтому обычный guard не пройдёт — но повтор должен быть успешным.
   const existingOrder = state.orders.find((o) => o.id === orderId);
+  if (
+    existingOrder?.assignedDriverId === driverId &&
+    hasBlockingDriverOrderIncident(state, orderId, driverId)
+  ) {
+    return fail(state, DRIVER_ORDER_INCIDENT_BLOCK_ERROR);
+  }
   if (
     existingOrder &&
     existingOrder.status === "DELIVERED" &&

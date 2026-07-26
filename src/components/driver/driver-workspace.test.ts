@@ -49,6 +49,23 @@ const SHEET = readFileSync(
   "src/components/driver/driver-control-sheet.tsx",
   "utf8",
 );
+const INCIDENT_DOMAIN = readFileSync(
+  "src/prototype/driver-order-incidents.ts",
+  "utf8",
+);
+const ADMIN_INCIDENTS = readFileSync(
+  "src/app/admin/driver-incidents/page.tsx",
+  "utf8",
+);
+const ADMIN_INCIDENTS_CSS = readFileSync(
+  "src/app/admin/driver-incidents/driver-incidents.module.css",
+  "utf8",
+);
+const ADMIN_NAV = readFileSync(
+  "src/components/workspaces/admin-navigation.ts",
+  "utf8",
+);
+const ADMIN_HOME = readFileSync("src/app/admin/page.tsx", "utf8");
 
 /** Тело @media-блока по его условию (первое вхождение, со сбалансированными {}). */
 function mediaBlock(condition: string): string {
@@ -143,7 +160,7 @@ test("профиль отделён от быстрых controls локальн�
       "driverTimeSummary",
     ),
   );
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
 });
 
 // --- Сессия -------------------------------------------------------------------
@@ -339,7 +356,7 @@ test("Расчёты доступны только при сессии, без �
 // --- Regression ---------------------------------------------------------------
 
 test("63: schema остаётся 18 (не понижается этим UI-микробатчем)", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
 });
 
 test("64–65: driver offers домен и срок 30 секунд не изменены", () => {
@@ -604,7 +621,7 @@ test("h23: lifecycle-кнопки и прогресс 2×2 не ухудшены
 });
 
 test("h24: schema остаётся 18; наличные выключены", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
   assert.equal(
     createDefaultState().platformSettings.platformDriverCashEnabled,
     false,
@@ -680,4 +697,108 @@ test("cash-49: главная кнопка подтверждения налич
   assert.ok(primary.includes("width: 100%"));
   const secondary = cssRule(".cashConfirmSecondary");
   assert.ok(secondary.includes("min-height: 44px"));
+});
+
+// --- Центр проблем водителей (v29) ------------------------------------------
+
+test("incident-ui: driver report button, icon и sheet доступны в активном заказе", () => {
+  const stage = WORKSPACE.indexOf("<StagePanel");
+  const button = WORKSPACE.indexOf("Проблема с заказом", stage);
+  const progress = WORKSPACE.indexOf('<ol className={styles.progress}', button);
+  assert.ok(stage !== -1 && button > stage && progress > button);
+  assert.ok(WORKSPACE.includes("CircleAlert"));
+  assert.ok(WORKSPACE.includes("<DriverControlSheet"));
+  assert.ok(WORKSPACE.includes('<fieldset className={styles.incidentReasons}'));
+  assert.ok(WORKSPACE.includes("<legend>Что произошло</legend>"));
+  assert.ok(WORKSPACE.includes("DRIVER_ORDER_INCIDENT_REASONS.filter"));
+  assert.ok(WORKSPACE.includes('reason !== "CASH_PROBLEM"'));
+  assert.ok(WORKSPACE.includes('maxLength={240}'));
+  assert.ok(WORKSPACE.includes('rows={3}'));
+  assert.ok(WORKSPACE.includes('aria-live="polite"'));
+  assert.ok(WORKSPACE.includes("incidentPendingRef.current"));
+});
+
+test("incident-ui: причины и OTHER validation заданы canonical domain helper", () => {
+  for (const label of [
+    "Ресторан закрыт",
+    "Ресторан не видит заказ",
+    "Заказ долго не готов",
+    "Не могу связаться с клиентом",
+    "Неверный адрес",
+    "Клиент отказался принимать заказ",
+    "Проблема с наличными",
+    "Поломка машины / не могу продолжить",
+    "Другое",
+  ]) {
+    assert.ok(INCIDENT_DOMAIN.includes(label), label);
+  }
+  assert.ok(INCIDENT_DOMAIN.includes('input.reason === "OTHER"'));
+  assert.ok(INCIDENT_DOMAIN.includes('details === ""'));
+});
+
+test("incident-ui: OPEN/REVIEW скрывают lifecycle, детали заказа остаются ниже", () => {
+  const open = WORKSPACE.indexOf('incidentView.status === "OPEN"');
+  const review = WORKSPACE.indexOf('incidentView.status === "REVIEW_REQUIRED"', open);
+  const cash = WORKSPACE.indexOf(": isCash ?", review);
+  const progress = WORKSPACE.indexOf('<ol className={styles.progress}', cash);
+  const route = WORKSPACE.indexOf("<RoutePoint", progress);
+  const meta = WORKSPACE.indexOf("<OrderMeta", route);
+  assert.ok(open !== -1 && review > open && cash > review);
+  assert.ok(progress > cash && route > progress && meta > route);
+  assert.ok(WORKSPACE.includes("Direct разбирается"));
+  assert.ok(WORKSPACE.includes("Данные проблемы требуют проверки Direct"));
+  assert.ok(WORKSPACE.includes("getDriverActiveOrderIncidentView"));
+});
+
+test("incident-admin: navigation, home card и canonical queue присутствуют", () => {
+  const analytics = ADMIN_NAV.indexOf('href: "/admin/driver-analytics"');
+  const incidents = ADMIN_NAV.indexOf('href: "/admin/driver-incidents"');
+  const payouts = ADMIN_NAV.indexOf('href: "/admin/driver-payouts"');
+  assert.ok(analytics !== -1 && incidents > analytics && payouts > incidents);
+  assert.ok(ADMIN_HOME.includes('href: "/admin/driver-incidents"'));
+  assert.ok(ADMIN_HOME.includes("Закрытые рестораны, задержки, адреса и другие ситуации в доставках"));
+  assert.ok(ADMIN_INCIDENTS.includes("getAdminDriverOrderIncidentViews(state)"));
+});
+
+test("incident-admin: summary, filters и доступность не вычисляют rows в React", () => {
+  for (const label of ["Открыто", "Требует проверки", "Закрыто", "Открытые", "Закрытые", "Все"]) {
+    assert.ok(ADMIN_INCIDENTS.includes(label), label);
+  }
+  assert.ok(ADMIN_INCIDENTS.includes('role="group"'));
+  assert.ok(ADMIN_INCIDENTS.includes("aria-pressed={filter === item.value}"));
+  assert.ok(ADMIN_INCIDENTS.includes("Number.isSafeInteger"));
+  assert.ok(!ADMIN_INCIDENTS.includes(".sort("));
+  assert.ok(ADMIN_INCIDENTS_CSS.includes("flex-wrap: wrap"));
+  assert.ok(ADMIN_INCIDENTS_CSS.includes("repeat(2, minmax(0, 1fr))"));
+});
+
+test("incident-admin: cancel/reassign выполняют domain action до resolution", () => {
+  const cancelStart = ADMIN_INCIDENTS.indexOf("const cancelAndResolve");
+  const cancelEnd = ADMIN_INCIDENTS.indexOf("const reassignAndResolve", cancelStart);
+  const cancelBody = ADMIN_INCIDENTS.slice(cancelStart, cancelEnd);
+  assert.ok(cancelBody.indexOf("cancelOrderByAdmin") < cancelBody.indexOf("adminResolveDriverOrderIncident"));
+  assert.ok(cancelBody.indexOf("if (!canceled.ok)") < cancelBody.indexOf("adminResolveDriverOrderIncident"));
+  assert.ok(cancelBody.includes("return;"));
+
+  const reassignStart = cancelEnd;
+  const reassignEnd = ADMIN_INCIDENTS.indexOf("const restaurantPhone", reassignStart);
+  const reassignBody = ADMIN_INCIDENTS.slice(reassignStart, reassignEnd);
+  assert.ok(reassignBody.indexOf("reassignDriver") < reassignBody.indexOf("adminResolveDriverOrderIncident"));
+  assert.ok(reassignBody.indexOf("if (!reassigned.ok)") < reassignBody.indexOf("adminResolveDriverOrderIncident"));
+  assert.ok(reassignBody.includes("return;"));
+});
+
+test("incident-admin: no blocking browser dialogs, card ref guard и schema 29", () => {
+  const forbiddenCalls = [
+    ["window", "alert"],
+    ["window", "prompt"],
+    ["window", "confirm"],
+    ["navigator", "geolocation"],
+  ].map((parts) => parts.join("."));
+  for (const forbidden of forbiddenCalls) {
+    assert.ok(!ADMIN_INCIDENTS.includes(forbidden), forbidden);
+  }
+  assert.ok(ADMIN_INCIDENTS.includes("pendingRef.current"));
+  assert.ok(ADMIN_INCIDENTS.includes('role="alert"'));
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
 });

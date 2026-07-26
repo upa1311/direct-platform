@@ -22,6 +22,11 @@ const adminSections = [
     description: "Время онлайн, загрузка и результат водителей",
   },
   {
+    href: "/admin/driver-incidents",
+    title: "Проблемы водителей",
+    description: "Закрытые рестораны, задержки, адреса и другие ситуации в доставках",
+  },
+  {
     href: "/admin/zones",
     title: "Зоны и тарифы",
     description: "Настройки географии доставки",

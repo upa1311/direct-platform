@@ -13,6 +13,10 @@ import {
   canRestaurantWorkspacePerformAction,
   resolveRestaurantWorkspaceRole,
 } from "./restaurant-workflow";
+import {
+  DRIVER_ORDER_INCIDENT_BLOCK_ERROR,
+  hasBlockingDriverOrderIncident,
+} from "./driver-order-incidents";
 
 /**
  * Двусторонняя передача наличных водителя Direct ресторану (v21). Работает
@@ -291,6 +295,9 @@ export function reportDriverCashHandoffToRestaurant(
   if (!order) return fail(state, "У вас нет этого активного заказа.");
   if (order.assignedDriverId !== driverId) {
     return fail(state, "Этот заказ назначен другому водителю.");
+  }
+  if (hasBlockingDriverOrderIncident(state, orderId, driverId)) {
+    return fail(state, DRIVER_ORDER_INCIDENT_BLOCK_ERROR);
   }
 
   const foundation = cashFoundation(state, order);
