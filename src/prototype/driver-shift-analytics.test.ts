@@ -43,6 +43,7 @@ import {
 import {
   getLocalDateParts,
   localMidnightToUtcMs,
+  shiftCalendarDate,
 } from "./local-calendar.ts";
 
 /**
@@ -415,11 +416,85 @@ test("36/37: интервал обрезается началом и концо�
   const v = view(analyticsState(events), "TODAY", nowIso);
   // TODAY: от полуночи до now.
   assert.equal(v.waitingDurationMs, nowMs - todayMidnight);
-  assert.equal(v.coverageIncomplete, true); // покрытие началось раньше периода
+  assert.equal(v.coverageIncomplete, false); // цепочка уже существовала на момент начала TODAY
   // ALL_TIME: от первого события (полный интервал).
   const all = view(analyticsState(events), "ALL_TIME", nowIso);
   assert.equal(all.waitingDurationMs, nowMs - startMs);
   assert.equal(all.coverageIncomplete, false);
+});
+
+function oneOpenEvent(atMs: number): PrototypeState {
+  return analyticsState([
+    mkEvent(2, new Date(atMs).toISOString(), "OFFLINE", "AVAILABLE", null, "zone-1"),
+  ]);
+}
+
+test("coverage TODAY: первый event до начала дня → complete", () => {
+  const nowMs = Date.parse("2026-07-22T09:00:00.000Z");
+  const start = localMidnightToUtcMs(getLocalDateParts(nowMs, TZ), TZ);
+  assert.equal(view(oneOpenEvent(start - MIN), "TODAY", new Date(nowMs).toISOString()).coverageIncomplete, false);
+});
+
+test("coverage TODAY: первый event точно в локальную полночь → complete", () => {
+  const nowMs = Date.parse("2026-07-22T09:00:00.000Z");
+  const start = localMidnightToUtcMs(getLocalDateParts(nowMs, TZ), TZ);
+  assert.equal(view(oneOpenEvent(start), "TODAY", new Date(nowMs).toISOString()).coverageIncomplete, false);
+});
+
+test("coverage TODAY: первый event после полуночи → incomplete", () => {
+  const nowMs = Date.parse("2026-07-22T09:00:00.000Z");
+  const start = localMidnightToUtcMs(getLocalDateParts(nowMs, TZ), TZ);
+  assert.equal(view(oneOpenEvent(start + 60 * MIN), "TODAY", new Date(nowMs).toISOString()).coverageIncomplete, true);
+});
+
+test("coverage TODAY: при позднем первом event duration начинается с event", () => {
+  const nowMs = Date.parse("2026-07-22T09:00:00.000Z");
+  const start = localMidnightToUtcMs(getLocalDateParts(nowMs, TZ), TZ);
+  const firstEvent = start + 60 * MIN;
+  assert.equal(view(oneOpenEvent(firstEvent), "TODAY", new Date(nowMs).toISOString()).waitingDurationMs, nowMs - firstEvent);
+});
+
+test("coverage LAST_7_DAYS: event до нижней границы → complete", () => {
+  const nowMs = Date.parse("2026-07-22T09:00:00.000Z");
+  const start = localMidnightToUtcMs(shiftCalendarDate(getLocalDateParts(nowMs, TZ), -6), TZ);
+  assert.equal(view(oneOpenEvent(start - MIN), "LAST_7_DAYS", new Date(nowMs).toISOString()).coverageIncomplete, false);
+});
+
+test("coverage LAST_7_DAYS: event после нижней границы → incomplete", () => {
+  const nowMs = Date.parse("2026-07-22T09:00:00.000Z");
+  const start = localMidnightToUtcMs(shiftCalendarDate(getLocalDateParts(nowMs, TZ), -6), TZ);
+  assert.equal(view(oneOpenEvent(start + MIN), "LAST_7_DAYS", new Date(nowMs).toISOString()).coverageIncomplete, true);
+});
+
+test("coverage CURRENT_MONTH: event до или на первом числе → complete", () => {
+  const nowMs = Date.parse("2026-07-22T09:00:00.000Z");
+  const local = getLocalDateParts(nowMs, TZ);
+  const start = localMidnightToUtcMs({ year: local.year, month: local.month, day: 1 }, TZ);
+  assert.equal(view(oneOpenEvent(start - MIN), "CURRENT_MONTH", new Date(nowMs).toISOString()).coverageIncomplete, false);
+  assert.equal(view(oneOpenEvent(start), "CURRENT_MONTH", new Date(nowMs).toISOString()).coverageIncomplete, false);
+});
+
+test("coverage CURRENT_MONTH: event после начала месяца → incomplete", () => {
+  const nowMs = Date.parse("2026-07-22T09:00:00.000Z");
+  const local = getLocalDateParts(nowMs, TZ);
+  const start = localMidnightToUtcMs({ year: local.year, month: local.month, day: 1 }, TZ);
+  assert.equal(view(oneOpenEvent(start + MIN), "CURRENT_MONTH", new Date(nowMs).toISOString()).coverageIncomplete, true);
+});
+
+test("coverage ALL_TIME: валидная непустая цепочка → complete", () => {
+  assert.equal(view(analyticsState(validChain()), "ALL_TIME", CHAIN_NOW).coverageIncomplete, false);
+});
+
+test("coverage: пустой журнал → incomplete", () => {
+  assert.equal(view(analyticsState([], { status: "OFFLINE", currentZoneId: null }), "ALL_TIME", DAY_NOW).coverageIncomplete, true);
+});
+
+test("coverage: повреждённая цепочка → incomplete", () => {
+  const broken = [
+    mkEvent(2, "2026-07-22T10:00:00.000Z", "OFFLINE", "AVAILABLE", null, "zone-1"),
+    mkEvent(3, "2026-07-22T10:30:00.000Z", "PAUSED", "OFFLINE", "zone-1", null),
+  ];
+  assert.equal(view(analyticsState(broken), "ALL_TIME", CHAIN_NOW).coverageIncomplete, true);
 });
 
 test("45/46: пустой журнал → время null (не нули), coverageIncomplete", () => {
@@ -503,6 +578,52 @@ test("58: повреждённая хронология ответа → avg nul
   assert.equal(v.reviewRequired, true);
   assert.equal(v.acceptedOfferCount, 1);
   assert.equal(v.declinedOfferCount, 1);
+});
+
+test("offer corruption: closed offers без валидного resolvedAt не считаются", () => {
+  const invalidAccepted = {
+    ...offer("bad-a", "ACCEPTED", "2026-07-22T10:00:00.000Z", null),
+    resolvedAt: 123,
+  } as unknown as DriverOffer;
+  const nullDeclined = offer("bad-d", "DECLINED", "2026-07-22T10:05:00.000Z", null);
+  const invalidExpired = offer("bad-e", "EXPIRED", "2026-07-22T10:10:00.000Z", "not-an-iso");
+  const validAccepted = offer("good-a", "ACCEPTED", "2026-07-22T10:15:00.000Z", "2026-07-22T10:15:10.000Z");
+  const state = {
+    ...analyticsState(validChain()),
+    driverOffers: [invalidAccepted, nullDeclined, invalidExpired, validAccepted],
+  };
+  const v = view(state, "ALL_TIME", CHAIN_NOW);
+  assert.equal(v.acceptedOfferCount, 1);
+  assert.equal(v.declinedOfferCount, 0);
+  assert.equal(v.expiredOfferCount, 0);
+  assert.equal(v.averageResponseTimeMs, null);
+  assert.equal(v.reviewRequired, true);
+});
+
+test("offer corruption: invalid resolvedAt не уничтожает counts валидных offers", () => {
+  const offers = [
+    offer("good-a", "ACCEPTED", "2026-07-22T10:00:00.000Z", "2026-07-22T10:00:10.000Z"),
+    offer("good-d", "DECLINED", "2026-07-22T10:05:00.000Z", "2026-07-22T10:05:20.000Z"),
+    offer("bad-e", "EXPIRED", "2026-07-22T10:10:00.000Z", "invalid"),
+  ];
+  const v = view({ ...analyticsState(validChain()), driverOffers: offers }, "ALL_TIME", CHAIN_NOW);
+  assert.equal(v.acceptedOfferCount, 1);
+  assert.equal(v.declinedOfferCount, 1);
+  assert.equal(v.expiredOfferCount, 0);
+  assert.equal(v.averageResponseTimeMs, null);
+  assert.equal(v.reviewRequired, true);
+});
+
+test("offer corruption: OPEN/CANCELED без resolvedAt не являются ошибкой", () => {
+  const offers = [
+    offer("open", "OPEN", "2026-07-22T10:00:00.000Z", null),
+    offer("canceled", "CANCELED", "2026-07-22T10:05:00.000Z", null),
+  ];
+  const v = view({ ...analyticsState(validChain()), driverOffers: offers }, "ALL_TIME", CHAIN_NOW);
+  assert.equal(v.acceptedOfferCount, 0);
+  assert.equal(v.declinedOfferCount, 0);
+  assert.equal(v.expiredOfferCount, 0);
+  assert.equal(v.reviewRequired, false);
 });
 
 test("59/60: utilization в bps (0–10000); нулевой знаменатель → null", () => {

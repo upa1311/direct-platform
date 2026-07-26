@@ -317,7 +317,10 @@ function computeOfferAnalytics(
     ) {
       continue; // OPEN и CANCELED не считаются.
     }
-    if (!isValidIso(offer.resolvedAt)) continue;
+    if (!isValidIso(offer.resolvedAt)) {
+      responseCorrupt = true;
+      continue;
+    }
     const resolvedMs = Date.parse(offer.resolvedAt as string);
     if (!inPeriod(resolvedMs)) continue;
 
@@ -495,7 +498,7 @@ export function getDriverShiftAnalyticsView(
       : Math.max(calendarStart as number, chain.coverageStartedAtMs);
   const coverageIncomplete =
     period !== "ALL_TIME" &&
-    chain.coverageStartedAtMs < (calendarStart as number);
+    (calendarStart as number) < chain.coverageStartedAtMs;
 
   const acc = accumulate(chain.sorted, nowMs, timeWindowStart, nowMs);
 
