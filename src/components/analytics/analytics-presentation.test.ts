@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { PROTOTYPE_SCHEMA_VERSION } from "../../prototype/models.ts";
 
 import {
   checkedSumIntegers,
@@ -103,7 +104,16 @@ test("driver analytics показывает честные состояния и
   assert.ok(!DRIVER_PAGE.includes("earningsPerOnlineHourCents"));
   assert.ok(!DRIVER_PAGE.includes("deliveriesPerOnlineHourMilli"));
   assert.ok(DRIVER_PAGE.includes("Предложения заказов"));
+  assert.ok(DRIVER_PAGE.includes("Всего предложений"));
+  assert.ok(DRIVER_PAGE.includes("getOfferPresentationSummary"));
+  assert.ok(!DRIVER_PAGE.includes("acceptedOfferCount +"));
+  assert.ok(!DRIVER_PAGE.includes("declinedOfferCount +"));
+  assert.ok(!DRIVER_PAGE.includes("expiredOfferCount +"));
   assert.ok(!DRIVER_PAGE.includes("Процент отказов"));
+  assert.ok(!DRIVER_PAGE.includes("formatPercentageBps"));
+  assert.ok(!DRIVER_PAGE.includes("declineRateBps"));
+  assert.ok(DRIVER_PAGE.includes("За выбранный период предложений не было."));
+  assert.ok(DRIVER_PAGE.includes("Подтверждённых данных о предложениях за период нет."));
   assert.ok(DRIVER_PAGE.includes("SHIFT_DURATION_LABEL"));
   assert.ok(DRIVER_PAGE.includes("averageResponseTimeMs"));
   assert.ok(DRIVER_PAGE.includes("getZoneButtonPresentation"));
@@ -154,6 +164,7 @@ test("admin navigation, route card и analytics route подключены", () 
   assert.ok(!ADMIN_PAGE.includes(".sort("));
   assert.ok(!ADMIN_PAGE.includes("geolocation"));
   assert.ok(!ADMIN_CSS.includes("table"));
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
 });
 
 test("settlements скрывает только нулевые payout rows", () => {

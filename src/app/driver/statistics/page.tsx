@@ -13,6 +13,7 @@ import {
   formatAnalyticsDuration,
   formatCoverageStartedAt,
   formatResponseTime,
+  getOfferPresentationSummary,
   zoneShare,
 } from "@/components/analytics/analytics-presentation";
 import { getZoneButtonPresentation } from "@/lib/zones/zone-presentation";
@@ -31,6 +32,11 @@ export default function DriverStatisticsPage() {
     return <div className={styles.authNotice} role="status">Войдите в кабинет водителя, чтобы увидеть свою статистику. <Link href="/driver">Перейти ко входу</Link></div>;
   }
   const view = getDriverShiftAnalyticsView(state, driverId, period, new Date(nowMs).toISOString(), ANALYTICS_TIME_ZONE);
+  const offerSummary = getOfferPresentationSummary(
+    view.acceptedOfferCount,
+    view.declinedOfferCount,
+    view.expiredOfferCount,
+  );
   const noOffers = view.acceptedOfferCount === 0 && view.declinedOfferCount === 0 && view.expiredOfferCount === 0 && view.averageResponseTimeMs === null;
   const hasCoverage = view.coverageStartedAt !== null;
   const showPaused = hasCoverage && ((view.pausedDurationMs !== null && view.pausedDurationMs > 0) || (view.pausedDurationMs === null && view.reviewRequired));
@@ -70,7 +76,7 @@ export default function DriverStatisticsPage() {
       <section className={styles.section} aria-labelledby="driver-offers-title">
         <h2 id="driver-offers-title">Предложения заказов</h2>
         {noOffers ? <p className={styles.empty}>{view.reviewRequired ? "Подтверждённых данных о предложениях за период нет." : "За выбранный период предложений не было."}</p> : (
-          <dl className={styles.compactRows}><DataRow label="Принято" value={String(view.acceptedOfferCount)} /><DataRow label="Отклонено" value={String(view.declinedOfferCount)} /><DataRow label="Пропущено" value={String(view.expiredOfferCount)} /><DataRow label="Среднее время ответа" value={formatResponseTime(view.averageResponseTimeMs)} /></dl>
+          <dl className={styles.compactRows}><DataRow label="Всего предложений" value={offerSummary.totalOffers === null ? "—" : String(offerSummary.totalOffers)} /><DataRow label="Принято" value={String(view.acceptedOfferCount)} /><DataRow label="Отклонено" value={String(view.declinedOfferCount)} /><DataRow label="Пропущено" value={String(view.expiredOfferCount)} /><DataRow label="Среднее время ответа" value={formatResponseTime(view.averageResponseTimeMs)} /></dl>
         )}
       </section>
 
