@@ -15,6 +15,7 @@ export const ADMIN_NAVIGATION: readonly AdminNavItem[] = [
   { href: "/admin/restaurant-builder", label: "Конструктор ресторанов" },
   { href: "/admin/menu-review", label: "Меню на проверке" },
   { href: "/admin/drivers", label: "Водители" },
+  { href: "/admin/driver-analytics", label: "Аналитика водителей" },
   { href: "/admin/driver-payouts", label: "Выплаты водителям" },
   { href: "/admin/settlements", label: "Расчёты" },
   { href: "/admin/zones", label: "Зоны и тарифы" },

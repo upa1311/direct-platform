@@ -137,11 +137,15 @@ export default function DriverSettlementsPage() {
             cents={view.cashReceivedCents}
           />
           <SummaryRow label="Direct должен вам" cents={view.dueFromDirectCents} />
-          <SummaryRow
-            label="Direct отправил — ждёт подтверждения"
-            cents={view.sentByDirectCents}
-          />
-          <SummaryRow label="Получено от Direct" cents={view.receivedFromDirectCents} />
+          {view.sentByDirectCents !== 0 ? (
+            <SummaryRow
+              label="Direct отправил — ждёт подтверждения"
+              cents={view.sentByDirectCents}
+            />
+          ) : null}
+          {view.receivedFromDirectCents !== 0 ? (
+            <SummaryRow label="Получено от Direct" cents={view.receivedFromDirectCents} />
+          ) : null}
         </section>
 
         {payouts.batches.length > 0 ? (

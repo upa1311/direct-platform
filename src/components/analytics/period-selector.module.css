@@ -1,0 +1,5 @@
+.control { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.button { flex: 0 0 auto; width: auto; min-height: 38px; padding: 6px 11px; border: 1px solid var(--kds-border-strong, #aeb7b1); border-radius: 999px; background: var(--kds-surface, #fff); color: var(--kds-text, #161a17); font: inherit; font-size: 13px; font-weight: 650; line-height: 1.2; white-space: nowrap; cursor: pointer; opacity: 1; }
+.button:hover { background: var(--kds-surface-subtle, #f0f2f1); }
+.button:focus-visible { outline: 2px solid var(--kds-action, #202923); outline-offset: 2px; }
+.active, .active:hover { border-color: var(--kds-action, #202923); background: var(--kds-action, #202923); color: #fff; }

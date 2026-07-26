@@ -17,6 +17,11 @@ const adminSections = [
     description: "Список водителей и их статусы",
   },
   {
+    href: "/admin/driver-analytics",
+    title: "Аналитика водителей",
+    description: "Время онлайн, загрузка и результат водителей",
+  },
+  {
     href: "/admin/zones",
     title: "Зоны и тарифы",
     description: "Настройки географии доставки",
