@@ -183,21 +183,21 @@ function online(
 // --- 1–2: схема ---------------------------------------------------------------
 
 test("1: схема прототипа поднята до 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 26);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
   const base = createDefaultState();
-  for (let version = 7; version <= 26; version += 1) {
+  for (let version = 7; version <= 27; version += 1) {
     const parsed = parseStoredState(
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version} должна парситься`);
-    assert.equal(parsed.schemaVersion, 26, `схема ${version} → 18`);
+    assert.equal(parsed.schemaVersion, 27, `схема ${version} → 18`);
   }
   // Неизвестная будущая версия по-прежнему не принимается.
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 27 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 28 })),
     null,
   );
 });
@@ -655,7 +655,7 @@ test("34: раздел «Расчёты» водителя существует 
   // v25: единый журнал заработка (онлайн-выплаты и наличные) с описанием выплат.
   assert.ok(
     DRIVER_SETTLEMENTS_PAGE.includes(
-      "Заработок по доставкам, наличные выплаты и сумма, которую должен выплатить Direct.",
+      "Заработок по доставкам, наличные выплаты и сумма, которую Direct должен выплатить вам.",
     ),
   );
   // Маршрут доступен из верхней навигации, а не карточкой на главной.
@@ -671,13 +671,16 @@ test("35: страница расчётов не выдумывает суммы
   assert.ok(!/\d+[.,]\d{2}/.test(DRIVER_SETTLEMENTS_PAGE));
   assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("getDriverEarningsView"));
   assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("formatMoney"));
-  // Никакого netting и обещаний выплат.
+  // Никакого netting, долга водителя и обещаний мгновенной выплаты. Метка
+  // «Direct должен вам» (v27) — это признанное обязательство Direct, а не долг
+  // водителя, поэтому она допустима и в список запрещённого не входит.
   for (const forbidden of [
     "Доступно к выплате",
     "Чистый баланс",
-    "Direct должен вам",
     "Погасить задолженность",
     "Оплатить сейчас",
+    "К выплате Direct",
+    "Водитель должен Direct",
   ]) {
     assert.ok(!DRIVER_SETTLEMENTS_PAGE.includes(forbidden), forbidden);
   }
@@ -755,6 +758,8 @@ test("38: активный заказ читается только из order.a
     "name",
     "phone",
     "status",
+    "statusNote",
+    "statusNoteUpdatedAt",
     "suggestedZoneId",
   ]);
 });

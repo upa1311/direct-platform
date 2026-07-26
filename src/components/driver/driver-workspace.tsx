@@ -45,6 +45,7 @@ import { BellOff, BellRing, CarFront, MapPin } from "lucide-react";
 import { useDriverOfferSoundPreference } from "./driver-offer-sound";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
 import { driverOrderZoneView } from "@/lib/zones/driver-zone-view";
+import { zoneColor, fromZoneId } from "@/lib/zones/zone-registry";
 import { useDismissable } from "./use-popover";
 import { DriverControlSheet } from "./driver-control-sheet";
 import styles from "@/app/driver/driver.module.css";
@@ -177,7 +178,7 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
 
   return (
     <>
-      <ProfileLine driver={driver} zoneName={zoneName} />
+      <ProfileLine driver={driver} />
 
       {/* Компактная верхняя панель: статус, зона, колокольчик — в одной строке. */}
       <DriverQuickControls driver={driver} zoneName={zoneName} />
@@ -197,23 +198,31 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
   );
 }
 
-/** Компактная строка профиля: имя без «Водитель», короткий статус·зона и «⋯». */
-function ProfileLine({
-  driver,
-  zoneName,
-}: {
-  driver: DriverProfile;
-  zoneName: (zoneId: ZoneId | null) => string;
-}) {
+/**
+ * Строка профиля: добровольная заметка водителя (облако, если есть), крупное имя
+ * с оранжевым акцентом, постоянный badge доступа к наличным и меню «⋯».
+ * Дублирующая сводка статуса и зоны под именем убрана — они видны в панели
+ * управления сменой ниже.
+ */
+function ProfileLine({ driver }: { driver: DriverProfile }) {
   return (
     <section className={styles.profileLine} aria-label="Профиль водителя">
       <div className={styles.profileText}>
+        {driver.statusNote ? (
+          <p className={styles.noteBubble} aria-label="Ваша заметка для Direct">
+            {driver.statusNote}
+          </p>
+        ) : null}
         <span className={styles.driverName}>
-          <CarFront size={18} aria-hidden="true" className={styles.driverNameIcon} />
+          <CarFront size={22} aria-hidden="true" className={styles.driverNameIcon} />
           Водитель {getDriverDisplayName(driver)}
         </span>
-        <span className={styles.statusValue}>
-          {statusZoneSummary(driver, zoneName)}
+        <span
+          className={
+            driver.cashEnabled ? styles.cashBadgeOn : styles.cashBadgeOff
+          }
+        >
+          {driver.cashEnabled ? "Наличные доступны" : "Только безналичные заказы"}
         </span>
       </div>
       <ProfileMenu driver={driver} />
@@ -237,6 +246,7 @@ function ProfileMenu({ driver }: { driver: DriverProfile }) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [noteOpen, setNoteOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -286,6 +296,17 @@ function ProfileMenu({ driver }: { driver: DriverProfile }) {
       </button>
       {open ? (
         <div className={styles.overflowMenu} role="menu" id={ACCOUNT_MENU_ID}>
+          <button
+            type="button"
+            className={styles.overflowMenuItem}
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              setNoteOpen(true);
+            }}
+          >
+            Моя заметка
+          </button>
           {busy ? (
             <button
               type="button"
@@ -313,27 +334,121 @@ function ProfileMenu({ driver }: { driver: DriverProfile }) {
           ) : null}
         </div>
       ) : null}
+      <DriverNoteSheet
+        driver={driver}
+        open={noteOpen}
+        onClose={() => setNoteOpen(false)}
+        triggerRef={triggerRef}
+      />
     </div>
   );
 }
 
-/** Короткая сводка статуса и зоны для строки профиля. */
-function statusZoneSummary(
-  driver: DriverProfile,
-  zoneName: (zoneId: ZoneId | null) => string,
-): string {
-  switch (driver.status) {
-    case "AVAILABLE":
-      return `Онлайн · ${zoneName(driver.currentZoneId)}`;
-    case "PAUSED":
-      return `Пауза · ${zoneName(driver.currentZoneId)}`;
-    case "BUSY_DIRECT":
-      return "Выполняет заказ Direct";
-    case "ZONE_CONFIRMATION_REQUIRED":
-      return "Подтвердите текущую зону";
-    default:
-      return "Не в сети";
-  }
+const NOTE_MAX = 120;
+
+/**
+ * Редактор добровольной заметки водителя (v27). Администратор увидит её рядом с
+ * именем; заметка не влияет на распределение заказов. Пустая строка удаляет
+ * заметку. Момент создаётся в provider внутри сериализованной мутации.
+ */
+function DriverNoteSheet({
+  driver,
+  open,
+  onClose,
+  triggerRef,
+}: {
+  driver: DriverProfile;
+  open: boolean;
+  onClose: () => void;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+}) {
+  return (
+    <DriverControlSheet
+      open={open}
+      title="Заметка для Direct"
+      onClose={onClose}
+      triggerRef={triggerRef}
+    >
+      {/* Форма монтируется заново при каждом открытии (лист возвращает null, пока
+          закрыт), поэтому начальное значение берётся из сохранённой заметки без
+          побочного эффекта. */}
+      <NoteForm driver={driver} onClose={onClose} />
+    </DriverControlSheet>
+  );
+}
+
+function NoteForm({
+  driver,
+  onClose,
+}: {
+  driver: DriverProfile;
+  onClose: () => void;
+}) {
+  const { updateDriverStatusNote } = usePrototype();
+  const [text, setText] = useState(driver.statusNote ?? "");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async (value: string) => {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    const result = await updateDriverStatusNote(driver.id, value);
+    setPending(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    onClose();
+  };
+
+  return (
+    <>
+      <p className={styles.noteEditorDescription}>
+        Администратор увидит её рядом с вашим именем. Заметка не влияет на
+        распределение заказов.
+      </p>
+      <label className={styles.noteEditorField}>
+        <span className={styles.srOnly}>Текст заметки</span>
+        <textarea
+          className={styles.noteEditorTextarea}
+          value={text}
+          maxLength={NOTE_MAX}
+          rows={3}
+          placeholder="Например: я на мойке, скоро освобожусь"
+          onChange={(ev) => setText(ev.target.value)}
+        />
+      </label>
+      <span className={styles.noteEditorCounter} aria-live="polite">
+        {text.length} / {NOTE_MAX}
+      </span>
+      {error ? (
+        <span className={styles.error} role="alert">
+          {error}
+        </span>
+      ) : null}
+      <div className={styles.noteEditorActions}>
+        <button
+          type="button"
+          className={styles.noteEditorSave}
+          disabled={pending}
+          onClick={() => void save(text)}
+        >
+          Сохранить
+        </button>
+        {driver.statusNote ? (
+          <button
+            type="button"
+            className={styles.noteEditorDelete}
+            disabled={pending}
+            onClick={() => void save("")}
+          >
+            Удалить заметку
+          </button>
+        ) : null}
+      </div>
+    </>
+  );
 }
 
 // --- Управление статусом и зоной ----------------------------------------------
@@ -380,23 +495,33 @@ function ZoneOptions({
 }) {
   return (
     <div className={styles.sheetOptions} role="menu">
-      {zones.map((zone) => (
-        <button
-          key={zone.id}
-          type="button"
-          className={
-            zone.id === selectedZoneId
-              ? `${styles.sheetOption} ${styles.sheetOptionActive}`
-              : styles.sheetOption
-          }
-          role="menuitemradio"
-          aria-checked={zone.id === selectedZoneId}
-          disabled={pending}
-          onClick={() => onSelect(zone.id)}
-        >
-          {zone.name}
-        </button>
-      ))}
+      {zones.map((zone) => {
+        const accent = zoneColor(fromZoneId(zone.id));
+        return (
+          <button
+            key={zone.id}
+            type="button"
+            className={
+              zone.id === selectedZoneId
+                ? `${styles.sheetOption} ${styles.sheetOptionActive}`
+                : styles.sheetOption
+            }
+            role="menuitemradio"
+            aria-checked={zone.id === selectedZoneId}
+            disabled={pending}
+            onClick={() => onSelect(zone.id)}
+          >
+            {accent ? (
+              <span
+                aria-hidden="true"
+                className={styles.zoneDot}
+                style={{ background: accent }}
+              />
+            ) : null}
+            {zone.name}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -559,6 +684,13 @@ function DriverQuickControls({
   const sheetSelectedZone =
     status === "ZONE_CONFIRMATION_REQUIRED" ? zoneDraft : markedZone;
 
+  // Цвет кнопки зоны берётся из versioned Bender Zone Registry (не по номеру
+  // вручную). OFFLINE и неподтверждённая зона остаются нейтральными.
+  const zoneAccent =
+    status !== "OFFLINE" && driver.currentZoneId !== null && shownZone !== null
+      ? zoneColor(fromZoneId(shownZone))
+      : null;
+
   return (
     <section aria-label="Управление сменой">
       <div className={styles.quickControls}>
@@ -574,7 +706,15 @@ function DriverQuickControls({
           disabled={pending || zoneDisabled}
           onClick={() => setOpenMenu((m) => (m === "zone" ? null : "zone"))}
         >
-          <MapPin size={16} aria-hidden="true" className={styles.quickButtonIcon} />
+          {zoneAccent ? (
+            <span
+              aria-hidden="true"
+              className={styles.zoneDot}
+              style={{ background: zoneAccent }}
+            />
+          ) : (
+            <MapPin size={16} aria-hidden="true" className={styles.quickButtonIcon} />
+          )}
           <span className={styles.quickButtonText}>{zoneLabel}</span>
           <span aria-hidden="true" className={styles.quickButtonIcon}>
             &#9662;
@@ -843,9 +983,13 @@ function NewOffersSection({
   };
 
   if (offers.length === 0) {
+    const empty = emptyOffersText(driver.status);
     return (
-      <div className={styles.notice} role="status">
-        {emptyOffersText(driver.status)}
+      <div className={styles.emptyOffers} role="status">
+        <span className={styles.emptyOffersTitle}>{empty.title}</span>
+        {empty.subtext ? (
+          <span className={styles.emptyOffersSubtext}>{empty.subtext}</span>
+        ) : null}
       </div>
     );
   }
@@ -930,18 +1074,30 @@ function NewOffersSection({
   );
 }
 
-function emptyOffersText(status: DriverProfile["status"]): string {
+function emptyOffersText(status: DriverProfile["status"]): {
+  title: string;
+  subtext: string | null;
+} {
   switch (status) {
     case "AVAILABLE":
-      return "Новых предложений пока нет. При новом заказе прозвучит сигнал.";
+      return {
+        title: "Новых предложений пока нет",
+        subtext: "При новом заказе прозвучит сигнал.",
+      };
     case "OFFLINE":
-      return "Чтобы получать новые заказы, выйдите онлайн.";
+      return { title: "Чтобы получать новые заказы, выйдите онлайн.", subtext: null };
     case "PAUSED":
-      return "Новые заказы не поступают, пока включена пауза.";
+      return { title: "Новые заказы не поступают, пока включена пауза.", subtext: null };
     case "BUSY_DIRECT":
-      return "Во время выполнения заказа новые предложения не поступают.";
+      return {
+        title: "Во время выполнения заказа новые предложения не поступают.",
+        subtext: null,
+      };
     default:
-      return "Подтвердите текущую зону, чтобы снова получать новые заказы.";
+      return {
+        title: "Подтвердите текущую зону, чтобы снова получать новые заказы.",
+        subtext: null,
+      };
   }
 }
 
@@ -968,7 +1124,7 @@ function ActiveOrderSection({
         </div>
       );
     }
-    return <div className={styles.empty}>Активного заказа нет.</div>;
+    return <div className={styles.emptyActive}>Активного заказа нет.</div>;
   }
 
   return <ActiveOrderCard driverId={driver.id} order={order} zoneName={zoneName} />;

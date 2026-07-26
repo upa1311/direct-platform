@@ -570,6 +570,8 @@ export function createDefaultState(): PrototypeState {
         currentZoneId: null,
         suggestedZoneId: null,
         phone: "+373 777 40001",
+        statusNote: null,
+        statusNoteUpdatedAt: null,
       },
       {
         id: "driver-2",
@@ -579,6 +581,8 @@ export function createDefaultState(): PrototypeState {
         currentZoneId: null,
         suggestedZoneId: null,
         phone: "+373 777 40002",
+        statusNote: null,
+        statusNoteUpdatedAt: null,
       },
       {
         id: "driver-3",
@@ -588,6 +592,8 @@ export function createDefaultState(): PrototypeState {
         currentZoneId: null,
         suggestedZoneId: null,
         phone: "+373 777 40003",
+        statusNote: null,
+        statusNoteUpdatedAt: null,
       },
     ],
     // Предложения создаёт доменный reconciliation после загрузки, а не seed.

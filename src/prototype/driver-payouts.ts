@@ -674,6 +674,8 @@ export interface AdminDriverPayoutEligibleEarning {
 export interface AdminDriverPayoutRow {
   driverId: string;
   driverName: string;
+  /** Добровольная заметка водителя (v27), только для чтения; либо null. */
+  statusNote: string | null;
   eligibleEarnings: AdminDriverPayoutEligibleEarning[];
   dueFromDirectCents: number | null;
   sentAwaitingConfirmationCents: number | null;
@@ -717,6 +719,7 @@ export function getAdminDriverPayoutsView(
     return {
       driverId: driver.id,
       driverName: driver.name,
+      statusNote: driver.statusNote,
       eligibleEarnings: eligible,
       dueFromDirectCents: view.dueFromDirectCents,
       sentAwaitingConfirmationCents: view.sentAwaitingConfirmationCents,

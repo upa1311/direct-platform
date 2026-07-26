@@ -139,6 +139,7 @@ function hasPrototypeStateShape(value: unknown): boolean {
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
   7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+  27,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -911,6 +912,11 @@ function normalizeDriver(value: unknown): PrototypeState["drivers"][number] {
       : raw.status === "BUSY"
         ? "BUSY_DIRECT" // legacy v≤15
         : "OFFLINE"; // безопасный статус для неизвестных значений
+  // v27: добровольная заметка. Валидна только непустая строка ≤120 символов с
+  // валидным ISO-моментом; иначе (в т.ч. schema ≤ 26 без полей) — оба null.
+  const rawNote = typeof raw.statusNote === "string" ? raw.statusNote.trim() : "";
+  const noteOk =
+    rawNote.length > 0 && rawNote.length <= 120 && isValidIso(raw.statusNoteUpdatedAt);
   return {
     id: str(raw.id, ""),
     name: str(raw.name, ""),
@@ -919,6 +925,8 @@ function normalizeDriver(value: unknown): PrototypeState["drivers"][number] {
     phone: str(raw.phone, ""),
     currentZoneId: normalizeDriverZone(raw.currentZoneId),
     suggestedZoneId: normalizeDriverZone(raw.suggestedZoneId),
+    statusNote: noteOk ? rawNote : null,
+    statusNoteUpdatedAt: noteOk ? (raw.statusNoteUpdatedAt as string) : null,
   };
 }
 

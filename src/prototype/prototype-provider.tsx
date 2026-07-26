@@ -39,6 +39,7 @@ import {
   goDriverOnline,
   pauseDriver,
   resumeDriver,
+  updateDriverStatusNote,
   type DriverActionResult,
   markOrderArrivingWithResult,
   markOrderDeliveredWithResult,
@@ -373,6 +374,14 @@ export interface PrototypeContextValue {
     driverId: string,
     payoutBatchId: string,
   ) => Promise<DriverPayoutActionResult>;
+  /**
+   * Добровольная короткая заметка водителя (v27). Пустая строка очищает заметку.
+   * Момент создаётся внутри сериализованной мутации. Только сам водитель.
+   */
+  updateDriverStatusNote: (
+    driverId: string,
+    note: string,
+  ) => Promise<DriverActionResult>;
   /**
    * Полный расчёт всей открытой позиции ресторана (v15). Момент отсечки
    * создаётся ВНУТРИ сериализованной мутации над свежим состоянием — UI его не
@@ -1437,35 +1446,51 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   );
 
   const createDriverPayout = useCallback(
-    (input: CreateDriverPayoutBatchInput) => {
-      // Момент выплаты создаётся ВНУТРИ транзакции над свежим состоянием и
-      // формирует детерминированный id батча — UI его не передаёт.
-      const nowIso = new Date().toISOString();
-      return runSerializedActionMutation({
-        mutation: (baseState) => createDriverPayoutBatch(baseState, input, nowIso),
+    (input: CreateDriverPayoutBatchInput) =>
+      runSerializedActionMutation({
+        // Момент выплаты создаётся ВНУТРИ mutation — после получения lock и чтения
+        // актуального persisted state — и формирует детерминированный id батча;
+        // UI timestamp не передаёт.
+        mutation: (baseState) =>
+          createDriverPayoutBatch(baseState, input, new Date().toISOString()),
         infrastructureFailure: (error) => ({
           ok: false,
           error,
           payoutBatchId: null,
         }),
-      });
-    },
+      }),
     [runSerializedActionMutation],
   );
 
   const confirmDriverPayout = useCallback(
-    (driverId: string, payoutBatchId: string) => {
-      const nowIso = new Date().toISOString();
-      return runSerializedActionMutation({
+    (driverId: string, payoutBatchId: string) =>
+      runSerializedActionMutation({
+        // Момент подтверждения создаётся ВНУТРИ mutation над свежим persisted
+        // state; UI timestamp не передаёт.
         mutation: (baseState) =>
-          confirmDriverPayoutReceipt(baseState, driverId, payoutBatchId, nowIso),
+          confirmDriverPayoutReceipt(
+            baseState,
+            driverId,
+            payoutBatchId,
+            new Date().toISOString(),
+          ),
         infrastructureFailure: (error) => ({
           ok: false,
           error,
           payoutBatchId: null,
         }),
-      });
-    },
+      }),
+    [runSerializedActionMutation],
+  );
+
+  const updateStatusNote = useCallback(
+    (driverId: string, note: string) =>
+      runSerializedActionMutation({
+        // Момент заметки создаётся ВНУТРИ mutation над свежим persisted state.
+        mutation: (baseState) =>
+          updateDriverStatusNote(baseState, driverId, note, new Date().toISOString()),
+        infrastructureFailure: (error) => ({ ok: false, error }),
+      }),
     [runSerializedActionMutation],
   );
 
@@ -2052,6 +2077,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resolveAccountingEntry,
       createDriverPayoutBatch: createDriverPayout,
       confirmDriverPayoutReceipt: confirmDriverPayout,
+      updateDriverStatusNote: updateStatusNote,
       confirmSettlement,
       confirmFullSettlement,
       completePickup,
@@ -2131,6 +2157,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       resolveAccountingEntry,
       createDriverPayout,
       confirmDriverPayout,
+      updateStatusNote,
       confirmSettlement,
       confirmFullSettlement,
       completePickup,

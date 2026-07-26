@@ -5,24 +5,28 @@ import Link from "next/link";
 import kds from "@/components/kitchen/kitchen.module.css";
 import { PageHeading } from "@/components/workspaces/route-content";
 import { useAuthenticatedDriverId } from "@/components/driver/driver-session";
+import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { usePrototype } from "@/prototype/prototype-provider";
 import { formatMoney } from "@/prototype/selectors";
 import {
   getDriverEarningsView,
+  getDriverPeriodEarnings,
   type DriverEarningEntryView,
 } from "@/prototype/driver-earnings";
+import {
+  getDriverPayoutsView,
+  type DriverPayoutBatchView,
+} from "@/prototype/driver-payouts";
 import styles from "../driver.module.css";
 import own from "./settlements.module.css";
 
+const DRIVER_TIME_ZONE = "Europe/Chisinau";
+
 /**
- * Раздел «Расчёты» водителя (финализирован v25). Доступен только при активной
- * сессии; driverId берётся ТОЛЬКО из сессии (не из URL), поэтому водитель видит
- * лишь свои записи.
- *
- * Три РАЗНЫХ итога не складываются и не взаимозачитываются: весь заработок, уже
- * полученная наличными часть и сумма, которую Direct ещё должен выплатить.
- * Водитель никогда не должен Direct. При переполнении итог показывается как «—» и
- * требует проверки, но история доставок сохраняется.
+ * Раздел «Расчёты» водителя (v27). Доступен только при активной сессии; driverId
+ * берётся ТОЛЬКО из сессии (не из URL). Компактная сводка (заработок за периоды,
+ * наличный заработок и суммы выплат Direct), история доставок и история выплат
+ * Direct с подтверждением фактического получения. Null-итог показывается как «—».
  */
 export default function DriverSettlementsPage() {
   const sessionDriverId = useAuthenticatedDriverId();
@@ -44,7 +48,15 @@ export default function DriverSettlementsPage() {
     );
   }
 
+  const nowIso = new Date().toISOString();
   const view = getDriverEarningsView(state, sessionDriverId);
+  const periods = getDriverPeriodEarnings(
+    state,
+    sessionDriverId,
+    nowIso,
+    DRIVER_TIME_ZONE,
+  );
+  const payouts = getDriverPayoutsView(state, sessionDriverId);
   const hasEntries = view.entries.length > 0;
 
   return (
@@ -52,41 +64,48 @@ export default function DriverSettlementsPage() {
       <PageHeading
         eyebrow="Водитель"
         title="Расчёты"
-        description="Заработок по доставкам, наличные выплаты и сумма, которую должен выплатить Direct."
+        description="Заработок по доставкам, наличные выплаты и сумма, которую Direct должен выплатить вам."
       />
 
       <div className={own.wrap}>
         {view.reviewRequired ? (
-          <p className={own.reviewNotice} role="status">
+          <p className={own.reviewNotice} role="alert">
             Некоторые данные расчётов требуют проверки Direct. История доставок
             сохранена.
           </p>
         ) : null}
 
-        <section className={own.summaryGrid} aria-label="Сводка расчётов">
-          <SummaryCard
-            title="Всего заработано"
-            cents={view.totalEarningsCents}
-            hint="Стоимость всех завершённых доставок в журнале."
-          />
-          <SummaryCard
-            title="Получено наличными"
+        <section className={own.summary} aria-label="Сводка расчётов">
+          <SummaryRow label="Заработано сегодня" cents={periods.earningsTodayCents} />
+          <SummaryRow label="Заработано за месяц" cents={periods.earningsMonthCents} />
+          <SummaryRow
+            label="Получено из наличных заказов"
             cents={view.cashReceivedCents}
-            hint="Эту сумму вы уже оставили себе из наличных заказов."
           />
-          <SummaryCard
-            title="К выплате Direct"
-            cents={view.dueFromDirectCents}
-            hint="Оплата безналичных доставок, которую Direct ещё должен вам."
+          <SummaryRow label="Direct должен вам" cents={view.dueFromDirectCents} />
+          <SummaryRow
+            label="Direct отправил — ждёт подтверждения"
+            cents={view.sentByDirectCents}
           />
-          <article className={own.summaryCard}>
-            <span className={own.summaryTitle}>Доставок</span>
+          <SummaryRow label="Получено от Direct" cents={view.receivedFromDirectCents} />
+          <div className={own.summaryRow}>
+            <span className={own.summaryLabel}>Завершённых доставок</span>
             <span className={own.summaryValue}>{view.deliveryCount}</span>
-            <span className={own.summaryHint}>
-              Завершённые доставки в журнале заработка.
-            </span>
-          </article>
+          </div>
         </section>
+
+        {payouts.batches.length > 0 ? (
+          <section aria-label="Выплаты Direct">
+            <h2 className={own.sectionTitle}>Выплаты Direct</h2>
+            <ul className={own.historyList}>
+              {payouts.batches.map((batch) => (
+                <li key={batch.id}>
+                  <PayoutCard driverId={sessionDriverId} batch={batch} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
         {hasEntries ? (
           <section aria-label="История доставок">
@@ -118,19 +137,11 @@ export default function DriverSettlementsPage() {
   );
 }
 
-/** Карточка сводки: null-итог показывается как «—» (не как подтверждённый ноль). */
-function SummaryCard({
-  title,
-  cents,
-  hint,
-}: {
-  title: string;
-  cents: number | null;
-  hint: string;
-}) {
+/** Строка компактной сводки: label слева, сумма справа; null → «—». */
+function SummaryRow({ label, cents }: { label: string; cents: number | null }) {
   return (
-    <article className={own.summaryCard}>
-      <span className={own.summaryTitle}>{title}</span>
+    <div className={own.summaryRow}>
+      <span className={own.summaryLabel}>{label}</span>
       {cents === null ? (
         <span
           className={own.summaryValue}
@@ -141,13 +152,93 @@ function SummaryCard({
       ) : (
         <span className={own.summaryValue}>{formatMoney(cents)}</span>
       )}
-      <span className={own.summaryHint}>{hint}</span>
+    </div>
+  );
+}
+
+const METHOD_LABEL: Record<DriverPayoutBatchView["method"], string> = {
+  BANK_TRANSFER: "На карту",
+  CASH: "Наличными",
+};
+
+/** Карточка одной выплаты Direct с подтверждением фактического получения. */
+function PayoutCard({
+  driverId,
+  batch,
+}: {
+  driverId: string;
+  batch: DriverPayoutBatchView;
+}) {
+  const { confirmDriverPayoutReceipt } = usePrototype();
+  const guard = useMutationGuard();
+  const isBank = batch.method === "BANK_TRANSFER";
+  const confirmed = batch.status === "CONFIRMED_RECEIVED";
+
+  const onConfirm = () => {
+    if (guard.pending) return;
+    void guard.run(async () => {
+      const r = await confirmDriverPayoutReceipt(driverId, batch.id);
+      return { ok: r.ok, error: r.error, changed: r.ok };
+    });
+  };
+
+  return (
+    <article className={own.payoutCard}>
+      <div className={own.historyHead}>
+        <span className={own.orderNumber}>{formatMoney(batch.amountCents)}</span>
+        <span className={own.historyDate}>{formatDate(batch.sentAt)}</span>
+      </div>
+      <div className={own.amountRow}>
+        <span>{METHOD_LABEL[batch.method]}</span>
+        <span className={confirmed ? own.statusConfirmed : own.statusLabel}>
+          {confirmed ? "Расчёт подтверждён" : "Ожидает вашего подтверждения"}
+        </span>
+      </div>
+      <span className={own.payoutMeta}>
+        Доставок: {batch.earningCount} · заработок{" "}
+        {formatDate(batch.firstEarningAt)} — {formatDate(batch.lastEarningAt)}
+      </span>
+      {batch.externalReference !== null ? (
+        <span className={own.payoutMeta}>Операция: {batch.externalReference}</span>
+      ) : null}
+      {batch.note !== null ? (
+        <span className={own.payoutMeta}>Комментарий: {batch.note}</span>
+      ) : null}
+
+      {confirmed ? (
+        <p className={own.payoutConfirmedText} role="status">
+          Вы подтвердили получение {formatMoney(batch.amountCents)} (
+          {METHOD_LABEL[batch.method]})
+          {batch.confirmedAt ? ` — ${formatDate(batch.confirmedAt)}` : ""}.
+        </p>
+      ) : (
+        <>
+          <p className={own.payoutHint}>
+            {isBank
+              ? "Direct отправил деньги на ваш счёт."
+              : "Direct отметил передачу наличных."}{" "}
+            Подтвердите только после фактического получения денег.
+          </p>
+          {guard.error ? (
+            <p className={own.payoutError} role="alert">
+              {guard.error}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className={own.payoutConfirmButton}
+            onClick={onConfirm}
+            disabled={guard.pending}
+          >
+            {isBank ? "Да, деньги получил" : "Да, наличные получил"}
+          </button>
+        </>
+      )}
     </article>
   );
 }
 
-/** Строка истории. Для наличного заказа показаны две физические суммы из
- * неизменяемого cash snapshot; для онлайн — только статус ожидания выплаты. */
+/** Строка истории доставок. Для наличного заказа показаны две физические суммы. */
 function HistoryRow({ row }: { row: DriverEarningEntryView }) {
   const { entry } = row;
   const isCash = row.paymentMethod === "CASH";
@@ -155,9 +246,7 @@ function HistoryRow({ row }: { row: DriverEarningEntryView }) {
     <article className={own.historyCard}>
       <div className={own.historyHead}>
         <span className={own.orderNumber}>Заказ №{row.publicNumber}</span>
-        <span className={own.historyDate}>
-          {formatRecognizedAt(entry.recognizedAt)}
-        </span>
+        <span className={own.historyDate}>{formatDate(entry.recognizedAt)}</span>
       </div>
       <span className={own.restaurantName}>{row.restaurantName}</span>
       <div className={own.amountRow}>
@@ -184,8 +273,8 @@ function HistoryRow({ row }: { row: DriverEarningEntryView }) {
   );
 }
 
-/** Момент признания в понятном локальном формате; при сбое — исходная строка. */
-function formatRecognizedAt(iso: string): string {
+/** Момент в понятном локальном формате; при сбое — исходная строка. */
+function formatDate(iso: string): string {
   try {
     return new Intl.DateTimeFormat("ru-RU", {
       day: "2-digit",

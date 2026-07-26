@@ -41,6 +41,24 @@ export default function AdminDriversPage() {
                     {activeOrder
                       ? ` · заказ ${activeOrder.publicNumber}`
                       : ""}
+                    {driver.statusNote ? (
+                      <em
+                        style={{
+                          display: "block",
+                          marginTop: 4,
+                          fontStyle: "normal",
+                          fontSize: 13,
+                          lineHeight: 1.4,
+                          padding: "6px 10px",
+                          borderRadius: 10,
+                          background: "var(--kds-surface-muted, #eef1ee)",
+                          overflowWrap: "anywhere",
+                        }}
+                        aria-label="Заметка водителя"
+                      >
+                        💬 {driver.statusNote}
+                      </em>
+                    ) : null}
                   </dd>
                 </div>
               );

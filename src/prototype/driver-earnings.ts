@@ -14,6 +14,7 @@ import {
 } from "./platform-driver-cash-collection";
 import { getPlatformDriverCashHandoffView } from "./platform-driver-cash-handoff";
 import { getDriverPayoutsView } from "./driver-payouts";
+import { getLocalDateParts } from "./local-calendar";
 
 /**
  * Единый журнал заработка водителя (v24, финализирован v25).
@@ -771,5 +772,62 @@ export function getDriverEarningsView(
       : payouts.confirmedReceivedCents,
     reviewRequired,
     reviewRequiredOrderCount,
+  };
+}
+
+export interface DriverPeriodEarnings {
+  /** Заработано за локальный календарный день nowIso; null при неизвестной позиции. */
+  earningsTodayCents: number | null;
+  /** Заработано за локальный календарный месяц nowIso; null при неизвестной позиции. */
+  earningsMonthCents: number | null;
+}
+
+/**
+ * Заработок водителя за «сегодня» и «текущий месяц» по DriverEarningEntry.
+ * recognizedAt в заданном часовом поясе (Europe/Chisinau). В расчёт входят ОБА
+ * типа заработка (DIRECT_PAYOUT_DUE и CASH_RETAINED): период отражает
+ * заработанный доход независимо от того, выплатил ли Direct деньги позднее.
+ *
+ * Чистая функция: момент (nowIso) приходит аргументом (без Date.now). Если
+ * позиция журнала неизвестна (общий итог null — проверка/переполнение), периоды
+ * тоже null, чтобы не показывать правдоподобный $0.00. Пустой валидный период — 0.
+ * Суммы — checked arithmetic; переполнение отдельного периода → его null.
+ */
+export function getDriverPeriodEarnings(
+  state: PrototypeState,
+  driverId: string,
+  nowIso: string,
+  timeZone: string,
+): DriverPeriodEarnings {
+  const view = getDriverEarningsView(state, driverId);
+  const nowMs = Date.parse(nowIso);
+  // Неизвестная позиция общего журнала → периоды недостоверны.
+  if (view.totalEarningsCents === null || Number.isNaN(nowMs)) {
+    return { earningsTodayCents: null, earningsMonthCents: null };
+  }
+  const now = getLocalDateParts(nowMs, timeZone);
+  let today = 0;
+  let month = 0;
+  let todayOk = true;
+  let monthOk = true;
+  for (const v of view.entries) {
+    const t = Date.parse(v.entry.recognizedAt);
+    if (Number.isNaN(t)) continue;
+    const p = getLocalDateParts(t, timeZone);
+    if (p.year !== now.year || p.month !== now.month) continue;
+    if (monthOk) {
+      const next = addChecked(month, v.entry.amountCents);
+      if (next === null) monthOk = false;
+      else month = next;
+    }
+    if (p.day === now.day && todayOk) {
+      const next = addChecked(today, v.entry.amountCents);
+      if (next === null) todayOk = false;
+      else today = next;
+    }
+  }
+  return {
+    earningsTodayCents: todayOk ? today : null,
+    earningsMonthCents: monthOk ? month : null,
   };
 }

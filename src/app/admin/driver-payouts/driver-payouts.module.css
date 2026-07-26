@@ -1,0 +1,323 @@
+/* Выплаты водителям (админ). Компактно, без широких таблиц: карточка на
+   водителя, выбор заработков чекбоксами, история батчей. Наследует KDS-токены. */
+
+.muted {
+  margin: 0;
+  color: var(--kds-muted, #66706a);
+  font-size: 14px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.driverCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 14px;
+  background: var(--kds-surface, #fff);
+}
+
+.driverHead {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.driverName {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.noteBubble {
+  margin: 0;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--kds-surface-muted, #eef1ee);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 0;
+}
+
+.totalItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.totalLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kds-muted, #66706a);
+}
+
+.totalValue {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.review {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-left: 4px solid var(--kds-warning, #b45309);
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.selector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 12px;
+  min-width: 0;
+}
+
+.selectorLegend {
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--kds-muted, #66706a);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filterButton {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 999px;
+  background: var(--kds-surface, #fff);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.earningList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.earningRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.earningRow:hover {
+  background: var(--kds-surface-muted, #eef1ee);
+}
+
+.earningRow input {
+  margin-top: 3px;
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.earningText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.earningMeta {
+  font-size: 12px;
+  color: var(--kds-muted, #66706a);
+}
+
+.earningAmount {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.methodRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.methodOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.methodOption input {
+  width: 18px;
+  height: 18px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--kds-muted, #66706a);
+  min-width: 0;
+}
+
+.field input {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--kds-text, #1f2723);
+  min-width: 0;
+}
+
+.error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--kds-danger, #b91c1c);
+  overflow-wrap: anywhere;
+}
+
+.submit {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1px solid var(--kds-accent, #ea6a1e);
+  border-radius: 12px;
+  background: var(--kds-accent, #ea6a1e);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.batchHistory {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.historyTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.batchList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.batchCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 10px;
+}
+
+.batchHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+
+.batchAmount {
+  font-size: 15px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.batchDate {
+  font-size: 13px;
+  color: var(--kds-muted, #66706a);
+  white-space: nowrap;
+}
+
+.batchMeta {
+  font-size: 13px;
+  color: var(--kds-muted, #66706a);
+  overflow-wrap: anywhere;
+}
+
+.batchAwaiting {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--kds-muted, #66706a);
+  overflow-wrap: anywhere;
+}
+
+.batchConfirmed {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--kds-success, #15803d);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 400px) {
+  .submit,
+  .filterButton {
+    align-self: stretch;
+    width: 100%;
+    text-align: center;
+  }
+}

@@ -4288,6 +4288,51 @@ export function confirmDriverZone(
 }
 
 /**
+ * Добровольная короткая оперативная заметка водителя (v27). Заметку пишет и
+ * удаляет ТОЛЬКО сам водитель; администратор её только читает. Она НЕ влияет на
+ * автоматическое распределение заказов, не является паузой и не системный статус.
+ *
+ * trim: пустая строка очищает заметку (оба поля null); не более 120 символов
+ * после trim (иначе fail-closed без мутации). Повтор идентичной заметки —
+ * идемпотентный success no-op без роста ревизии. Ни заказы, ни предложения, ни
+ * зона, ни заработок/выплаты не меняются. Момент приходит аргументом.
+ */
+export function updateDriverStatusNote(
+  state: PrototypeState,
+  driverId: string,
+  note: string,
+  nowIso: string,
+): ActionResult<DriverActionResult> {
+  const driver = state.drivers.find((d) => d.id === driverId);
+  if (!driver) return driverFail(state, "Водитель не найден.");
+  if (typeof nowIso !== "string" || Number.isNaN(Date.parse(nowIso))) {
+    return driverFail(state, "Некорректное время операции.");
+  }
+  const trimmed = typeof note === "string" ? note.trim() : "";
+  if (trimmed.length > 120) {
+    return driverFail(state, "Заметка слишком длинная — не более 120 символов.");
+  }
+  const nextNote = trimmed.length === 0 ? null : trimmed;
+  // Идемпотентный no-op: та же заметка — тот же state, без роста ревизии.
+  if (driver.statusNote === nextNote) {
+    return driverOk(state);
+  }
+  return driverOk(
+    finalizeMutation(
+      state,
+      {
+        ...state,
+        drivers: updateDriver(state.drivers, driverId, {
+          statusNote: nextNote,
+          statusNoteUpdatedAt: nextNote === null ? null : nowIso,
+        }),
+      },
+      nowIso,
+    ),
+  );
+}
+
+/**
  * Compatibility-wrapper прежнего булева переключателя смены. Второй независимой
  * логики доступности не существует: вызов делегируется каноническим действиям.
  *  - `online === false` → `goDriverOffline`;

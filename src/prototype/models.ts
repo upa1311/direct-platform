@@ -7,7 +7,7 @@ import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 import type { OrderZoneSnapshot } from "@/lib/zones/types";
 
-export const PROTOTYPE_SCHEMA_VERSION = 26 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 27 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -586,6 +586,16 @@ export interface DriverProfile {
   currentZoneId: ZoneId | null;
   /** Зона завершённого заказа, предложенная для подтверждения. */
   suggestedZoneId: ZoneId | null;
+  /**
+   * Добровольная короткая оперативная заметка водителя (v27, ≤120 символов) либо
+   * null. Пример: «Жду заказ, отправьте мне первому». Заметку пишет и удаляет
+   * только сам водитель; администратор её только читает. Она НЕ влияет на
+   * автоматическое распределение заказов, не является паузой и не системный
+   * статус.
+   */
+  statusNote: string | null;
+  /** Момент последнего изменения заметки, либо null. */
+  statusNoteUpdatedAt: string | null;
 }
 
 /**

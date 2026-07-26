@@ -179,14 +179,15 @@ test("36: есть компактная верхняя панель статус
   assert.ok(WORKSPACE.includes("quickControls"));
   for (const label of [
     "Выйти онлайн",
-    "Онлайн",
-    "Пауза",
     "Возобновить",
     "Поставить на паузу",
     "Выйти из сети",
   ]) {
     assert.ok(WORKSPACE.includes(label), label);
   }
+  // v27: дублирующая строка «Онлайн · Зона» под именем убрана.
+  assert.ok(!WORKSPACE.includes("Онлайн · "));
+  assert.ok(!WORKSPACE.includes("statusZoneSummary"));
   // Отдельной большой карточки со статусом и «Изменить зону» больше нет.
   assert.ok(!WORKSPACE.includes("Изменить зону"));
   assert.ok(!WORKSPACE.includes("StatusZoneControl"));
@@ -270,7 +271,7 @@ test("Расчёты доступны только при сессии, без �
 // --- Regression ---------------------------------------------------------------
 
 test("63: schema остаётся 18 (не понижается этим UI-микробатчем)", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 26);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
 });
 
 test("64–65: driver offers домен и срок 30 секунд не изменены", () => {
@@ -530,7 +531,7 @@ test("h23: lifecycle-кнопки и прогресс 2×2 не ухудшены
 });
 
 test("h24: schema остаётся 18; наличные выключены", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 26);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
   assert.equal(
     createDefaultState().platformSettings.platformDriverCashEnabled,
     false,

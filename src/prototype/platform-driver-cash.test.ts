@@ -610,7 +610,7 @@ test("P19: обычный новый ONLINE order создаётся с platform
 // --- 29–40: регрессии («наличные остаются выключенными») ----------------------
 
 test("29: schema равна 19", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 26);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
 });
 
 test("30: platformDriverCashEnabled остаётся false", () => {

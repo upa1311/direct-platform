@@ -467,20 +467,176 @@
   }
 }
 
+/* Имя — главный визуальный якорь: крупнее, жирнее, оранжевый brand-акцент. */
 .driverName {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  font-size: 18px;
-  font-weight: 750;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--accent, #d56c2d);
   overflow-wrap: anywhere;
 }
 
-/* Значок роли водителя — компактный, выровнен с текстом, не сжимается. */
+/* Значок роли водителя — тот же оранжевый акцент, выровнен с текстом. */
 .driverNameIcon {
   flex: 0 0 auto;
+  color: var(--accent, #d56c2d);
+}
+
+/* Цветная точка зоны из versioned Bender Zone Registry (цвет — inline style). */
+.zoneDot {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+/* Постоянный информационный badge доступа к наличным — не кнопка. */
+.cashBadgeOn,
+.cashBadgeOff {
+  align-self: flex-start;
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.cashBadgeOn {
+  color: var(--kds-success, #1f6b45);
+  background: color-mix(in srgb, var(--kds-success, #1f6b45) 14%, transparent);
+}
+
+.cashBadgeOff {
   color: var(--kds-muted, #66706a);
+  background: var(--kds-surface-muted, #eef1ee);
+}
+
+/* Облако добровольной заметки водителя — лёгкое сообщение, не ошибка. */
+.noteBubble {
+  margin: 0;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--kds-surface-muted, #eef1ee);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* --- Редактор заметки (sheet) --------------------------------------------- */
+
+.noteEditorDescription {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--kds-muted, #66706a);
+}
+
+.noteEditorField {
+  display: block;
+  min-width: 0;
+}
+
+.noteEditorTextarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 76px;
+  padding: 10px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 15px;
+  resize: vertical;
+  color: var(--kds-text, #1f2723);
+}
+
+.noteEditorCounter {
+  align-self: flex-end;
+  font-size: 12px;
+  color: var(--kds-muted, #66706a);
+  font-variant-numeric: tabular-nums;
+}
+
+.noteEditorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.noteEditorSave {
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1px solid var(--accent, #d56c2d);
+  border-radius: 12px;
+  background: var(--accent, #d56c2d);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.noteEditorDelete {
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 12px;
+  background: var(--kds-surface, #fff);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.noteEditorSave:disabled,
+.noteEditorDelete:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Компактные пустые состояния — без тяжёлой рамки и чёрной полосы слева. */
+.emptyOffers {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 2px;
+  min-width: 0;
+}
+
+.emptyOffersTitle {
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.emptyOffersSubtext {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--kds-muted, #66706a);
+  overflow-wrap: anywhere;
+}
+
+.emptyActive {
+  padding: 10px 2px;
+  font-size: 14px;
+  color: var(--kds-muted, #66706a);
+  overflow-wrap: anywhere;
 }
 
 .statusValue {
