@@ -78,6 +78,74 @@ function cssRule(selector: string): string {
 const count = (haystack: string, needle: string): number =>
   haystack.split(needle).length - 1;
 
+test("профиль отделён от быстрых controls локальным отступом", () => {
+  const profileStart = WORKSPACE.indexOf(
+    "<ProfileLine driver={driver} todayTime={todayTime} />",
+  );
+  const wrapperStart = WORKSPACE.indexOf(
+    '<div className={styles.quickControlsSpacing}>',
+  );
+  const controlsStart = WORKSPACE.indexOf("<DriverQuickControls", wrapperStart);
+  const profileFunctionStart = WORKSPACE.indexOf("function ProfileLine");
+  const profileFunctionEnd = WORKSPACE.indexOf(
+    "const ACCOUNT_MENU_ID",
+    profileFunctionStart,
+  );
+  const wrapperEnd = WORKSPACE.indexOf("</div>", controlsStart);
+  const countersStart = WORKSPACE.indexOf(
+    '<div className={styles.workBar}>',
+    wrapperEnd,
+  );
+
+  assert.ok(profileStart !== -1);
+  assert.ok(wrapperStart > profileStart);
+  assert.ok(wrapperStart !== -1);
+  assert.ok(controlsStart > wrapperStart);
+  assert.ok(wrapperEnd > controlsStart);
+  assert.ok(countersStart > wrapperEnd);
+
+  const spacingRule = cssRule(".quickControlsSpacing");
+  assert.ok(spacingRule.includes("margin-top: 8px"));
+  assert.ok(spacingRule.includes("min-width: 0"));
+  const spacingDeclarations = spacingRule
+    .split(";")
+    .map((declaration) => declaration.trim());
+  assert.ok(
+    !spacingDeclarations.some((declaration) =>
+      declaration.startsWith("transform:"),
+    ),
+  );
+  assert.ok(
+    !spacingDeclarations.some((declaration) => declaration.startsWith("top:")),
+  );
+  assert.ok(!spacingRule.includes("position: absolute"));
+  assert.ok(!spacingRule.includes("position: relative"));
+
+  for (const unchanged of [
+    "Сейчас онлайн",
+    "Сейчас на паузе",
+    "driverGoOnline(driver.id, zoneDraft)",
+    "driverChangeZone(driver.id, zoneId)",
+    "driverPause(driver.id)",
+    "driverResume(driver.id)",
+  ]) {
+    assert.ok(WORKSPACE.includes(unchanged), unchanged);
+  }
+
+  const countersRule = cssRule(".workCounters");
+  assert.ok(
+    countersRule.includes(
+      "grid-template-columns: minmax(92px, 1fr) minmax(92px, 1fr) 44px",
+    ),
+  );
+  assert.ok(
+    WORKSPACE.slice(profileFunctionStart, profileFunctionEnd).includes(
+      "driverTimeSummary",
+    ),
+  );
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
+});
+
 // --- Сессия -------------------------------------------------------------------
 
 test("13: используется ключ direct-driver-session-id", () => {

@@ -77,6 +77,11 @@
   min-width: 0;
 }
 
+.quickControlsSpacing {
+  margin-top: 8px;
+  min-width: 0;
+}
+
 .workBar {
   display: flex;
   flex-wrap: wrap;

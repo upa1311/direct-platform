@@ -202,7 +202,12 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
       <ProfileLine driver={driver} todayTime={todayTime} />
 
       {/* Компактная верхняя панель: статус, зона, колокольчик — в одной строке. */}
-      <DriverQuickControls driver={driver} zoneName={zoneName} />
+      <div className={styles.quickControlsSpacing}>
+        <DriverQuickControls
+          driver={driver}
+          zoneName={zoneName}
+        />
+      </div>
 
       {/* Счётчики сразу под панелью. Колокольчик один — он в панели выше. */}
       <div className={styles.workBar}>
