@@ -27,4 +27,4 @@
 .zoneMarker { width: 10px; height: 10px; border: 1px solid rgba(0,0,0,.25); border-radius: 50%; }
 .neutralMarker { background: #aeb7b1; }
 @media (min-width: 680px) { .metricGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); } .resultGrid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
-@media (max-width: 520px) { .page { padding-top: 0; margin-top: -12px; } .infoCard, .section { padding: 12px; } .zoneList li { grid-template-columns: 12px minmax(0, 1fr) auto; } .zoneList small { grid-column: 2 / -1; text-align: left; } }
+@media (max-width: 520px) { .page { padding-top: 0; } .header h1 { font-size: 30px; } .infoCard, .section { padding: 12px; } .zoneList li { grid-template-columns: 12px minmax(0, 1fr) auto; } .zoneList small { grid-column: 2 / -1; text-align: left; } }

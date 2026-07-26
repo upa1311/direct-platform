@@ -66,9 +66,14 @@ export function zoneShare(durationMs: number, onlineDurationMs: number | null): 
 
 export function sumAvailableDurations(values: readonly (number | null)[]): number | null {
   if (values.some((value) => value === null)) return null;
+  return checkedSumIntegers(values as readonly number[]);
+}
+
+export function checkedSumIntegers(values: readonly number[]): number | null {
   let total = 0;
   for (const value of values) {
-    const next = total + (value as number);
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    const next = total + value;
     if (!Number.isSafeInteger(next)) return null;
     total = next;
   }

@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  checkedSumIntegers,
   formatAnalyticsDuration,
   formatDeliveriesPerHour,
   formatResponseTime,
   formatUtilization,
+  sumAvailableDurations,
 } from "./analytics-presentation.ts";
 
 const read = (path: string) => readFileSync(path, "utf8");
@@ -40,10 +42,20 @@ test("форматы duration, response time, utilization и deliveries/hour", (
   assert.equal(formatDeliveriesPerHour(2000), "2");
 });
 
+test("checked presentation sums отклоняют null, unsafe values и overflow", () => {
+  assert.equal(sumAvailableDurations([10, 20, 30]), 60);
+  assert.equal(sumAvailableDurations([10, null, 30]), null);
+  assert.equal(checkedSumIntegers([2, 3, 5]), 10);
+  assert.equal(checkedSumIntegers([Number.MAX_SAFE_INTEGER, 1]), null);
+  assert.equal(checkedSumIntegers([1.5]), null);
+});
+
 test("водительская навигация и route используют только authenticated driver id", () => {
   assert.ok(DRIVER_HEADER.includes('{ href: "/driver/statistics", label: "Статистика" }'));
   assert.ok(DRIVER_PAGE.includes("useAuthenticatedDriverId"));
   assert.ok(DRIVER_PAGE.includes("getDriverShiftAnalyticsView(state, driverId"));
+  assert.ok(DRIVER_PAGE.includes("state, isHydrated"));
+  assert.ok(DRIVER_PAGE.includes("!isHydrated || nowMs === 0"));
   assert.ok(!DRIVER_PAGE.includes("searchParams"));
   assert.ok(DRIVER_PAGE.includes("if (driverId === null)"));
 });
@@ -59,6 +71,13 @@ test("единый period selector доступен и контрастен", ()
 
 test("driver analytics показывает честные состояния и принятые read-model metrics", () => {
   assert.ok(DRIVER_PAGE.includes("Учёт времени ещё не начался"));
+  assert.ok(DRIVER_PAGE.includes("const hasCoverage"));
+  assert.ok(DRIVER_PAGE.includes("showPaused"));
+  assert.ok(DRIVER_PAGE.includes("view.pausedDurationMs !== null && view.pausedDurationMs > 0"));
+  assert.ok(DRIVER_PAGE.includes("showZoneConfirmation"));
+  assert.ok(DRIVER_PAGE.includes("Данные времени по зонам пока недоступны"));
+  assert.ok(!DRIVER_PAGE.includes("view.unassignedZoneDurationMs ?? 0"));
+  assert.ok(DRIVER_PAGE.includes("Подтверждённых данных о предложениях за период нет"));
   assert.ok(DRIVER_PAGE.includes("coverageIncomplete"));
   assert.ok(DRIVER_PAGE.includes("Некоторые данные требуют проверки Direct"));
   assert.ok(DRIVER_PAGE.includes("earningsPerOnlineHourCents"));
@@ -76,6 +95,16 @@ test("admin navigation, route card и analytics route подключены", () 
   assert.ok(drivers < analytics && analytics < payouts);
   assert.ok(ADMIN_HOME.includes('href: "/admin/driver-analytics"'));
   assert.ok(ADMIN_PAGE.includes("getAdminDriverShiftAnalyticsView"));
+  assert.ok(ADMIN_PAGE.includes("state, isHydrated"));
+  assert.ok(ADMIN_PAGE.includes("!isHydrated || nowMs === 0"));
+  assert.ok(ADMIN_PAGE.includes("Водители не добавлены"));
+  assert.ok(ADMIN_PAGE.includes("Недостаточно данных для полного итога"));
+  assert.ok(ADMIN_PAGE.includes("checkedSumIntegers"));
+  assert.ok(ADMIN_PAGE.includes("Учёт времени ещё не начался"));
+  assert.ok(ADMIN_PAGE.includes("Учёт ведётся с"));
+  assert.ok(ADMIN_PAGE.includes("Данные времени по зонам недоступны"));
+  assert.ok(ADMIN_PAGE.includes("Активного времени в зонах нет"));
+  assert.ok(!ADMIN_PAGE.includes("unassignedZoneDurationMs ?? 0"));
   assert.ok(ADMIN_PAGE.includes("DRIVER_STATUS_LABELS"));
   assert.ok(ADMIN_PAGE.includes("Неполный период"));
   assert.ok(ADMIN_PAGE.includes("Требует проверки"));
