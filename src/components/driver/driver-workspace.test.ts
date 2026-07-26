@@ -400,13 +400,18 @@ test("h1: статусная кнопка оборачивает подпись 
   assert.ok(before.includes("quickButtonStatusText"), "подпись статуса в span");
 });
 
-test("h2: OFFLINE — короткая подпись «В сеть»", () => {
-  assert.ok(WORKSPACE.includes(">В сеть</span>"));
+test("h2: OFFLINE — видимая подпись состояния «Сейчас не в сети»", () => {
+  assert.ok(WORKSPACE.includes(">Сейчас не в сети</span>"));
+  // Старые подписи-действия убраны.
+  assert.ok(!WORKSPACE.includes(">В сеть</span>"));
+  assert.ok(!WORKSPACE.includes(">Выйти онлайн</span>"));
 });
 
-test("h3: OFFLINE сохраняет полный aria-label «Выйти онлайн»", () => {
-  assert.ok(WORKSPACE.includes('aria-label="Выйти онлайн"'));
-  assert.ok(WORKSPACE.includes(">Выйти онлайн</span>"));
+test("h3: OFFLINE — aria-label объясняет действие выхода онлайн", () => {
+  assert.ok(WORKSPACE.includes('aria-label="Выйти онлайн и начать получать заказы"'));
+  assert.ok(WORKSPACE.includes('title="Нажмите, чтобы выйти онлайн"'));
+  // Действие сохранено: клик выполняет driverGoOnline с выбранной zoneDraft.
+  assert.ok(WORKSPACE.includes("driverGoOnline(driver.id, zoneDraft)"));
 });
 
 test("h4: ZONE_CONFIRMATION_REQUIRED — короткая подпись «Подтвердить»", () => {

@@ -40,12 +40,12 @@ import {
   useAuthenticatedDriverId,
   writeAuthenticatedDriverId,
 } from "./driver-session";
-import { BellOff, BellRing, CarFront, MapPin } from "lucide-react";
+import { Banknote, BellOff, BellRing, CarFront, CreditCard, MapPin } from "lucide-react";
 
 import { useDriverOfferSoundPreference } from "./driver-offer-sound";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
 import { driverOrderZoneView } from "@/lib/zones/driver-zone-view";
-import { zoneColor, fromZoneId } from "@/lib/zones/zone-registry";
+import { getZoneButtonPresentation } from "@/lib/zones/zone-presentation";
 import { useDismissable } from "./use-popover";
 import { DriverControlSheet } from "./driver-control-sheet";
 import styles from "@/app/driver/driver.module.css";
@@ -209,20 +209,43 @@ function ProfileLine({ driver }: { driver: DriverProfile }) {
     <section className={styles.profileLine} aria-label="Профиль водителя">
       <div className={styles.profileText}>
         {driver.statusNote ? (
-          <p className={styles.noteBubble} aria-label="Ваша заметка для Direct">
-            {driver.statusNote}
-          </p>
+          <>
+            <p className={styles.noteBubble} aria-label="Ваша заметка для Direct">
+              {driver.statusNote}
+            </p>
+            {/* Дорожка «мыслей» ведёт от иконки машины к облаку заметки. */}
+            <span className={styles.thoughtTrail} aria-hidden="true">
+              <span className={styles.thoughtDot} />
+              <span className={styles.thoughtDot} />
+            </span>
+          </>
         ) : null}
         <span className={styles.driverName}>
           <CarFront size={22} aria-hidden="true" className={styles.driverNameIcon} />
-          Водитель {getDriverDisplayName(driver)}
+          <span className={styles.driverNameText}>
+            Водитель {getDriverDisplayName(driver)}
+          </span>
         </span>
+        {/* Компактная информационная строка о способах оплаты (не кнопка),
+            сдвинута правее иконки машины. Иконки декоративные (aria-hidden). */}
         <span
           className={
-            driver.cashEnabled ? styles.cashBadgeOn : styles.cashBadgeOff
+            driver.cashEnabled ? styles.cashAccessOn : styles.cashAccessOff
           }
         >
-          {driver.cashEnabled ? "Наличные доступны" : "Только безналичные заказы"}
+          {driver.cashEnabled ? (
+            <>
+              {/* Допуск ИМЕННО к наличным заказам — только иконка Banknote, без
+                  карты (это не полный список способов оплаты клиента). */}
+              <Banknote size={15} aria-hidden="true" className={styles.cashAccessIcon} />
+              Доступны наличные заказы
+            </>
+          ) : (
+            <>
+              <CreditCard size={15} aria-hidden="true" className={styles.cashAccessIcon} />
+              Только безналичные заказы
+            </>
+          )}
         </span>
       </div>
       <ProfileMenu driver={driver} />
@@ -496,29 +519,41 @@ function ZoneOptions({
   return (
     <div className={styles.sheetOptions} role="menu">
       {zones.map((zone) => {
-        const accent = zoneColor(fromZoneId(zone.id));
+        // Каждая кнопка зоны — своим цветом из versioned Bender Zone Registry
+        // (тот же presentation helper, что и кнопка текущей зоны). Цвет не
+        // единственный сигнал: остаются MapPin, название и маркер выбора.
+        const presentation = getZoneButtonPresentation(zone.id);
+        const selected = zone.id === selectedZoneId;
         return (
           <button
             key={zone.id}
             type="button"
             className={
-              zone.id === selectedZoneId
-                ? `${styles.sheetOption} ${styles.sheetOptionActive}`
-                : styles.sheetOption
+              selected
+                ? `${styles.zoneOption} ${styles.zoneOptionSelected}`
+                : styles.zoneOption
+            }
+            style={
+              presentation
+                ? {
+                    background: presentation.backgroundColor,
+                    color: presentation.foregroundColor,
+                    borderColor: presentation.borderColor,
+                  }
+                : undefined
             }
             role="menuitemradio"
-            aria-checked={zone.id === selectedZoneId}
+            aria-checked={selected}
             disabled={pending}
             onClick={() => onSelect(zone.id)}
           >
-            {accent ? (
-              <span
-                aria-hidden="true"
-                className={styles.zoneDot}
-                style={{ background: accent }}
-              />
+            <MapPin size={16} aria-hidden="true" className={styles.zoneOptionIcon} />
+            <span className={styles.zoneOptionName}>{zone.name}</span>
+            {selected ? (
+              <span aria-hidden="true" className={styles.zoneOptionCheck}>
+                ✓
+              </span>
             ) : null}
-            {zone.name}
           </button>
         );
       })}
@@ -583,18 +618,19 @@ function DriverQuickControls({
   // Подпись кнопки статуса и её поведение зависят от статуса.
   const statusButton = () => {
     if (status === "OFFLINE") {
+      // Видимый текст описывает СОСТОЯНИЕ (серая нейтральная кнопка), а действие
+      // выхода онлайн объясняет aria-label/title. Нажатие по-прежнему выполняет
+      // driverGoOnline — кнопка кликабельна, не disabled по состоянию.
       return (
         <button
           type="button"
-          className={styles.quickButton}
-          aria-label="Выйти онлайн"
+          className={`${styles.quickButton} ${styles.quickButtonOffline}`}
+          aria-label="Выйти онлайн и начать получать заказы"
+          title="Нажмите, чтобы выйти онлайн"
           disabled={pending}
           onClick={() => void run(() => driverGoOnline(driver.id, zoneDraft))}
         >
-          <span className={styles.quickButtonText}>
-            <span className={styles.mobileControlLabel}>В сеть</span>
-            <span className={styles.regularControlLabel}>Выйти онлайн</span>
-          </span>
+          <span className={styles.quickButtonStatusText}>Сейчас не в сети</span>
         </button>
       );
     }
@@ -684,11 +720,12 @@ function DriverQuickControls({
   const sheetSelectedZone =
     status === "ZONE_CONFIRMATION_REQUIRED" ? zoneDraft : markedZone;
 
-  // Цвет кнопки зоны берётся из versioned Bender Zone Registry (не по номеру
-  // вручную). OFFLINE и неподтверждённая зона остаются нейтральными.
-  const zoneAccent =
+  // Кнопка текущей зоны целиком окрашивается в цвет реальной зоны из versioned
+  // Bender Zone Registry (не по номеру вручную): фон, рамка и контрастный текст.
+  // OFFLINE и неподтверждённая зона остаются нейтральными.
+  const zonePresentation =
     status !== "OFFLINE" && driver.currentZoneId !== null && shownZone !== null
-      ? zoneColor(fromZoneId(shownZone))
+      ? getZoneButtonPresentation(shownZone)
       : null;
 
   return (
@@ -699,22 +736,28 @@ function DriverQuickControls({
         <button
           type="button"
           ref={zoneTriggerRef}
-          className={styles.quickButton}
+          className={
+            zonePresentation
+              ? `${styles.quickButton} ${styles.quickButtonZone}`
+              : styles.quickButton
+          }
+          style={
+            zonePresentation
+              ? {
+                  background: zonePresentation.backgroundColor,
+                  color: zonePresentation.foregroundColor,
+                  borderColor: zonePresentation.borderColor,
+                }
+              : undefined
+          }
           aria-haspopup="dialog"
           aria-expanded={openMenu === "zone"}
           aria-controls={ZONE_MENU_ID}
           disabled={pending || zoneDisabled}
           onClick={() => setOpenMenu((m) => (m === "zone" ? null : "zone"))}
         >
-          {zoneAccent ? (
-            <span
-              aria-hidden="true"
-              className={styles.zoneDot}
-              style={{ background: zoneAccent }}
-            />
-          ) : (
-            <MapPin size={16} aria-hidden="true" className={styles.quickButtonIcon} />
-          )}
+          {/* Иконка-капля местоположения остаётся всегда, поверх цвета зоны. */}
+          <MapPin size={16} aria-hidden="true" className={styles.quickButtonIcon} />
           <span className={styles.quickButtonText}>{zoneLabel}</span>
           <span aria-hidden="true" className={styles.quickButtonIcon}>
             &#9662;
@@ -753,7 +796,7 @@ function DriverQuickControls({
       {/* Overlay-лист статуса (AVAILABLE/PAUSED): действия сменой, не flow-блок. */}
       <DriverControlSheet
         open={openMenu === "status"}
-        title="Статус смены"
+        title="Изменить статус"
         onClose={closeSheet}
         triggerRef={statusTriggerRef}
       >
@@ -1085,7 +1128,7 @@ function emptyOffersText(status: DriverProfile["status"]): {
         subtext: "При новом заказе прозвучит сигнал.",
       };
     case "OFFLINE":
-      return { title: "Чтобы получать новые заказы, выйдите онлайн.", subtext: null };
+      return { title: "Чтобы получать новые заказы, будьте онлайн.", subtext: null };
     case "PAUSED":
       return { title: "Новые заказы не поступают, пока включена пауза.", subtext: null };
     case "BUSY_DIRECT":

@@ -13,8 +13,17 @@ import {
   validatePreparedPlatformDriverCashCompletion,
 } from "./platform-driver-cash-collection";
 import { getPlatformDriverCashHandoffView } from "./platform-driver-cash-handoff";
-import { getDriverPayoutsView } from "./driver-payouts";
-import { getLocalDateParts } from "./local-calendar";
+import {
+  getDriverPayoutsView,
+  getDriverEarningPayoutStates,
+  type DriverEarningPayoutState,
+} from "./driver-payouts";
+import {
+  getLocalDateParts,
+  shiftCalendarDate,
+  compareLocalDate,
+  type LocalDateParts,
+} from "./local-calendar";
 
 /**
  * Единый журнал заработка водителя (v24, финализирован v25).
@@ -829,5 +838,185 @@ export function getDriverPeriodEarnings(
   return {
     earningsTodayCents: todayOk ? today : null,
     earningsMonthCents: monthOk ? month : null,
+  };
+}
+
+// --- Read-model «Расчёты» по выбранному периоду (v27, repair) -----------------
+
+/**
+ * Период сводки «Расчёты». Локальное UI-состояние — в PrototypeState НЕ хранится.
+ */
+export type DriverEarningsPeriod =
+  | "TODAY"
+  | "LAST_7_DAYS"
+  | "CURRENT_MONTH"
+  | "ALL_TIME";
+
+/**
+ * Итоги и история «Расчётов» за выбранный период. Все показатели считаются по
+ * DriverEarningEntry.recognizedAt в рабочем часовом поясе (Europe/Chisinau), а
+ * не по времени заказа/выплаты и не по timezone устройства. Суммы выплат Direct
+ * (due/sent/received) относятся к earnings ВЫБРАННОГО периода: батч, покрывающий
+ * несколько периодов, делится по earnings и не копируется целиком в каждый.
+ */
+export interface DriverSettlementPeriodView {
+  period: DriverEarningsPeriod;
+  entries: DriverEarningEntryView[];
+  completedDeliveryCount: number;
+  earnedCents: number | null;
+  cashReceivedCents: number | null;
+  dueFromDirectCents: number | null;
+  sentByDirectCents: number | null;
+  receivedFromDirectCents: number | null;
+  reviewRequired: boolean;
+}
+
+/** Входит ли календарная дата entry в выбранный период относительно now. */
+function isInPeriod(
+  entryParts: LocalDateParts,
+  now: LocalDateParts,
+  period: DriverEarningsPeriod,
+): boolean {
+  switch (period) {
+    case "TODAY":
+      return compareLocalDate(entryParts, now) === 0;
+    case "LAST_7_DAYS": {
+      // Сегодня и шесть предыдущих локальных календарных дней (не 168 часов).
+      const lower = shiftCalendarDate(now, -6);
+      return (
+        compareLocalDate(entryParts, lower) >= 0 &&
+        compareLocalDate(entryParts, now) <= 0
+      );
+    }
+    case "CURRENT_MONTH":
+      return entryParts.year === now.year && entryParts.month === now.month;
+    case "ALL_TIME":
+      return true;
+    default:
+      return false;
+  }
+}
+
+const emptyPeriodView = (
+  period: DriverEarningsPeriod,
+  reviewRequired: boolean,
+): DriverSettlementPeriodView => ({
+  period,
+  entries: [],
+  completedDeliveryCount: 0,
+  earnedCents: null,
+  cashReceivedCents: null,
+  dueFromDirectCents: null,
+  sentByDirectCents: null,
+  receivedFromDirectCents: null,
+  reviewRequired,
+});
+
+/**
+ * Сводка «Расчётов» водителя за выбранный период. Чистая функция: момент (nowIso)
+ * приходит аргументом. Фильтрует валидные записи заработка по recognizedAt в
+ * timeZone, считает checked-суммами: earned (оба типа), cashReceived
+ * (CASH_RETAINED) и три раздельных итога выплат Direct по каноническому статусу
+ * каждой earning (DUE / SENT / RECEIVED). При неизвестной финансовой позиции все
+ * итоги null (история валидных entries сохраняется); при конфликте payout-данных
+ * null становятся только due/sent/received; чистое переполнение одного итога
+ * обнуляет только его. Ложный $0.00 не показывается.
+ */
+export function getDriverSettlementPeriodView(
+  state: PrototypeState,
+  driverId: string,
+  period: DriverEarningsPeriod,
+  nowIso: string,
+  timeZone: string,
+): DriverSettlementPeriodView {
+  if (!state.drivers.some((d) => d.id === driverId)) {
+    return emptyPeriodView(period, false);
+  }
+  const nowMs = Date.parse(nowIso);
+  if (Number.isNaN(nowMs)) return emptyPeriodView(period, true);
+
+  const view = getDriverEarningsView(state, driverId);
+  const payouts = getDriverPayoutsView(state, driverId);
+  const stateById = new Map<string, DriverEarningPayoutState>();
+  for (const s of getDriverEarningPayoutStates(state, driverId)) {
+    stateById.set(s.earningEntryId, s.state);
+  }
+
+  const now = getLocalDateParts(nowMs, timeZone);
+  const entries = view.entries.filter((v) => {
+    const t = Date.parse(v.entry.recognizedAt);
+    if (Number.isNaN(t)) return false;
+    return isInPeriod(getLocalDateParts(t, timeZone), now, period);
+  });
+
+  // Неизвестная позиция журнала → суммы недостоверны (все null), но валидная
+  // история периода сохраняется. Конфликт payout-данных → только due/sent/received.
+  const unknownPosition = view.totalEarningsCents === null;
+  const payoutConflict =
+    payouts.dueFromDirectCents === null ||
+    payouts.sentAwaitingConfirmationCents === null ||
+    payouts.confirmedReceivedCents === null;
+
+  let earned = 0;
+  let cash = 0;
+  let due = 0;
+  let sent = 0;
+  let received = 0;
+  let earnedOk = true;
+  let cashOk = true;
+  let dueOk = true;
+  let sentOk = true;
+  let receivedOk = true;
+
+  const addTo = (
+    total: number,
+    ok: boolean,
+    amount: number,
+  ): { total: number; ok: boolean } => {
+    if (!ok) return { total, ok };
+    const next = addChecked(total, amount);
+    if (next === null) return { total, ok: false };
+    return { total: next, ok: true };
+  };
+
+  for (const v of entries) {
+    const amount = v.entry.amountCents;
+    if (!isSafeCents(amount)) {
+      earnedOk = cashOk = dueOk = sentOk = receivedOk = false;
+      continue;
+    }
+    ({ total: earned, ok: earnedOk } = addTo(earned, earnedOk, amount));
+    if (v.entry.mode === "CASH_RETAINED") {
+      ({ total: cash, ok: cashOk } = addTo(cash, cashOk, amount));
+      continue;
+    }
+    // DIRECT_PAYOUT_DUE → разложение по каноническому статусу выплаты.
+    const st = stateById.get(v.entry.id);
+    if (st === "DUE_FROM_DIRECT") {
+      ({ total: due, ok: dueOk } = addTo(due, dueOk, amount));
+    } else if (st === "SENT_AWAITING_CONFIRMATION") {
+      ({ total: sent, ok: sentOk } = addTo(sent, sentOk, amount));
+    } else if (st === "CONFIRMED_RECEIVED") {
+      ({ total: received, ok: receivedOk } = addTo(received, receivedOk, amount));
+    } else {
+      // Неизвестный статус (конфликт/битые данные) — не угадываем.
+      dueOk = sentOk = receivedOk = false;
+    }
+  }
+
+  const localOverflow =
+    !earnedOk || !cashOk || !dueOk || !sentOk || !receivedOk;
+  const directNull = unknownPosition || payoutConflict;
+
+  return {
+    period,
+    entries,
+    completedDeliveryCount: entries.length,
+    earnedCents: unknownPosition ? null : earnedOk ? earned : null,
+    cashReceivedCents: unknownPosition ? null : cashOk ? cash : null,
+    dueFromDirectCents: directNull ? null : dueOk ? due : null,
+    sentByDirectCents: directNull ? null : sentOk ? sent : null,
+    receivedFromDirectCents: directNull ? null : receivedOk ? received : null,
+    reviewRequired: view.reviewRequired || localOverflow,
   };
 }

@@ -46,12 +46,15 @@ export default function AdminDriversPage() {
                         style={{
                           display: "block",
                           marginTop: 4,
-                          fontStyle: "normal",
+                          fontStyle: "italic",
                           fontSize: 13,
                           lineHeight: 1.4,
                           padding: "6px 10px",
                           borderRadius: 10,
-                          background: "var(--kds-surface-muted, #eef1ee)",
+                          border: "1px solid var(--kds-border-strong, #aeb7b1)",
+                          borderLeft: "3px solid var(--accent, #d56c2d)",
+                          background: "var(--kds-surface, #fff)",
+                          color: "var(--kds-text, #161a17)",
                           overflowWrap: "anywhere",
                         }}
                         aria-label="Заметка водителя"

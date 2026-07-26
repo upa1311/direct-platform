@@ -654,9 +654,7 @@ test("34: раздел «Расчёты» водителя существует 
   assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("Расчёты"));
   // v25: единый журнал заработка (онлайн-выплаты и наличные) с описанием выплат.
   assert.ok(
-    DRIVER_SETTLEMENTS_PAGE.includes(
-      "Заработок по доставкам, наличные выплаты и сумма, которую Direct должен выплатить вам.",
-    ),
+    DRIVER_SETTLEMENTS_PAGE.includes("Заработок, наличные и выплаты Direct."),
   );
   // Маршрут доступен из верхней навигации, а не карточкой на главной.
   assert.ok(DRIVER_HEADER.includes('href: "/driver/settlements"'));
@@ -669,7 +667,7 @@ test("35: страница расчётов не выдумывает суммы
   // formatMoney; литеральных сумм в разметке нет.
   assert.ok(!/\$\s?\d/.test(DRIVER_SETTLEMENTS_PAGE));
   assert.ok(!/\d+[.,]\d{2}/.test(DRIVER_SETTLEMENTS_PAGE));
-  assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("getDriverEarningsView"));
+  assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("getDriverSettlementPeriodView"));
   assert.ok(DRIVER_SETTLEMENTS_PAGE.includes("formatMoney"));
   // Никакого netting, долга водителя и обещаний мгновенной выплаты. Метка
   // «Direct должен вам» (v27) — это признанное обязательство Direct, а не долг

@@ -1,20 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 
 import kds from "@/components/kitchen/kitchen.module.css";
-import { PageHeading } from "@/components/workspaces/route-content";
 import { useAuthenticatedDriverId } from "@/components/driver/driver-session";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { usePrototype } from "@/prototype/prototype-provider";
 import { formatMoney } from "@/prototype/selectors";
 import {
-  getDriverEarningsView,
-  getDriverPeriodEarnings,
+  getDriverSettlementPeriodView,
   type DriverEarningEntryView,
+  type DriverEarningsPeriod,
 } from "@/prototype/driver-earnings";
 import {
   getDriverPayoutsView,
+  type DriverEarningPayoutState,
   type DriverPayoutBatchView,
 } from "@/prototype/driver-payouts";
 import styles from "../driver.module.css";
@@ -22,15 +23,37 @@ import own from "./settlements.module.css";
 
 const DRIVER_TIME_ZONE = "Europe/Chisinau";
 
+/** Варианты периода сводки — локальное UI-состояние, в state не хранится. */
+const PERIODS: { id: DriverEarningsPeriod; label: string }[] = [
+  { id: "TODAY", label: "Сегодня" },
+  { id: "LAST_7_DAYS", label: "7 дней" },
+  { id: "CURRENT_MONTH", label: "Месяц" },
+  { id: "ALL_TIME", label: "За весь период" },
+];
+
+/** Одна динамическая строка заработка — подпись зависит от периода. */
+const EARNED_LABEL: Record<DriverEarningsPeriod, string> = {
+  TODAY: "Заработано сегодня",
+  LAST_7_DAYS: "Заработано за 7 дней",
+  CURRENT_MONTH: "Заработано за месяц",
+  ALL_TIME: "Заработано за весь период",
+};
+
+/** Пустой период — своё сообщение. */
+const EMPTY_PERIOD_TEXT = "За выбранный период завершённых доставок нет.";
+
 /**
- * Раздел «Расчёты» водителя (v27). Доступен только при активной сессии; driverId
- * берётся ТОЛЬКО из сессии (не из URL). Компактная сводка (заработок за периоды,
- * наличный заработок и суммы выплат Direct), история доставок и история выплат
- * Direct с подтверждением фактического получения. Null-итог показывается как «—».
+ * Раздел «Расчёты» водителя (v27, repair). Доступен только при активной сессии;
+ * driverId берётся ТОЛЬКО из сессии (не из URL). Сверху — выбор периода
+ * (Сегодня / 7 дней / Месяц / Всё время); вся сводка и история доставок
+ * относятся к выбранному периоду по recognizedAt в Europe/Chisinau. Статус каждой
+ * доставки берётся из канонического payout read-model, а не из способа оплаты.
+ * История выплат Direct остаётся полной. Null-итог показывается как «—».
  */
 export default function DriverSettlementsPage() {
   const sessionDriverId = useAuthenticatedDriverId();
   const { state } = usePrototype();
+  const [period, setPeriod] = useState<DriverEarningsPeriod>("TODAY");
 
   if (sessionDriverId === null) {
     return (
@@ -49,25 +72,53 @@ export default function DriverSettlementsPage() {
   }
 
   const nowIso = new Date().toISOString();
-  const view = getDriverEarningsView(state, sessionDriverId);
-  const periods = getDriverPeriodEarnings(
+  const view = getDriverSettlementPeriodView(
     state,
     sessionDriverId,
+    period,
     nowIso,
     DRIVER_TIME_ZONE,
   );
   const payouts = getDriverPayoutsView(state, sessionDriverId);
+  const stateById = new Map<string, DriverEarningPayoutState>();
+  for (const s of payouts.earningStates) stateById.set(s.earningEntryId, s.state);
   const hasEntries = view.entries.length > 0;
 
   return (
     <>
-      <PageHeading
-        eyebrow="Водитель"
-        title="Расчёты"
-        description="Заработок по доставкам, наличные выплаты и сумма, которую Direct должен выплатить вам."
-      />
+      {/* Локальный компактный заголовок (не общий shell-heading): плотные
+          отступы только для этой страницы, eyebrow скрыт на мобильном. */}
+      <header className={own.header}>
+        <p className={own.eyebrow}>Водитель</p>
+        <h1 className={own.title}>Расчёты</h1>
+        <p className={own.headerDescription}>
+          Заработок, наличные и выплаты Direct.
+        </p>
+      </header>
 
       <div className={own.wrap}>
+        <div
+          className={own.periodControl}
+          role="group"
+          aria-label="Период расчётов"
+        >
+          {PERIODS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={
+                p.id === period
+                  ? `${own.periodButton} ${own.periodButtonActive}`
+                  : own.periodButton
+              }
+              aria-pressed={p.id === period}
+              onClick={() => setPeriod(p.id)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
         {view.reviewRequired ? (
           <p className={own.reviewNotice} role="alert">
             Некоторые данные расчётов требуют проверки Direct. История доставок
@@ -76,8 +127,11 @@ export default function DriverSettlementsPage() {
         ) : null}
 
         <section className={own.summary} aria-label="Сводка расчётов">
-          <SummaryRow label="Заработано сегодня" cents={periods.earningsTodayCents} />
-          <SummaryRow label="Заработано за месяц" cents={periods.earningsMonthCents} />
+          <div className={own.summaryRow}>
+            <span className={own.summaryLabel}>Завершённых доставок</span>
+            <span className={own.summaryValue}>{view.completedDeliveryCount}</span>
+          </div>
+          <SummaryRow label={EARNED_LABEL[period]} cents={view.earnedCents} />
           <SummaryRow
             label="Получено из наличных заказов"
             cents={view.cashReceivedCents}
@@ -88,10 +142,6 @@ export default function DriverSettlementsPage() {
             cents={view.sentByDirectCents}
           />
           <SummaryRow label="Получено от Direct" cents={view.receivedFromDirectCents} />
-          <div className={own.summaryRow}>
-            <span className={own.summaryLabel}>Завершённых доставок</span>
-            <span className={own.summaryValue}>{view.deliveryCount}</span>
-          </div>
         </section>
 
         {payouts.batches.length > 0 ? (
@@ -113,7 +163,7 @@ export default function DriverSettlementsPage() {
             <ul className={own.historyList}>
               {view.entries.map((row) => (
                 <li key={row.entry.id}>
-                  <HistoryRow row={row} />
+                  <HistoryRow row={row} payoutState={stateById.get(row.entry.id)} />
                 </li>
               ))}
             </ul>
@@ -123,12 +173,12 @@ export default function DriverSettlementsPage() {
             <span className={own.emptyTitle}>
               {view.reviewRequired
                 ? "Данные завершённых доставок требуют проверки Direct."
-                : "Завершённых доставок пока нет."}
+                : EMPTY_PERIOD_TEXT}
             </span>
             <p className={own.emptyText}>
               {view.reviewRequired
                 ? "История сохранена, но суммы пока не подтверждены."
-                : "После завершённой доставки здесь появится ваш заработок."}
+                : "Выберите другой период или дождитесь завершённой доставки."}
             </p>
           </section>
         )}
@@ -238,10 +288,38 @@ function PayoutCard({
   );
 }
 
+/**
+ * Подпись статуса одной доставки из КАНОНИЧЕСКОГО payout read-model (единый
+ * источник). React не определяет статус ONLINE по способу оплаты — иначе один
+ * экран мог бы показать подтверждённую выплату и «ожидает выплаты» для одной
+ * earning одновременно.
+ */
+function statusLabelFor(state: DriverEarningPayoutState | undefined): string {
+  switch (state) {
+    case "NOT_APPLICABLE_CASH_RETAINED":
+      return "Получено наличными";
+    case "DUE_FROM_DIRECT":
+      return "Ожидает выплаты Direct";
+    case "SENT_AWAITING_CONFIRMATION":
+      return "Direct отправил — ждёт подтверждения";
+    case "CONFIRMED_RECEIVED":
+      return "Получено от Direct";
+    default:
+      return "Требует проверки Direct";
+  }
+}
+
 /** Строка истории доставок. Для наличного заказа показаны две физические суммы. */
-function HistoryRow({ row }: { row: DriverEarningEntryView }) {
+function HistoryRow({
+  row,
+  payoutState,
+}: {
+  row: DriverEarningEntryView;
+  payoutState: DriverEarningPayoutState | undefined;
+}) {
   const { entry } = row;
   const isCash = row.paymentMethod === "CASH";
+  const confirmed = payoutState === "CONFIRMED_RECEIVED";
   return (
     <article className={own.historyCard}>
       <div className={own.historyHead}>
@@ -251,8 +329,8 @@ function HistoryRow({ row }: { row: DriverEarningEntryView }) {
       <span className={own.restaurantName}>{row.restaurantName}</span>
       <div className={own.amountRow}>
         <span>Заработок: {formatMoney(entry.amountCents, entry.currencyCode)}</span>
-        <span className={own.statusLabel}>
-          {isCash ? "Получено наличными" : "Ожидает выплаты Direct"}
+        <span className={confirmed ? own.statusConfirmed : own.statusLabel}>
+          {statusLabelFor(payoutState)}
         </span>
       </div>
       {isCash &&
@@ -273,10 +351,11 @@ function HistoryRow({ row }: { row: DriverEarningEntryView }) {
   );
 }
 
-/** Момент в понятном локальном формате; при сбое — исходная строка. */
+/** Момент в понятном локальном формате Europe/Chisinau; при сбое — исходная строка. */
 function formatDate(iso: string): string {
   try {
     return new Intl.DateTimeFormat("ru-RU", {
+      timeZone: DRIVER_TIME_ZONE,
       day: "2-digit",
       month: "2-digit",
       year: "numeric",

@@ -97,11 +97,7 @@ const ADMIN_DRIVERS = readFileSync("src/app/admin/drivers/page.tsx", "utf8");
 // --- §28/§29 settlements summary + payout UI ----------------------------------
 
 test("settlements: точный новый description и метки сводки", () => {
-  assert.ok(
-    SETTLEMENTS.includes(
-      "Заработок по доставкам, наличные выплаты и сумма, которую Direct должен выплатить вам.",
-    ),
-  );
+  assert.ok(SETTLEMENTS.includes("Заработок, наличные и выплаты Direct."));
   for (const label of [
     "Заработано сегодня",
     "Заработано за месяц",
@@ -115,7 +111,7 @@ test("settlements: точный новый description и метки сводк�
   }
   assert.ok(!SETTLEMENTS.includes("К выплате Direct"));
   assert.ok(SETTLEMENTS.includes("getDriverPayoutsView"));
-  assert.ok(SETTLEMENTS.includes("getDriverPeriodEarnings"));
+  assert.ok(SETTLEMENTS.includes("getDriverSettlementPeriodView"));
   assert.ok(SETTLEMENTS.includes("Europe/Chisinau"));
 });
 
@@ -169,7 +165,7 @@ test("workspace: убрана строка «Онлайн · Зона», имя 
 });
 
 test("workspace: cash badge, заметка и её редактор", () => {
-  assert.ok(WORKSPACE.includes("Наличные доступны"));
+  assert.ok(WORKSPACE.includes("Доступны наличные заказы"));
   assert.ok(WORKSPACE.includes("Только безналичные заказы"));
   assert.ok(WORKSPACE.includes("Моя заметка"));
   assert.ok(WORKSPACE.includes("Заметка для Direct"));
@@ -180,9 +176,16 @@ test("workspace: cash badge, заметка и её редактор", () => {
 });
 
 test("workspace: цвет зоны из registry, без ручной таблицы zone-1/zone-2", () => {
-  assert.ok(WORKSPACE.includes("zoneColor"));
-  assert.ok(WORKSPACE.includes("fromZoneId"));
+  // Цвет берётся через общий presentation helper (он и читает registry).
+  assert.ok(WORKSPACE.includes("getZoneButtonPresentation"));
+  const PRESENTATION = readFileSync(
+    "src/lib/zones/zone-presentation.ts",
+    "utf8",
+  );
+  assert.ok(PRESENTATION.includes("zoneColor"));
+  assert.ok(PRESENTATION.includes("fromZoneId"));
   // Никакой ручной таблицы цветов по номеру зоны.
   assert.ok(!/["']zone-1["']\s*:\s*["']#/.test(WORKSPACE));
   assert.ok(!/zone-1.*(green|yellow|red)/i.test(WORKSPACE));
+  assert.ok(!/["']zone-1["']\s*:\s*["']#/.test(PRESENTATION));
 });

@@ -516,6 +516,107 @@ export function confirmDriverPayoutReceipt(
   return { state: nextState, result: { ok: true, error: null, payoutBatchId } };
 }
 
+// --- Каноническое состояние выплаты одной earning ----------------------------
+
+/**
+ * Единственный источник статуса выплаты по ОДНОЙ записи заработка. UI не должен
+ * выводить статус повторно (например по paymentMethod) — иначе один экран может
+ * показать «получено от Direct» и «ожидает выплаты» для той же earning.
+ *  - NOT_APPLICABLE_CASH_RETAINED — наличный заработок, выплате Direct не подлежит;
+ *  - DUE_FROM_DIRECT — безналичный заработок, ещё не включён ни в один батч;
+ *  - SENT_AWAITING_CONFIRMATION — включён в валидный батч, водитель ещё не подтвердил;
+ *  - CONFIRMED_RECEIVED — включён в валидный батч и водитель подтвердил получение.
+ */
+export type DriverEarningPayoutState =
+  | "NOT_APPLICABLE_CASH_RETAINED"
+  | "DUE_FROM_DIRECT"
+  | "SENT_AWAITING_CONFIRMATION"
+  | "CONFIRMED_RECEIVED";
+
+export interface DriverEarningPayoutStateView {
+  earningEntryId: string;
+  state: DriverEarningPayoutState;
+  payoutBatchId: string | null;
+  method: DriverPayoutMethod | null;
+  sentAt: string | null;
+  confirmedAt: string | null;
+}
+
+/**
+ * Каноническое состояние выплаты каждой валидной записи заработка водителя.
+ * Считается ТОЛЬКО из валидного индекса батчей: перекрывающиеся/битые батчи в
+ * индекс не входят, поэтому статус не угадывается — при конфликте общий payout
+ * read-model остаётся reviewRequired, а такие earnings числятся DUE, пока данные
+ * не проверены. CASH_RETAINED всегда NOT_APPLICABLE. Битые earnings пропускаются.
+ */
+function buildEarningPayoutStates(
+  state: PrototypeState,
+  driverId: string,
+  index: ValidBatchIndex,
+): DriverEarningPayoutStateView[] {
+  const byEarning = new Map<
+    string,
+    { batch: DriverPayoutBatch; receipt: ReceiptState }
+  >();
+  for (const { batch } of index.valid.values()) {
+    if (batch.driverId !== driverId) continue;
+    const receipt = receiptStateFor(state, batch);
+    for (const id of batch.earningEntryIds) byEarning.set(id, { batch, receipt });
+  }
+
+  const out: DriverEarningPayoutStateView[] = [];
+  for (const e of state.driverEarningEntries) {
+    if (e.driverId !== driverId) continue;
+    if (e.mode === "CASH_RETAINED") {
+      out.push({
+        earningEntryId: e.id,
+        state: "NOT_APPLICABLE_CASH_RETAINED",
+        payoutBatchId: null,
+        method: null,
+        sentAt: null,
+        confirmedAt: null,
+      });
+      continue;
+    }
+    if (e.mode !== "DIRECT_PAYOUT_DUE") continue;
+    if (!isEligibleDirectPayoutEarning(state, e)) continue;
+    const found = byEarning.get(e.id);
+    if (!found) {
+      out.push({
+        earningEntryId: e.id,
+        state: "DUE_FROM_DIRECT",
+        payoutBatchId: null,
+        method: null,
+        sentAt: null,
+        confirmedAt: null,
+      });
+      continue;
+    }
+    const receipt = found.receipt;
+    out.push({
+      earningEntryId: e.id,
+      state:
+        receipt.kind === "CONFIRMED"
+          ? "CONFIRMED_RECEIVED"
+          : "SENT_AWAITING_CONFIRMATION",
+      payoutBatchId: found.batch.id,
+      method: found.batch.method,
+      sentAt: found.batch.sentAt,
+      confirmedAt: receipt.kind === "CONFIRMED" ? receipt.confirmedAt : null,
+    });
+  }
+  return out;
+}
+
+/** Каноническое состояние выплаты по каждой валидной earning водителя. */
+export function getDriverEarningPayoutStates(
+  state: PrototypeState,
+  driverId: string,
+): DriverEarningPayoutStateView[] {
+  if (!state.drivers.some((d) => d.id === driverId)) return [];
+  return buildEarningPayoutStates(state, driverId, indexValidBatches(state));
+}
+
 // --- Read-model водителя (§17) ------------------------------------------------
 
 export interface DriverPayoutBatchView {
@@ -535,6 +636,8 @@ export interface DriverPayoutBatchView {
 export interface DriverPayoutsView {
   batches: DriverPayoutBatchView[];
   unpaidEarningEntryIds: string[];
+  /** Каноническое состояние выплаты по каждой валидной earning (единый источник). */
+  earningStates: DriverEarningPayoutStateView[];
   dueFromDirectCents: number | null;
   sentAwaitingConfirmationCents: number | null;
   confirmedReceivedCents: number | null;
@@ -544,6 +647,7 @@ export interface DriverPayoutsView {
 const emptyPayoutsView = (): DriverPayoutsView => ({
   batches: [],
   unpaidEarningEntryIds: [],
+  earningStates: [],
   dueFromDirectCents: 0,
   sentAwaitingConfirmationCents: 0,
   confirmedReceivedCents: 0,
@@ -654,6 +758,7 @@ export function getDriverPayoutsView(
   return {
     batches: views,
     unpaidEarningEntryIds,
+    earningStates: buildEarningPayoutStates(state, driverId, index),
     dueFromDirectCents: driverConflict ? null : due,
     sentAwaitingConfirmationCents: driverConflict ? null : awaiting,
     confirmedReceivedCents: driverConflict ? null : confirmed,

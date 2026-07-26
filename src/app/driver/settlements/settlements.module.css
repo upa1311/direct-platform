@@ -2,11 +2,134 @@
    выплате Direct. Наследует KDS-переменные экрана; отдельные примитивы, чтобы не
    засорять кухонные стили. Одна колонка на телефоне, без горизонтального скролла. */
 
+/* Локальный компактный заголовок вкладки «Расчёты» (только эта страница —
+   общий PageHeading не трогаем). Плотные вертикальные интервалы; на мобильном
+   eyebrow скрыт, а весь блок подтянут ближе к верхней навигации. */
+.header {
+  display: flex;
+  flex-direction: column;
+  margin: 8px 0 0;
+  min-width: 0;
+}
+
+/* eyebrow «ВОДИТЕЛЬ» скрыт на мобильном (дублирует контекст вкладки). */
+.eyebrow {
+  display: none;
+  margin: 0 0 4px;
+  color: var(--kds-muted, #66706a);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0 0 5px;
+  color: #202522;
+  font-size: clamp(32px, 7vw, 44px);
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
 .wrap {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   min-width: 0;
+}
+
+/* Мобильный: подтянуть верхний блок ближе к навигации (общий shell не меняем). */
+@media (max-width: 520px) {
+  .header {
+    margin-top: -12px;
+  }
+}
+
+/* Desktop: вернуть воздух и показать eyebrow, но без избыточных разрывов. */
+@media (min-width: 521px) {
+  .eyebrow {
+    display: block;
+  }
+
+  .header {
+    margin: 4px 0 4px;
+  }
+
+  .title {
+    margin-bottom: 8px;
+  }
+}
+
+/* Спокойный компактный фильтр-«чипсы» — тот же визуальный язык, что и период в
+   «Расчётах» ресторана (periodChip): прозрачный фон, near-black текст, тонкая
+   нейтральная рамка, скругление 999px. Кнопки по содержимому, перенос на вторую
+   строку при нехватке места. Без чёрной заливки, без оранжевой рамки, без тени. */
+.periodControl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Неактивная кнопка: белая поверхность, тёмный текст, нейтральная рамка —
+   хорошо видна на сером фоне страницы. Без оранжа. */
+.periodButton {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 36px;
+  padding: 5px 11px;
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-radius: 999px;
+  background: var(--kds-surface, #fff);
+  color: var(--kds-text, #161a17);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.periodButton:hover {
+  background: var(--kds-surface-subtle, #f0f2f1);
+  border-color: var(--kds-border-strong, #aeb7b1);
+}
+
+.periodButton:focus-visible {
+  outline: 2px solid var(--kds-action, #202923);
+  outline-offset: 2px;
+}
+
+.periodButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Выбранный период — тёмная графитовая заливка и белый текст: активная кнопка
+   очевидна с первого взгляда. Без оранжа; тень только лёгкая нейтральная. */
+.periodButtonActive {
+  background: var(--kds-action, #202923);
+  border-color: var(--kds-action, #202923);
+  color: #fff;
+  font-weight: 750;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.periodButtonActive:hover {
+  background: var(--kds-action-hover, #111713);
+  border-color: var(--kds-action-hover, #111713);
+}
+
+/* Компактное описание вкладки: сразу под заголовком, мелкий muted-текст. */
+.headerDescription {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 400;
+  color: var(--kds-muted, #66706a);
+  overflow-wrap: anywhere;
 }
 
 /* Заметное, но не «ошибочное» предупреждение о проверке. Смысл несёт текст,

@@ -17,9 +17,22 @@ import {
   shiftCalendarDate,
   compareLocalDate,
 } from "@/prototype/local-calendar";
+import { addChecked, isSafeCents } from "@/prototype/bank-fee";
 import own from "./driver-payouts.module.css";
 
 const TZ = "Europe/Chisinau";
+
+/** Безопасная сумма выбранных доставок: null при переполнении/невалидной сумме. */
+function checkedSum(amounts: number[]): number | null {
+  let total = 0;
+  for (const a of amounts) {
+    if (!isSafeCents(a)) return null;
+    const next = addChecked(total, a);
+    if (next === null) return null;
+    total = next;
+  }
+  return total;
+}
 
 /**
  * Выплаты водителям (v26/v27). Администратор выбирает невыплаченные
@@ -66,7 +79,10 @@ function DriverPayoutSection({ row }: { row: AdminDriverPayoutRow }) {
 
   const eligible = row.eligibleEarnings;
   const selectedList = eligible.filter((e) => selected.has(e.id));
-  const previewCents = selectedList.reduce((sum, e) => sum + e.amountCents, 0);
+  // Превью суммы — checked arithmetic: number | null. Домен всё равно остаётся
+  // финальным источником истины (UI не передаёт amountCents в action).
+  const previewCents = checkedSum(selectedList.map((e) => e.amountCents));
+  const previewOverflow = selected.size > 0 && previewCents === null;
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -80,7 +96,13 @@ function DriverPayoutSection({ row }: { row: AdminDriverPayoutRow }) {
     setSelected(new Set(pickEarnings(eligible, filter).map((e) => e.id)));
 
   const submit = () => {
-    if (guard.pending || row.reviewRequired || selected.size === 0) return;
+    if (
+      guard.pending ||
+      row.reviewRequired ||
+      selected.size === 0 ||
+      previewCents === null
+    )
+      return;
     void guard.run(async () => {
       const r = await createDriverPayoutBatch({
         driverId: row.driverId,
@@ -199,6 +221,11 @@ function DriverPayoutSection({ row }: { row: AdminDriverPayoutRow }) {
             />
           </label>
 
+          {previewOverflow ? (
+            <p className={own.error} role="alert">
+              Сумма выбранных доставок требует проверки Direct.
+            </p>
+          ) : null}
           {guard.error ? (
             <p className={own.error} role="alert">
               {guard.error}
@@ -208,11 +235,13 @@ function DriverPayoutSection({ row }: { row: AdminDriverPayoutRow }) {
           <button
             type="button"
             className={own.submit}
-            disabled={guard.pending || selected.size === 0}
+            disabled={guard.pending || selected.size === 0 || previewCents === null}
             onClick={submit}
           >
             {method === "BANK_TRANSFER" ? "Выплата отправлена" : "Наличные переданы водителю"}
-            {selected.size > 0 ? ` — ${formatMoney(previewCents)}` : ""}
+            {selected.size > 0 && previewCents !== null
+              ? ` — ${formatMoney(previewCents)}`
+              : ""}
           </button>
         </fieldset>
       )}
@@ -300,6 +329,7 @@ function pickEarnings(
 function formatDate(iso: string): string {
   try {
     return new Intl.DateTimeFormat("ru-RU", {
+      timeZone: TZ,
       day: "2-digit",
       month: "2-digit",
       year: "numeric",

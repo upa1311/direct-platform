@@ -6,7 +6,8 @@ import styles from "./workspace-shell.module.css";
 interface PageHeadingProps {
   eyebrow: string;
   title: string;
-  description: string;
+  /** Необязательно: страница может отрисовать своё компактное описание сама. */
+  description?: string;
 }
 
 export function PageHeading({
@@ -18,7 +19,7 @@ export function PageHeading({
     <div className={styles.pageHeading}>
       <p className={styles.eyebrow}>{eyebrow}</p>
       <h1>{title}</h1>
-      <p>{description}</p>
+      {description ? <p>{description}</p> : null}
     </div>
   );
 }

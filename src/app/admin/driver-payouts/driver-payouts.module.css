@@ -39,14 +39,21 @@
   overflow-wrap: anywhere;
 }
 
+/* Заметка водителя (read-only): белая поверхность, нейтральная рамка с лёгким
+   оранжевым акцентом слева, курсив — компактный вариант того же оформления,
+   что у водителя, но без декоративных кружков (машинки в строке админа нет). */
 .noteBubble {
   margin: 0;
   align-self: flex-start;
   max-width: 100%;
-  padding: 6px 10px;
+  padding: 5px 10px;
   border-radius: 10px;
-  background: var(--kds-surface-muted, #eef1ee);
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-left: 3px solid var(--accent, #d56c2d);
+  background: var(--kds-surface, #fff);
+  color: var(--kds-text, #161a17);
   font-size: 13px;
+  font-style: italic;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }

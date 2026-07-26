@@ -87,16 +87,24 @@
   border-top: 1px solid var(--kds-border, #eceff3);
 }
 
+/* Счётчики выровнены по той же сетке, что и верхние controls: «Новые» под
+   кнопкой статуса (колонка 1), «В работе» под кнопкой зоны (колонка 2), третья
+   колонка (звук, 44px) остаётся пустой — второй счётчик не уезжает к правому
+   краю. Строка горизонтальная, не переносится на 360 px. */
 .workCounters {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: minmax(92px, 1fr) minmax(92px, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
   min-width: 0;
 }
 
 .workCount {
   font-size: 15px;
   font-weight: 700;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .zoneConfirm {
@@ -304,6 +312,20 @@
   color: #ffffff;
 }
 
+/* OFFLINE — серая нейтральная кнопка «Сейчас не в сети»: читается как текущее
+   состояние (не зелёная и не красная), но остаётся кликабельной (выход онлайн). */
+.quickButtonOffline {
+  border-color: var(--kds-border-strong, #aeb7b1);
+  background: var(--kds-surface-subtle, #f0f2f1);
+  color: var(--kds-text, #161a17);
+}
+
+/* Подтверждённая зона: вся кнопка окрашена в цвет зоны (фон/рамка/текст —
+   inline style из presentation helper). Класс лишь усиливает подпись. */
+.quickButtonZone {
+  font-weight: 750;
+}
+
 .quickButtonText {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -370,20 +392,26 @@
   position: fixed;
   left: 12px;
   right: 12px;
-  /* Не прилипает к самому низу: приподнят над safe-area, читается как активное
-     меню. Высота ограничена ниже, за экран не вылезает. */
-  bottom: calc(7vh + env(safe-area-inset-bottom));
+  /* Приподнятый dialog-sheet в средней части экрана, а не нижний bottom-sheet:
+     вертикальный центр держим около 48vh и центрируем translateY(-50%). Верхняя
+     граница заметно выше прежней, под окном остаётся свободное пространство, за
+     верх экрана окно не выходит (max-height ограничивает высоту). */
+  top: clamp(250px, 48vh, 420px);
+  bottom: auto;
+  transform: translateY(-50%);
   z-index: 50;
-  max-height: min(70vh, 420px);
+  max-height: min(62vh, 440px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px;
+  /* Safe-area сохраняем как нижний внутренний отступ. */
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
   border: 1px solid var(--kds-border-strong, #aeb7b1);
   border-radius: 16px;
   background: var(--kds-surface, #fff);
-  box-shadow: 0 -6px 28px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
 }
 
 .sheetHeader {
@@ -467,7 +495,9 @@
   }
 }
 
-/* Имя — главный визуальный якорь: крупнее, жирнее, оранжевый brand-акцент. */
+/* Имя — главный визуальный якорь: крупное и жирное, но текст near-black, а не
+   сплошной оранжевый. Оранжевый несут значок авто и тонкая акцентная линия под
+   текстом (см. .driverNameText) — заголовок читается чёрно-оранжевым. */
 .driverName {
   display: inline-flex;
   align-items: center;
@@ -475,58 +505,144 @@
   min-width: 0;
   font-size: 22px;
   font-weight: 800;
-  color: var(--accent, #d56c2d);
+  color: var(--kds-text, #1f2723);
   overflow-wrap: anywhere;
 }
 
-/* Значок роли водителя — тот же оранжевый акцент, выровнен с текстом. */
+/* Значок роли водителя — оранжевый brand-акцент, выровнен с текстом. */
 .driverNameIcon {
   flex: 0 0 auto;
   color: var(--accent, #d56c2d);
 }
 
-/* Цветная точка зоны из versioned Bender Zone Registry (цвет — inline style). */
-.zoneDot {
-  flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1px solid rgba(0, 0, 0, 0.2);
+/* Текст имени с тонкой оранжевой акцентной линией снизу (только под текстом,
+   не под значком). Без тяжёлого тени/обводки. */
+.driverNameText {
+  min-width: 0;
+  padding-bottom: 2px;
+  border-bottom: 3px solid var(--accent, #d56c2d);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
 }
 
-/* Постоянный информационный badge доступа к наличным — не кнопка. */
-.cashBadgeOn,
-.cashBadgeOff {
+/* Цветные кнопки выбора зоны: фон/рамка/текст из presentation helper (inline
+   style), плюс постоянные MapPin, название и маркер выбора. */
+.zoneOption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-radius: 10px;
+  background: var(--kds-surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.zoneOption:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.zoneOptionIcon {
+  flex: 0 0 auto;
+}
+
+.zoneOptionName {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Выбранная зона — дополнительная обводка и маркер поверх её цвета. */
+.zoneOptionSelected {
+  outline: 3px solid rgba(0, 0, 0, 0.35);
+  outline-offset: -3px;
+  font-weight: 800;
+}
+
+.zoneOptionCheck {
+  flex: 0 0 auto;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+/* Информационная строка о способах оплаты — не кнопка, без тяжёлой капсулы.
+   Near-black текст на прозрачном фоне; сдвинута правее иконки машины
+   (≈ ширина CarFront + gap), чтобы не висеть прямо под ней. Переносится на
+   узком экране без горизонтального переполнения. */
+.cashAccessOn,
+.cashAccessOff {
   align-self: flex-start;
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 30px;
+  max-width: 100%;
+  color: var(--kds-text, #161a17);
+  background: transparent;
   font-size: 12px;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
 
-.cashBadgeOn {
-  color: var(--kds-success, #1f6b45);
-  background: color-mix(in srgb, var(--kds-success, #1f6b45) 14%, transparent);
+.cashAccessIcon {
+  flex: 0 0 auto;
+  color: var(--kds-text, #161a17);
 }
 
-.cashBadgeOff {
-  color: var(--kds-muted, #66706a);
-  background: var(--kds-surface-muted, #eef1ee);
-}
-
-/* Облако добровольной заметки водителя — лёгкое сообщение, не ошибка. */
+/* Облако добровольной заметки водителя — как реплика/мысль. Белая поверхность
+   явно отличается от серого фона страницы; нейтральная рамка с лёгким оранжевым
+   акцентом слева; текст курсивом. Не ошибка/предупреждение, не оранжевая заливка. */
 .noteBubble {
   margin: 0;
   align-self: flex-start;
   max-width: 100%;
   padding: 8px 12px;
   border-radius: 12px;
-  background: var(--kds-surface-muted, #eef1ee);
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+  border-left: 3px solid var(--accent, #d56c2d);
+  background: var(--kds-surface, #fff);
+  color: var(--kds-text, #161a17);
   font-size: 14px;
+  font-style: italic;
   line-height: 1.4;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   overflow-wrap: anywhere;
+}
+
+/* Дорожка «мыслей»: два кружка ведут от иконки машины вверх к облаку заметки.
+   Декоративная (aria-hidden), не влияет на layout имени и не выходит за экран. */
+.thoughtTrail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  margin: 1px 0 1px 7px;
+}
+
+.thoughtDot {
+  border-radius: 50%;
+  background: var(--kds-surface, #fff);
+  border: 1px solid var(--kds-border-strong, #aeb7b1);
+}
+
+/* Верхний кружок крупнее (ближе к облаку), нижний меньше (ближе к машинке). */
+.thoughtDot:first-child {
+  width: 9px;
+  height: 9px;
+}
+
+.thoughtDot:last-child {
+  width: 6px;
+  height: 6px;
 }
 
 /* --- Редактор заметки (sheet) --------------------------------------------- */
@@ -610,11 +726,13 @@
   border: 0;
 }
 
-/* Компактные пустые состояния — без тяжёлой рамки и чёрной полосы слева. */
+/* Компактные пустые состояния — без тяжёлой рамки и чёрной полосы слева.
+   Отдельный верхний отступ отделяет блок от строки счётчиков (следующий раздел). */
 .emptyOffers {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  margin-top: 16px;
   padding: 10px 2px;
   min-width: 0;
 }
@@ -787,10 +905,10 @@
   color: var(--kds-danger, #a8322d);
 }
 
-/* Список предложений. */
+/* Список предложений. Отдельный отступ сверху отделяет его от счётчиков. */
 .offerList {
   list-style: none;
-  margin: 0;
+  margin: 16px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -1003,6 +1121,13 @@
        контента на телефоне ~268 px (уже 300 px из-за внешних отступов), поэтому
        фиксированный floor 122 px обрезал бы 15-символьную подпись. Статус —
        `auto` (по контенту, целиком), зона — remainder с ellipsis, звук 44 px. */
+    grid-template-columns: auto minmax(0, 1fr) 44px;
+    gap: 6px;
+  }
+
+  /* Счётчики повторяют мобильную сетку quickControls: «Новые» под статусом,
+     «В работе» под зоной, колонка звука пустая. */
+  .workCounters {
     grid-template-columns: auto minmax(0, 1fr) 44px;
     gap: 6px;
   }
