@@ -127,9 +127,11 @@ function cashState(opts: Opts = {}): PrototypeState {
   } as unknown as Order;
 
   const offer = {
-    id: "offer-1",
+    id: `driver-offer-${ORDER}-${DRIVER}-wave-1`,
     orderId: ORDER,
     driverId: DRIVER,
+    waveId: `driver-dispatch-wave-${ORDER}-1`,
+    waveNumber: 1,
     status: opts.offerStatus ?? "ACCEPTED",
     offeredAt: T0,
     expiresAt: "2030-01-01T00:00:00.000Z",
@@ -228,6 +230,16 @@ function cashState(opts: Opts = {}): PrototypeState {
     ...base,
     platformSettings: { ...base.platformSettings, platformDriverCashEnabled: true },
     orders: [order],
+    driverDispatchWaves: [
+      {
+        id: `driver-dispatch-wave-${ORDER}-1`,
+        orderId: ORDER,
+        waveNumber: 1,
+        startedAt: T0,
+        offerExpiresAt: "2030-01-01T00:00:00.000Z",
+        trigger: "LEGACY",
+      },
+    ],
     driverOffers: [offer as unknown as PrototypeState["driverOffers"][number]],
     driverDeliveryEvents: de as unknown as PrototypeState["driverDeliveryEvents"],
     platformDriverCashEvents:
@@ -253,7 +265,7 @@ const complete = (s: PrototypeState, now = T6, input = confirmInput) =>
 // --- 1–3: schema / defaults ---------------------------------------------------
 
 test("1: схема равна 24", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
 });
 test("2/3: default cash выключен, событий нет", () => {
   const d = createDefaultState();

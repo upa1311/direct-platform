@@ -164,7 +164,7 @@ test("admin navigation, route card и analytics route подключены", () 
   assert.ok(!ADMIN_PAGE.includes(".sort("));
   assert.ok(!ADMIN_PAGE.includes("geolocation"));
   assert.ok(!ADMIN_CSS.includes("table"));
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
 });
 
 test("settlements скрывает только нулевые payout rows", () => {

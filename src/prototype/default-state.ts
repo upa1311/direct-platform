@@ -504,6 +504,9 @@ export function createDefaultState(): PrototypeState {
       minimumPlatformGrossRevenueCents: 100,
       cashMinimumFoodSubtotalCents: 700,
       platformDriverCashEnabled: false,
+      driverDispatchLeadMinutes: 10,
+      driverOfferDurationSeconds: 30,
+      driverOfferWaveCooldownSeconds: 15,
     },
     zones: defaultZones.map((zone) => ({
       ...zone,
@@ -598,6 +601,7 @@ export function createDefaultState(): PrototypeState {
     ],
     // Предложения создаёт доменный reconciliation после загрузки, а не seed.
     driverOffers: [],
+    driverDispatchWaves: [],
     // Append-only журнал шагов доставки — создаётся действиями водителя.
     driverDeliveryEvents: [],
     driverOrderIncidents: [],

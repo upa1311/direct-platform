@@ -22,7 +22,7 @@ const driverOf = (s: PrototypeState, id: string) =>
 // --- §27 driver note domain ---------------------------------------------------
 
 test("1/2/3: схема 27, дефолтная заметка null, schema26 получает null", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
   for (const d of createDefaultState().drivers) {
     assert.equal(d.statusNote, null);
     assert.equal(d.statusNoteUpdatedAt, null);
@@ -31,7 +31,7 @@ test("1/2/3: схема 27, дефолтная заметка null, schema26 п�
     JSON.stringify({ ...createDefaultState(), schemaVersion: 26 }),
   );
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 29);
+  assert.equal(parsed.schemaVersion, 30);
   for (const d of parsed.drivers) assert.equal(d.statusNote, null);
 });
 

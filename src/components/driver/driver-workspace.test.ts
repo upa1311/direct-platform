@@ -160,7 +160,7 @@ test("профиль отделён от быстрых controls локальн�
       "driverTimeSummary",
     ),
   );
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
 });
 
 // --- Сессия -------------------------------------------------------------------
@@ -356,7 +356,7 @@ test("Расчёты доступны только при сессии, без �
 // --- Regression ---------------------------------------------------------------
 
 test("63: schema остаётся 18 (не понижается этим UI-микробатчем)", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
 });
 
 test("64–65: driver offers домен и срок 30 секунд не изменены", () => {
@@ -621,7 +621,7 @@ test("h23: lifecycle-кнопки и прогресс 2×2 не ухудшены
 });
 
 test("h24: schema остаётся 18; наличные выключены", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
   assert.equal(
     createDefaultState().platformSettings.platformDriverCashEnabled,
     false,
@@ -800,5 +800,5 @@ test("incident-admin: no blocking browser dialogs, card ref guard и schema 29",
   }
   assert.ok(ADMIN_INCIDENTS.includes("pendingRef.current"));
   assert.ok(ADMIN_INCIDENTS.includes('role="alert"'));
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
 });

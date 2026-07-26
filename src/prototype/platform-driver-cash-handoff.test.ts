@@ -197,7 +197,7 @@ const theOrder = (state: PrototypeState): Order => state.orders[0];
 // --- 1–3: schema / default ----------------------------------------------------
 
 test("1: схема равна 24", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
 });
 test("2: default platformDriverCashEvents пуст", () => {
   assert.deepEqual(createDefaultState().platformDriverCashEvents, []);

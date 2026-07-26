@@ -7,7 +7,7 @@ import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 import type { OrderZoneSnapshot } from "@/lib/zones/types";
 
-export const PROTOTYPE_SCHEMA_VERSION = 29 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 30 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -264,6 +264,9 @@ export interface PlatformSettings {
   minimumPlatformGrossRevenueCents: number;
   cashMinimumFoodSubtotalCents: number;
   platformDriverCashEnabled: boolean;
+  driverDispatchLeadMinutes: number;
+  driverOfferDurationSeconds: number;
+  driverOfferWaveCooldownSeconds: number;
 }
 
 export interface Zone {
@@ -624,6 +627,8 @@ export type DriverOfferStatus =
  */
 export interface DriverOffer {
   id: string;
+  waveId: string;
+  waveNumber: number;
   orderId: string;
   driverId: string;
   status: DriverOfferStatus;
@@ -641,6 +646,22 @@ export interface DriverOffer {
    * НЕ хранится: она уже есть в неизменяемом cash snapshot заказа.
    */
   cashReserveConfirmedAt: string | null;
+}
+
+export type DriverDispatchWaveTrigger =
+  | "ETA_WINDOW"
+  | "READY_URGENT"
+  | "RETRY"
+  | "LEGACY";
+
+/** Append-only journal of automatic driver-dispatch waves (v30). */
+export interface DriverDispatchWave {
+  id: string;
+  orderId: string;
+  waveNumber: number;
+  startedAt: string;
+  offerExpiresAt: string;
+  trigger: DriverDispatchWaveTrigger;
 }
 
 /**
@@ -1244,6 +1265,8 @@ export interface PrototypeState {
   drivers: DriverProfile[];
   /** Активные и исторические предложения заказов водителям (v17). */
   driverOffers: DriverOffer[];
+  /** Append-only journal of timed automatic dispatch waves (v30). */
+  driverDispatchWaves: DriverDispatchWave[];
   /** Append-only журнал шагов доставки назначенных водителей (v18). */
   driverDeliveryEvents: DriverDeliveryEvent[];
   /** Append-only сообщения водителей о проблемах активных заказов (v29). */

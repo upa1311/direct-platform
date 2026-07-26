@@ -146,13 +146,13 @@ const eventsOf = (s: PrototypeState) =>
 // --- §27 создание событий -----------------------------------------------------
 
 test("1/2/3: схема 28, default events пусты, schema27 мигрирует пустым журналом", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
   assert.deepEqual(createDefaultState().driverOperationalEvents, []);
   const parsed = parseStoredState(
     JSON.stringify({ ...createDefaultState(), schemaVersion: 27 }),
   );
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 29);
+  assert.equal(parsed.schemaVersion, 30);
   assert.deepEqual(parsed.driverOperationalEvents, []);
 });
 

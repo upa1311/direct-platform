@@ -183,7 +183,7 @@ function online(
 // --- 1–2: схема ---------------------------------------------------------------
 
 test("1: схема прототипа поднята до 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
@@ -193,11 +193,11 @@ test("2: нормализатор принимает схемы 7–18", () => {
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version} должна парситься`);
-    assert.equal(parsed.schemaVersion, 29, `схема ${version} → 29`);
+    assert.equal(parsed.schemaVersion, 30, `схема ${version} → 30`);
   }
   // Неизвестная будущая версия по-прежнему не принимается.
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 30 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 31 })),
     null,
   );
 });

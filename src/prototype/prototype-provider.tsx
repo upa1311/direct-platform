@@ -103,6 +103,7 @@ import {
 import {
   acceptDriverOffer,
   declineDriverOffer,
+  getNextDriverOfferReconciliationAt,
   reconcileDriverOffers,
   type AcceptDriverOfferInput,
   type DriverOfferActionResult,
@@ -865,7 +866,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
   // мутации сами записывают state внутри Web Lock; входящие storage/Broadcast-
   // обновления только обновляют локальное представление и не пишутся обратно.
 
-  // Исправление 6: системный maintenance sweep (автоотмена 7 минут + снятие
+  // System maintenance and driver dispatch share one provider-level scheduler.
   // истёкших пауз) идёт через ТОТ ЖЕ общий Web Lock: внутри перечитывается
   // свежий persisted state, обе функции применяются последовательно, запись —
   // только при фактическом изменении. Повторный sweep не стартует поверх уже
@@ -875,6 +876,8 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     if (!isHydrated) {
       return;
     }
+    let timeoutId: number | null = null;
+    let disposed = false;
     const sweep = async () => {
       if (sweepInFlightRef.current) {
         return;
@@ -886,17 +889,31 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
             const nowIso = new Date().toISOString();
             let next = expireUnansweredRestaurantOrders(baseState, nowIso);
             next = resumeExpiredOperationalPauses(next, nowIso);
-            return next;
+            return reconcileDriverOffers(next, nowIso).state;
           },
         });
       } finally {
         sweepInFlightRef.current = false;
+        if (!disposed) {
+          const nowMs = Date.now();
+          const nextDispatchAt = getNextDriverOfferReconciliationAt(
+            stateRef.current,
+            nowMs,
+          );
+          const delay =
+            nextDispatchAt === null
+              ? 5_000
+              : Math.max(25, Math.min(5_000, nextDispatchAt - nowMs));
+          timeoutId = window.setTimeout(() => void sweep(), delay);
+        }
       }
     };
     void sweep();
-    const intervalId = window.setInterval(() => void sweep(), 5000);
-    return () => window.clearInterval(intervalId);
-  }, [isHydrated, runSerializedStateMutation]);
+    return () => {
+      disposed = true;
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    };
+  }, [isHydrated, runSerializedStateMutation, state.revision]);
 
   const addItem = useCallback(
     (

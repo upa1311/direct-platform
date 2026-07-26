@@ -434,7 +434,7 @@ test("migration schema 28 очищает incidents; schema 29 сохраняет
   assert.ok(current);
   assert.equal(current.driverOrderIncidents.length, 1);
   assert.equal(current.driverOrderIncidents[0].id, base.incident.id);
-  assert.equal(current.schemaVersion, 29);
+  assert.equal(current.schemaVersion, 30);
 });
 
 test("normalization отбрасывает invalid id/ISO/orphan и идемпотентна", () => {
@@ -605,6 +605,6 @@ test("lifecycle: REVIEW_REQUIRED блокирует те же четыре drive
 });
 
 test("schema/storage contract", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
   assert.equal(PROTOTYPE_STORAGE_KEY, "direct-prototype-state-v7");
 });

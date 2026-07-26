@@ -144,8 +144,8 @@ const offerFor = (state: PrototypeState, orderId: string, driverId: string) =>
 
 // --- 1–9: schema и нормализация ------------------------------------------------
 
-test("1: схема прототипа равна 18", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+test("1: схема прототипа равна 30", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
@@ -155,10 +155,10 @@ test("2: нормализатор принимает схемы 7–18", () => {
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version}`);
-    assert.equal(parsed.schemaVersion, 29);
+    assert.equal(parsed.schemaVersion, 30);
   }
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 30 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 31 })),
     null,
   );
 });
@@ -177,6 +177,7 @@ function parseWithOffer(raw: Record<string, unknown>): DriverOffer[] {
   const { state, orderId } = eligibleState();
   const withOffer = {
     ...state,
+    schemaVersion: 29,
     driverOffers: [{ orderId, driverId: D1, ...raw }],
   };
   const parsed = parseStoredState(JSON.stringify(withOffer));
@@ -286,7 +287,20 @@ test("9: повторная нормализация идемпотентна", 
     resolvedAt: null,
   });
   const { state, orderId } = eligibleState();
-  const once = { ...state, driverOffers: offers };
+  const once = {
+    ...state,
+    driverOffers: offers,
+    driverDispatchWaves: [
+      {
+        id: offers[0].waveId,
+        orderId,
+        waveNumber: offers[0].waveNumber,
+        startedAt: offers[0].offeredAt,
+        offerExpiresAt: offers[0].expiresAt,
+        trigger: "LEGACY" as const,
+      },
+    ],
+  };
   const twice = parseStoredState(JSON.stringify(once));
   assert.ok(twice);
   assert.deepEqual(twice.driverOffers, offers);
@@ -1425,8 +1439,8 @@ function parseWith(
 
 const parsedOffer = (state: PrototypeState) => state.driverOffers[0];
 
-test("cash-31: схема поднята до 24", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+test("cash-31: схема поднята до 30", () => {
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
 });
 
 test("cash-32: schema 19 offer получает cashReserveConfirmedAt null", () => {

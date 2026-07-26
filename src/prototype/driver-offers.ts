@@ -1,4 +1,6 @@
 import type {
+  DriverDispatchWave,
+  DriverDispatchWaveTrigger,
   DriverOffer,
   DriverProfile,
   Order,
@@ -21,15 +23,23 @@ import { getDriverActiveOrder, getPlatformDriverCashSnapshot } from "./selectors
 
 /** Срок жизни предложения — строго 30 секунд. Не случайный и не настраиваемый. */
 export const DRIVER_OFFER_DURATION_MS = 30_000;
+export const DRIVER_OFFER_WAVE_COOLDOWN_MS = 15_000;
+export const DRIVER_DISPATCH_LEAD_MS = 10 * 60_000;
 
 /** Детерминированный id предложения: одно на сочетание заказ+водитель. */
-export function driverOfferId(orderId: string, driverId: string): string {
-  return `driver-offer-${orderId}-${driverId}`;
+export function driverOfferId(
+  orderId: string,
+  driverId: string,
+  waveNumber = 1,
+): string {
+  return `driver-offer-${orderId}-${driverId}-wave-${waveNumber}`;
 }
 
-/** Ключ сочетания заказ+водитель для дедупликации предложений. */
-function offerPairKey(orderId: string, driverId: string): string {
-  return `${orderId}|${driverId}`;
+export function driverDispatchWaveId(
+  orderId: string,
+  waveNumber: number,
+): string {
+  return `driver-dispatch-wave-${orderId}-${waveNumber}`;
 }
 
 /**
@@ -57,6 +67,14 @@ export interface DriverOfferActionResult {
   error: string | null;
   orderId: string | null;
 }
+
+export type DriverDispatchState =
+  | "NOT_DUE"
+  | "SEARCHING"
+  | "READY_UNASSIGNED"
+  | "NO_ELIGIBLE_DRIVERS"
+  | "DATA_INVALID"
+  | "ASSIGNED";
 
 /** Валиден ли ISO-момент. */
 function parseIso(value: string): number | null {
@@ -123,6 +141,80 @@ export function isOrderEligibleForDriverOffers(
   return isOnlineOrderEligible(order) || isCashOrderEligible(state, order);
 }
 
+function orderWorkflowIsValidForDispatch(
+  state: PrototypeState,
+  order: Order,
+): boolean {
+  if (order.status === "READY") return true;
+  if (order.status !== "PREPARING") return false;
+  const restaurant = state.restaurants.find(
+    (candidate) => candidate.id === order.restaurant.id,
+  );
+  if (!restaurant) return false;
+  const kitchenStartedAt = order.kitchenStartedAt
+    ? parseIso(order.kitchenStartedAt)
+    : null;
+  const expectedReadyAt = order.expectedReadyAt
+    ? parseIso(order.expectedReadyAt)
+    : null;
+  if (kitchenStartedAt === null || expectedReadyAt === null) return false;
+  return expectedReadyAt >= kitchenStartedAt;
+}
+
+function dispatchAtMs(
+  state: PrototypeState,
+  order: Order,
+): number | null {
+  if (order.status === "READY") return 0;
+  if (!orderWorkflowIsValidForDispatch(state, order)) return null;
+  const expectedReadyAt = parseIso(order.expectedReadyAt as string);
+  if (expectedReadyAt === null) return null;
+  return (
+    expectedReadyAt -
+    state.platformSettings.driverDispatchLeadMinutes * 60_000
+  );
+}
+
+function isOrderDueForDispatch(
+  state: PrototypeState,
+  order: Order,
+  nowMs: number,
+): boolean {
+  if (!isOrderEligibleForDriverOffers(state, order)) return false;
+  if (order.status === "READY") return true;
+  const dueAt = dispatchAtMs(state, order);
+  return dueAt !== null && nowMs >= dueAt;
+}
+
+function wavesForOrder(
+  state: PrototypeState,
+  orderId: string,
+): DriverDispatchWave[] {
+  return state.driverDispatchWaves
+    .filter((wave) => wave.orderId === orderId)
+    .sort((a, b) => a.waveNumber - b.waveNumber);
+}
+
+function latestWaveForOrder(
+  state: PrototypeState,
+  orderId: string,
+): DriverDispatchWave | null {
+  return wavesForOrder(state, orderId).at(-1) ?? null;
+}
+
+function hasDeclinedOrder(
+  state: PrototypeState,
+  orderId: string,
+  driverId: string,
+): boolean {
+  return state.driverOffers.some(
+    (offer) =>
+      offer.orderId === orderId &&
+      offer.driverId === driverId &&
+      offer.status === "DECLINED",
+  );
+}
+
 /**
  * Подходит ли водитель для предложения ЭТОГО заказа. Зона сравнивается с зоной
  * ресторана из снимка заказа. Дополнительно: наличный заказ доступен только
@@ -150,6 +242,60 @@ export function getEligibleDriversForOrder(
   return state.drivers.filter((driver) =>
     isDriverEligibleForOffer(state, driver, order),
   );
+}
+
+export function getDriverDispatchState(
+  state: PrototypeState,
+  order: Order,
+  nowMs: number,
+): DriverDispatchState {
+  if (order.assignedDriverId !== null) return "ASSIGNED";
+  if (!isOrderEligibleForDriverOffers(state, order)) return "DATA_INVALID";
+  if (!orderWorkflowIsValidForDispatch(state, order)) return "DATA_INVALID";
+  const dueAt = dispatchAtMs(state, order);
+  if (dueAt === null) return "DATA_INVALID";
+  if (order.status !== "READY" && nowMs < dueAt) return "NOT_DUE";
+  const latest = latestWaveForOrder(state, order.id);
+  if (
+    latest !== null &&
+    nowMs < Date.parse(latest.offerExpiresAt) &&
+    state.driverOffers.some(
+      (offer) => offer.waveId === latest.id && offer.status === "OPEN",
+    )
+  ) {
+    return "SEARCHING";
+  }
+  const eligible = getEligibleDriversForOrder(state, order).filter(
+    (driver) => !hasDeclinedOrder(state, order.id, driver.id),
+  );
+  if (eligible.length === 0) return "NO_ELIGIBLE_DRIVERS";
+  return order.status === "READY" ? "READY_UNASSIGNED" : "SEARCHING";
+}
+
+/** Nearest domain transition needed by the provider scheduler. */
+export function getNextDriverOfferReconciliationAt(
+  state: PrototypeState,
+  nowMs: number,
+): number | null {
+  const due: number[] = [];
+  for (const offer of state.driverOffers) {
+    if (offer.status === "OPEN" && Date.parse(offer.expiresAt) > nowMs) {
+      due.push(Date.parse(offer.expiresAt));
+    }
+  }
+  for (const order of state.orders) {
+    if (!isOrderEligibleForDriverOffers(state, order)) continue;
+    const dispatchAt = dispatchAtMs(state, order);
+    if (dispatchAt !== null && dispatchAt > nowMs) due.push(dispatchAt);
+    const latest = latestWaveForOrder(state, order.id);
+    if (latest) {
+      const retryAt =
+        Date.parse(latest.offerExpiresAt) +
+        state.platformSettings.driverOfferWaveCooldownSeconds * 1_000;
+      if (retryAt > nowMs) due.push(retryAt);
+    }
+  }
+  return due.length === 0 ? null : Math.min(...due);
 }
 
 /**
@@ -217,18 +363,9 @@ export function reconcileDriverOffers(
   const nowMs = parseIso(nowIso);
   if (nowMs === null) return fail("Некорректное время.");
 
-  const expiresAtIso = new Date(nowMs + DRIVER_OFFER_DURATION_MS).toISOString();
-
   let expiredCount = 0;
   let canceledCount = 0;
   let createdCount = 0;
-
-  // Индекс существующих сочетаний заказ+водитель за весь их lifecycle.
-  const existingPairs = new Set(
-    state.driverOffers.map((offer) => offerPairKey(offer.orderId, offer.driverId)),
-  );
-
-  // 1–2: разрешаем открытые предложения, ставшие невалидными.
   const nextOffers: DriverOffer[] = state.driverOffers.map((offer) => {
     if (offer.status !== "OPEN") return offer;
     if (Date.parse(offer.expiresAt) <= nowMs) {
@@ -240,7 +377,7 @@ export function reconcileDriverOffers(
     const stillValid =
       order !== null &&
       driver !== null &&
-      isOrderEligibleForDriverOffers(state, order) &&
+      isOrderDueForDispatch(state, order, nowMs) &&
       isDriverEligibleForOffer(state, driver, order);
     if (!stillValid) {
       canceledCount += 1;
@@ -249,21 +386,65 @@ export function reconcileDriverOffers(
     return offer;
   });
 
-  // 3: создаём новые предложения всем подходящим водителям подходящих заказов.
+  const workingState: PrototypeState = {
+    ...state,
+    driverOffers: nextOffers,
+  };
+  const nextWaves = [...state.driverDispatchWaves];
+
   for (const order of state.orders) {
-    if (!isOrderEligibleForDriverOffers(state, order)) continue;
-    for (const driver of state.drivers) {
-      if (!isDriverEligibleForOffer(state, driver, order)) continue;
-      const pairKey = offerPairKey(order.id, driver.id);
-      if (existingPairs.has(pairKey)) continue;
-      existingPairs.add(pairKey);
+    if (!isOrderDueForDispatch(workingState, order, nowMs)) continue;
+    const orderWaves = nextWaves
+      .filter((wave) => wave.orderId === order.id)
+      .sort((a, b) => a.waveNumber - b.waveNumber);
+    const latest = orderWaves.at(-1) ?? null;
+    if (latest && nowMs < Date.parse(latest.offerExpiresAt)) continue;
+
+    const cooldownMs =
+      state.platformSettings.driverOfferWaveCooldownSeconds * 1_000;
+    const inCooldown =
+      latest !== null &&
+      nowMs < Date.parse(latest.offerExpiresAt) + cooldownMs;
+    const hasReadyUrgentWave = orderWaves.some(
+      (wave) => wave.trigger === "READY_URGENT",
+    );
+    const canBypassCooldown =
+      order.status === "READY" && inCooldown && !hasReadyUrgentWave;
+    if (inCooldown && !canBypassCooldown) continue;
+
+    const waveNumber = (latest?.waveNumber ?? 0) + 1;
+    const trigger: DriverDispatchWaveTrigger =
+      latest === null
+        ? order.status === "READY"
+          ? "READY_URGENT"
+          : "ETA_WINDOW"
+        : canBypassCooldown
+          ? "READY_URGENT"
+          : "RETRY";
+    const waveId = driverDispatchWaveId(order.id, waveNumber);
+    const offerExpiresAt = new Date(
+      nowMs + state.platformSettings.driverOfferDurationSeconds * 1_000,
+    ).toISOString();
+    nextWaves.push({
+      id: waveId,
+      orderId: order.id,
+      waveNumber,
+      startedAt: nowIso,
+      offerExpiresAt,
+      trigger,
+    });
+
+    for (const driver of getEligibleDriversForOrder(workingState, order)) {
+      if (hasDeclinedOrder(workingState, order.id, driver.id)) continue;
       nextOffers.push({
-        id: driverOfferId(order.id, driver.id),
+        id: driverOfferId(order.id, driver.id, waveNumber),
+        waveId,
+        waveNumber,
         orderId: order.id,
         driverId: driver.id,
         status: "OPEN",
         offeredAt: nowIso,
-        expiresAt: expiresAtIso,
+        expiresAt: offerExpiresAt,
         resolvedAt: null,
         cashReserveConfirmedAt: null,
       });
@@ -271,7 +452,12 @@ export function reconcileDriverOffers(
     }
   }
 
-  if (expiredCount === 0 && canceledCount === 0 && createdCount === 0) {
+  if (
+    expiredCount === 0 &&
+    canceledCount === 0 &&
+    createdCount === 0 &&
+    nextWaves.length === state.driverDispatchWaves.length
+  ) {
     return {
       state,
       result: { ok: true, error: null, createdCount: 0, expiredCount: 0, canceledCount: 0 },
@@ -280,7 +466,11 @@ export function reconcileDriverOffers(
 
   const nextState = finalizeMutation(
     state,
-    { ...state, driverOffers: nextOffers },
+    {
+      ...state,
+      driverOffers: nextOffers,
+      driverDispatchWaves: nextWaves,
+    },
     nowIso,
   );
   return {
@@ -317,6 +507,15 @@ export function declineDriverOffer(
     return fail("Это предложение адресовано другому водителю.");
   }
   if (offer.status !== "OPEN" || Date.parse(offer.expiresAt) <= nowMs) {
+    return fail("Предложение уже недоступно.");
+  }
+  const latestWave = latestWaveForOrder(state, offer.orderId);
+  if (
+    latestWave === null ||
+    latestWave.id !== offer.waveId ||
+    latestWave.waveNumber !== offer.waveNumber ||
+    nowMs >= Date.parse(latestWave.offerExpiresAt)
+  ) {
     return fail("Предложение уже недоступно.");
   }
 
@@ -370,6 +569,15 @@ export function acceptDriverOffer(
     return fail("Это предложение адресовано другому водителю.");
   }
   if (offer.status !== "OPEN" || Date.parse(offer.expiresAt) <= nowMs) {
+    return fail("Предложение уже недоступно.");
+  }
+  const latestWave = latestWaveForOrder(state, offer.orderId);
+  if (
+    latestWave === null ||
+    latestWave.id !== offer.waveId ||
+    latestWave.waveNumber !== offer.waveNumber ||
+    nowMs >= Date.parse(latestWave.offerExpiresAt)
+  ) {
     return fail("Предложение уже недоступно.");
   }
   if (driver.status !== "AVAILABLE") {

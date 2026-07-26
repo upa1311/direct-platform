@@ -6,6 +6,8 @@ import {
   type DeliveryMode,
   type DriverDeliveryEvent,
   type DriverDeliveryEventType,
+  type DriverDispatchWave,
+  type DriverDispatchWaveTrigger,
   type DriverOffer,
   type DriverOfferStatus,
   type DriverOperationalEvent,
@@ -221,7 +223,7 @@ function hasPrototypeStateShape(value: unknown): boolean {
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
   7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-  27, 28, 29,
+  27, 28, 29, 30,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -1043,6 +1045,96 @@ function isValidIso(value: unknown): value is string {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
+function normalizeDriverDispatchWaves(
+  value: unknown,
+  legacyOffers: unknown,
+  orderIds: ReadonlySet<string>,
+  sourceSchemaVersion: number,
+): DriverDispatchWave[] {
+  if (sourceSchemaVersion < 30) {
+    if (!Array.isArray(legacyOffers)) return [];
+    const windowsByOrder = new Map<string, Set<string>>();
+    for (const raw of legacyOffers) {
+      if (
+        !isRecord(raw) ||
+        typeof raw.orderId !== "string" ||
+        !orderIds.has(raw.orderId) ||
+        !isValidIso(raw.offeredAt) ||
+        !isValidIso(raw.expiresAt) ||
+        Date.parse(raw.expiresAt) <= Date.parse(raw.offeredAt)
+      ) {
+        continue;
+      }
+      const key = `${raw.offeredAt}|${raw.expiresAt}`;
+      const windows = windowsByOrder.get(raw.orderId) ?? new Set<string>();
+      windows.add(key);
+      windowsByOrder.set(raw.orderId, windows);
+    }
+    const migrated: DriverDispatchWave[] = [];
+    for (const [orderId, windows] of windowsByOrder) {
+      [...windows]
+        .sort((a, b) => {
+          const [aStartedAt, aExpiresAt] = a.split("|");
+          const [bStartedAt, bExpiresAt] = b.split("|");
+          return (
+            Date.parse(aStartedAt) - Date.parse(bStartedAt) ||
+            Date.parse(aExpiresAt) - Date.parse(bExpiresAt)
+          );
+        })
+        .forEach((window, index) => {
+          const [startedAt, offerExpiresAt] = window.split("|");
+          const waveNumber = index + 1;
+          migrated.push({
+            id: `driver-dispatch-wave-${orderId}-${waveNumber}`,
+            orderId,
+            waveNumber,
+            startedAt,
+            offerExpiresAt,
+            trigger: "LEGACY",
+          });
+        });
+    }
+    return migrated;
+  }
+  if (!Array.isArray(value)) return [];
+  const seenIds = new Set<string>();
+  const seenOrderNumbers = new Set<string>();
+  const result: DriverDispatchWave[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    if (
+      typeof raw.id !== "string" ||
+      seenIds.has(raw.id) ||
+      typeof raw.orderId !== "string" ||
+      !orderIds.has(raw.orderId) ||
+      !Number.isInteger(raw.waveNumber) ||
+      (raw.waveNumber as number) <= 0 ||
+      !isValidIso(raw.startedAt) ||
+      !isValidIso(raw.offerExpiresAt) ||
+      Date.parse(raw.offerExpiresAt) <= Date.parse(raw.startedAt) ||
+      typeof raw.trigger !== "string" ||
+      !DRIVER_DISPATCH_WAVE_TRIGGERS.has(raw.trigger)
+    ) {
+      continue;
+    }
+    const waveNumber = raw.waveNumber as number;
+    const orderNumber = `${raw.orderId}|${waveNumber}`;
+    if (seenOrderNumbers.has(orderNumber)) continue;
+    if (raw.id !== `driver-dispatch-wave-${raw.orderId}-${waveNumber}`) continue;
+    seenIds.add(raw.id);
+    seenOrderNumbers.add(orderNumber);
+    result.push({
+      id: raw.id,
+      orderId: raw.orderId,
+      waveNumber,
+      startedAt: raw.startedAt,
+      offerExpiresAt: raw.offerExpiresAt,
+      trigger: raw.trigger as DriverDispatchWaveTrigger,
+    });
+  }
+  return result;
+}
+
 /**
  * Нормализация предложений заказов водителям (v17; наличное подтверждение — v20).
  * Состояние до v17 поля не имеет — безопасный пустой список. Выдуманные
@@ -1059,6 +1151,7 @@ function normalizeDriverOffers(
   value: unknown,
   orders: readonly Order[],
   driverIds: ReadonlySet<string>,
+  waves: readonly DriverDispatchWave[],
   sourceSchemaVersion: number,
 ): DriverOffer[] {
   if (!Array.isArray(value)) {
@@ -1066,6 +1159,8 @@ function normalizeDriverOffers(
   }
   const ordersById = new Map(orders.map((order) => [order.id, order]));
   const seenIds = new Set<string>();
+  const seenWaveDrivers = new Set<string>();
+  const wavesById = new Map(waves.map((wave) => [wave.id, wave]));
   const result: DriverOffer[] = [];
   for (const raw of value) {
     if (!isRecord(raw)) continue;
@@ -1080,6 +1175,37 @@ function normalizeDriverOffers(
     if (!isValidIso(offeredAt) || !isValidIso(expiresAt)) continue;
     if (Date.parse(expiresAt) <= Date.parse(offeredAt)) continue;
     if (resolvedAt !== null && !isValidIso(resolvedAt)) continue;
+
+    let wave: DriverDispatchWave | undefined;
+    if (sourceSchemaVersion >= 30) {
+      if (
+        typeof raw.waveId !== "string" ||
+        !Number.isInteger(raw.waveNumber)
+      ) {
+        continue;
+      }
+      wave = wavesById.get(raw.waveId);
+      if (
+        !wave ||
+        wave.orderId !== orderId ||
+        wave.waveNumber !== raw.waveNumber ||
+        wave.startedAt !== offeredAt ||
+        wave.offerExpiresAt !== expiresAt ||
+        id !== `driver-offer-${orderId}-${driverId}-wave-${wave.waveNumber}`
+      ) {
+        continue;
+      }
+    } else {
+      wave = waves.find(
+        (candidate) =>
+          candidate.orderId === orderId &&
+          candidate.startedAt === offeredAt &&
+          candidate.offerExpiresAt === expiresAt,
+      );
+      if (!wave) continue;
+    }
+    const waveDriver = `${wave.id}|${driverId}`;
+    if (seenWaveDrivers.has(waveDriver)) continue;
 
     const order = ordersById.get(orderId);
     const orderIsNativeCash =
@@ -1096,8 +1222,14 @@ function normalizeDriverOffers(
         : null;
 
     seenIds.add(id);
+    seenWaveDrivers.add(waveDriver);
     result.push({
-      id,
+      id:
+        sourceSchemaVersion >= 30
+          ? id
+          : `driver-offer-${orderId}-${driverId}-wave-${wave.waveNumber}`,
+      waveId: wave.id,
+      waveNumber: wave.waveNumber,
       orderId,
       driverId,
       status: status as DriverOfferStatus,
@@ -1809,6 +1941,14 @@ const INCIDENT_PAYMENT_METHODS: ReadonlySet<string> = new Set([
   "CASH_TO_RESTAURANT_COURIER",
 ]);
 
+const DRIVER_DISPATCH_WAVE_TRIGGERS: ReadonlySet<string> =
+  new Set<DriverDispatchWaveTrigger>([
+    "ETA_WINDOW",
+    "READY_URGENT",
+    "RETRY",
+    "LEGACY",
+  ]);
+
 /**
  * v29 report normalization. Старые схемы получают пустой список, прошлое из
  * истории заказа не синтезируется. Структурно валидные дубли сохраняются: их
@@ -1973,10 +2113,17 @@ export function normalizePrototypeState(
   const normalizedDriverIds = new Set(
     normalizedDrivers.map((driver) => driver.id),
   );
+  const normalizedDriverDispatchWaves = normalizeDriverDispatchWaves(
+    state.driverDispatchWaves,
+    state.driverOffers,
+    normalizedOrderIds,
+    sourceSchemaVersion,
+  );
   const normalizedDriverOffers = normalizeDriverOffers(
     state.driverOffers,
     normalizedOrders,
     normalizedDriverIds,
+    normalizedDriverDispatchWaves,
     sourceSchemaVersion,
   );
   // v22: получение денег от клиента валидируется против УЖЕ нормализованных
@@ -2113,6 +2260,24 @@ export function normalizePrototypeState(
         typeof state.platformSettings.platformDriverCashEnabled === "boolean"
           ? state.platformSettings.platformDriverCashEnabled
           : false,
+      driverDispatchLeadMinutes:
+        sourceSchemaVersion >= 30 &&
+        isRecord(state.platformSettings) &&
+        state.platformSettings.driverDispatchLeadMinutes === 10
+          ? 10
+          : defaults.platformSettings.driverDispatchLeadMinutes,
+      driverOfferDurationSeconds:
+        sourceSchemaVersion >= 30 &&
+        isRecord(state.platformSettings) &&
+        state.platformSettings.driverOfferDurationSeconds === 30
+          ? 30
+          : defaults.platformSettings.driverOfferDurationSeconds,
+      driverOfferWaveCooldownSeconds:
+        sourceSchemaVersion >= 30 &&
+        isRecord(state.platformSettings) &&
+        state.platformSettings.driverOfferWaveCooldownSeconds === 15
+          ? 15
+          : defaults.platformSettings.driverOfferWaveCooldownSeconds,
     },
     zones: normalizedZones,
     tariffs: isRecord(state.tariffs) ? state.tariffs : defaults.tariffs,
@@ -2133,6 +2298,7 @@ export function normalizePrototypeState(
     // запись без существующего заказа или водителя не сохраняется. Состояние
     // до v17/v18 получает пустой список.
     driverOffers: normalizedDriverOffers,
+    driverDispatchWaves: normalizedDriverDispatchWaves,
     driverDeliveryEvents: normalizedDriverDeliveryEvents,
     driverOrderIncidents: normalizedDriverOrderIncidents,
     driverOrderIncidentResolutionEvents:

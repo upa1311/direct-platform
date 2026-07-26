@@ -227,11 +227,23 @@ function cashState(opts: CashOpts = {}): PrototypeState {
     ...base,
     platformSettings: { ...base.platformSettings, platformDriverCashEnabled: true },
     orders: [order],
+    driverDispatchWaves: [
+      {
+        id: `driver-dispatch-wave-${ORDER}-1`,
+        orderId: ORDER,
+        waveNumber: 1,
+        startedAt: T0,
+        offerExpiresAt: "2030-01-01T00:00:00.000Z",
+        trigger: "LEGACY",
+      },
+    ],
     driverOffers: [
       {
-        id: "offer-1",
+        id: `driver-offer-${ORDER}-${DRIVER}-wave-1`,
         orderId: ORDER,
         driverId: DRIVER,
+        waveId: `driver-dispatch-wave-${ORDER}-1`,
+        waveNumber: 1,
         status: "ACCEPTED",
         offeredAt: T0,
         expiresAt: "2030-01-01T00:00:00.000Z",
@@ -320,7 +332,7 @@ function onlineCompleted(): { state: PrototypeState; orderId: string } {
 // --- 1–3: модель и дефолты ----------------------------------------------------
 
 test("1/2/3: схема 24, пустой журнал заработка, наличные выключены", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
   const d = createDefaultState();
   assert.deepEqual(d.driverEarningEntries, []);
   assert.equal(d.platformSettings.platformDriverCashEnabled, false);

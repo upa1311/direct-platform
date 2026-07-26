@@ -177,11 +177,23 @@ function cashArriving(): PrototypeState {
     ...base,
     platformSettings: { ...base.platformSettings, platformDriverCashEnabled: true },
     orders: [order],
+    driverDispatchWaves: [
+      {
+        id: `driver-dispatch-wave-${ORDER}-1`,
+        orderId: ORDER,
+        waveNumber: 1,
+        startedAt: T0,
+        offerExpiresAt: "2030-01-01T00:00:00.000Z",
+        trigger: "LEGACY",
+      },
+    ],
     driverOffers: [
       {
-        id: "offer-1",
+        id: `driver-offer-${ORDER}-${DRIVER}-wave-1`,
         orderId: ORDER,
         driverId: DRIVER,
+        waveId: `driver-dispatch-wave-${ORDER}-1`,
+        waveNumber: 1,
         status: "ACCEPTED",
         offeredAt: T0,
         expiresAt: "2030-01-01T00:00:00.000Z",
@@ -248,12 +260,12 @@ const accOf = (s: PrototypeState, id: string) =>
 const LEGACY_LEDGER_FIELD = ["driverCash", "LedgerEntries"].join("");
 
 test("1/2/4: схема 25; schema24 мигрирует; старый ledger отсутствует", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 29);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
   const parsed = parseStoredState(
     JSON.stringify({ ...cashCompleted(), schemaVersion: 24 }),
   );
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 29);
+  assert.equal(parsed.schemaVersion, 30);
   assert.ok(!(LEGACY_LEDGER_FIELD in parsed));
 });
 
