@@ -8,18 +8,16 @@ import { useNowMs } from "@/components/util/use-now";
 import { PeriodSelector } from "@/components/analytics/period-selector";
 import {
   ANALYTICS_TIME_ZONE,
+  SHIFT_DURATION_LABEL,
   analyticsZoneName,
   formatAnalyticsDuration,
   formatCoverageStartedAt,
-  formatDeliveriesPerHour,
   formatResponseTime,
-  formatUtilization,
   zoneShare,
 } from "@/components/analytics/analytics-presentation";
 import { getZoneButtonPresentation } from "@/lib/zones/zone-presentation";
 import { getDriverShiftAnalyticsView, type DriverShiftAnalyticsPeriod } from "@/prototype/driver-shift-analytics";
 import { usePrototype } from "@/prototype/prototype-provider";
-import { formatMoney } from "@/prototype/selectors";
 import styles from "./statistics.module.css";
 
 export default function DriverStatisticsPage() {
@@ -56,7 +54,7 @@ export default function DriverStatisticsPage() {
       {hasCoverage ? <section className={styles.section} aria-labelledby="driver-time-title">
         <h2 id="driver-time-title">Время</h2>
         <div className={styles.metricGrid}>
-          <Metric label="В смене" value={formatAnalyticsDuration(view.shiftDurationMs)} />
+          <Metric label={SHIFT_DURATION_LABEL} value={formatAnalyticsDuration(view.shiftDurationMs)} />
           <Metric label="Онлайн" value={formatAnalyticsDuration(view.onlineDurationMs)} />
           <Metric label="Ждал заказы" value={formatAnalyticsDuration(view.waitingDurationMs)} />
           <Metric label="Выполнял доставки" value={formatAnalyticsDuration(view.deliveryDurationMs)} />
@@ -68,18 +66,6 @@ export default function DriverStatisticsPage() {
           </dl>
         ) : null}
       </section> : null}
-
-      <section className={styles.section} aria-labelledby="driver-result-title">
-        <h2 id="driver-result-title">Результат</h2>
-        <div className={styles.resultGrid}>
-          <Metric label="Завершённых доставок" value={String(view.completedDeliveryCount)} />
-          <Metric label="Заработано" value={view.earnedCents === null ? "—" : formatMoney(view.earnedCents)} />
-          {hasCoverage ? <Metric label="Загрузка" value={formatUtilization(view.utilizationBps)} /> : null}
-          {hasCoverage ? <Metric label="Заработок за час онлайн" value={view.earningsPerOnlineHourCents === null ? "—" : formatMoney(view.earningsPerOnlineHourCents)} /> : null}
-          {hasCoverage ? <Metric label="Доставок в час" value={formatDeliveriesPerHour(view.deliveriesPerOnlineHourMilli)} suffix="доставки/ч" /> : null}
-        </div>
-        {hasCoverage ? <p className={styles.explanation}>Загрузка — доля времени доставки среди активного времени онлайн.</p> : null}
-      </section>
 
       <section className={styles.section} aria-labelledby="driver-offers-title">
         <h2 id="driver-offers-title">Предложения заказов</h2>
@@ -104,8 +90,8 @@ export default function DriverStatisticsPage() {
   );
 }
 
-function Metric({ label, value, suffix }: { label: string; value: string; suffix?: string }) {
-  return <div className={styles.metric}><span>{label}</span><strong>{value}</strong>{suffix ? <small>{suffix}</small> : null}</div>;
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className={styles.metric}><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function DataRow({ label, value }: { label: string; value: string }) {

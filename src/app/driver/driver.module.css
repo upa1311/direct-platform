@@ -598,6 +598,30 @@
   color: var(--kds-text, #161a17);
 }
 
+.driverTimeSummary {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 7px;
+  margin-left: 30px;
+  max-width: 100%;
+  color: var(--kds-muted, #66706a);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.driverTimeSummary strong {
+  color: var(--kds-text, #161a17);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.driverTimeIcon {
+  flex: 0 0 auto;
+}
+
 /* Облако добровольной заметки водителя — как реплика/мысль. Белая поверхность
    явно отличается от серого фона страницы; нейтральная рамка с лёгким оранжевым
    акцентом слева; текст курсивом. Не ошибка/предупреждение, не оранжевая заливка. */

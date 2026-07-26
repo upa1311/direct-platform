@@ -31,5 +31,5 @@
 .zones strong { white-space: nowrap; }
 .zones small { min-width: 40px; color: var(--kds-muted, #66706a); text-align: right; }
 .zoneMarker { width: 10px; height: 10px; border: 1px solid rgba(0,0,0,.25); border-radius: 50%; }
-@media (min-width: 760px) { .summary { grid-template-columns: repeat(4, minmax(0, 1fr)); } .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .primaryMetrics { grid-template-columns: repeat(5, minmax(0, 1fr)); } .detailMetrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 760px) { .summary { grid-template-columns: repeat(4, minmax(0, 1fr)); } .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .primaryMetrics { grid-template-columns: repeat(5, minmax(0, 1fr)); } .detailMetrics, .offerMetrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 520px) { .page { gap: 12px; } .card { padding: 12px; } .zones li { grid-template-columns: 12px minmax(0, 1fr) auto; } .zones small { grid-column: 2 / -1; text-align: left; } }

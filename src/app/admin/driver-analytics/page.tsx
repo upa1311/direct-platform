@@ -6,13 +6,16 @@ import { PeriodSelector } from "@/components/analytics/period-selector";
 import {
   ANALYTICS_TIME_ZONE,
   DRIVER_STATUS_LABELS,
+  SHIFT_DURATION_LABEL,
   analyticsZoneName,
   checkedSumIntegers,
   formatAnalyticsDuration,
   formatCoverageStartedAt,
   formatDeliveriesPerHour,
+  formatPercentageBps,
   formatResponseTime,
   formatUtilization,
+  getOfferPresentationSummary,
   sumAvailableDurations,
   zoneShare,
 } from "@/components/analytics/analytics-presentation";
@@ -60,6 +63,7 @@ function SummaryMetric({ label, value, note }: { label: string; value: string; n
 
 function DriverAnalyticsCard({ row, state }: { row: AdminDriverShiftAnalyticsRow; state: ReturnType<typeof usePrototype>["state"] }) {
   const view = row.analytics;
+  const offerSummary = getOfferPresentationSummary(view.acceptedOfferCount, view.declinedOfferCount, view.expiredOfferCount);
   const hasCoverage = view.coverageStartedAt !== null;
   const zoneName = row.currentZoneId === null ? "Без подтверждённой зоны" : analyticsZoneName(state, row.currentZoneId);
   return (
@@ -81,7 +85,7 @@ function DriverAnalyticsCard({ row, state }: { row: AdminDriverShiftAnalyticsRow
         <summary>Подробная статистика</summary>
         {hasCoverage && view.coverageIncomplete ? <p className={styles.coverageText}>Учёт ведётся с {formatCoverageStartedAt(view.coverageStartedAt as string)}.</p> : null}
         {hasCoverage ? <dl className={styles.detailMetrics}>
-          <Metric label="В смене" value={formatAnalyticsDuration(view.shiftDurationMs)} />
+          <Metric label={SHIFT_DURATION_LABEL} value={formatAnalyticsDuration(view.shiftDurationMs)} />
           <Metric label="На паузе" value={formatAnalyticsDuration(view.pausedDurationMs)} muted={view.pausedDurationMs === 0} />
           <Metric label="Подтверждение зоны" value={formatAnalyticsDuration(view.zoneConfirmationDurationMs)} muted={view.zoneConfirmationDurationMs === 0} />
           <Metric label="Заработано" value={view.earnedCents === null ? "—" : formatMoney(view.earnedCents)} />
@@ -89,7 +93,7 @@ function DriverAnalyticsCard({ row, state }: { row: AdminDriverShiftAnalyticsRow
           <Metric label="Доставок в час" value={formatDeliveriesPerHour(view.deliveriesPerOnlineHourMilli)} />
         </dl> : <p className={styles.detailsNote}>Временные показатели появятся после начала учёта. Данные доставок, заработка и предложений остаются доступны.</p>}
         <h4>Предложения заказов</h4>
-        <dl className={styles.offerMetrics}><Metric label="Принято" value={String(view.acceptedOfferCount)} /><Metric label="Отклонено" value={String(view.declinedOfferCount)} /><Metric label="Пропущено" value={String(view.expiredOfferCount)} /><Metric label="Средний ответ" value={formatResponseTime(view.averageResponseTimeMs)} /></dl>
+        <dl className={styles.offerMetrics}><Metric label="Всего предложений" value={offerSummary.totalOffers === null ? "—" : String(offerSummary.totalOffers)} /><Metric label="Принято" value={String(view.acceptedOfferCount)} /><Metric label="Отклонено" value={String(view.declinedOfferCount)} /><Metric label="Пропущено" value={String(view.expiredOfferCount)} /><Metric label="Процент отказов" value={formatPercentageBps(offerSummary.declineRateBps)} /><Metric label="Средний ответ" value={formatResponseTime(view.averageResponseTimeMs)} /></dl>
         {hasCoverage ? <><h4>Время по зонам</h4><AdminZoneBreakdown row={row} state={state} /></> : null}
       </details>
     </article>

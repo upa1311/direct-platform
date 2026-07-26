@@ -6,8 +6,11 @@ import {
   checkedSumIntegers,
   formatAnalyticsDuration,
   formatDeliveriesPerHour,
+  formatPercentageBps,
   formatResponseTime,
   formatUtilization,
+  getOfferPresentationSummary,
+  SHIFT_DURATION_LABEL,
   sumAvailableDurations,
 } from "./analytics-presentation.ts";
 
@@ -22,17 +25,20 @@ const DRIVER_HEADER = read("src/components/workspaces/driver-header.tsx");
 const ADMIN_NAV = read("src/components/workspaces/admin-navigation.ts");
 const ADMIN_HOME = read("src/app/admin/page.tsx");
 const SETTLEMENTS = read("src/app/driver/settlements/page.tsx");
+const DRIVER_WORKSPACE = read("src/components/driver/driver-workspace.tsx");
+const DRIVER_WORKSPACE_CSS = read("src/app/driver/driver.module.css");
 
 test("форматы duration, response time, utilization и deliveries/hour", () => {
+  assert.equal(SHIFT_DURATION_LABEL, "На смене");
   assert.equal(formatAnalyticsDuration(null), "—");
   assert.equal(formatAnalyticsDuration(0), "0 мин");
-  assert.equal(formatAnalyticsDuration(1), "< 1 мин");
+  assert.equal(formatAnalyticsDuration(1), "до 1 мин");
   assert.equal(formatAnalyticsDuration(25 * 60_000), "25 мин");
   assert.equal(formatAnalyticsDuration(60 * 60_000), "1 ч");
   assert.equal(formatAnalyticsDuration(85 * 60_000), "1 ч 25 мин");
   assert.equal(formatAnalyticsDuration(8 * 60 * 60_000), "8 ч");
   assert.equal(formatResponseTime(null), "—");
-  assert.equal(formatResponseTime(500), "< 1 сек");
+  assert.equal(formatResponseTime(500), "до 1 сек");
   assert.equal(formatResponseTime(15_000), "15 сек");
   assert.equal(formatResponseTime(70_000), "1 мин 10 сек");
   assert.equal(formatUtilization(3333), "33.3%");
@@ -40,6 +46,17 @@ test("форматы duration, response time, utilization и deliveries/hour", (
   assert.equal(formatDeliveriesPerHour(500), "0.5");
   assert.equal(formatDeliveriesPerHour(1500), "1.5");
   assert.equal(formatDeliveriesPerHour(2000), "2");
+});
+
+test("offer presentation summary считает total и процент отказов", () => {
+  assert.deepEqual(getOfferPresentationSummary(3, 2, 1), { totalOffers: 6, declineRateBps: 3333 });
+  assert.equal(formatPercentageBps(getOfferPresentationSummary(3, 2, 1).declineRateBps), "33.3%");
+  assert.equal(formatPercentageBps(getOfferPresentationSummary(3, 3, 0).declineRateBps), "50%");
+  assert.equal(formatPercentageBps(getOfferPresentationSummary(6, 0, 0).declineRateBps), "0%");
+  assert.equal(formatPercentageBps(getOfferPresentationSummary(0, 0, 0).declineRateBps), "—");
+  assert.deepEqual(getOfferPresentationSummary(1.5, 0, 0), { totalOffers: null, declineRateBps: null });
+  assert.deepEqual(getOfferPresentationSummary(-1, 0, 0), { totalOffers: null, declineRateBps: null });
+  assert.deepEqual(getOfferPresentationSummary(Number.MAX_SAFE_INTEGER, 1, 0), { totalOffers: null, declineRateBps: null });
 });
 
 test("checked presentation sums отклоняют null, unsafe values и overflow", () => {
@@ -80,12 +97,32 @@ test("driver analytics показывает честные состояния и
   assert.ok(DRIVER_PAGE.includes("Подтверждённых данных о предложениях за период нет"));
   assert.ok(DRIVER_PAGE.includes("coverageIncomplete"));
   assert.ok(DRIVER_PAGE.includes("Некоторые данные требуют проверки Direct"));
-  assert.ok(DRIVER_PAGE.includes("earningsPerOnlineHourCents"));
+  assert.ok(!DRIVER_PAGE.includes("Результат"));
+  assert.ok(!DRIVER_PAGE.includes("Загрузка — доля времени доставки"));
+  assert.ok(!DRIVER_PAGE.includes("utilizationBps"));
+  assert.ok(!DRIVER_PAGE.includes("earningsPerOnlineHourCents"));
+  assert.ok(!DRIVER_PAGE.includes("deliveriesPerOnlineHourMilli"));
+  assert.ok(DRIVER_PAGE.includes("Предложения заказов"));
+  assert.ok(!DRIVER_PAGE.includes("Процент отказов"));
+  assert.ok(DRIVER_PAGE.includes("SHIFT_DURATION_LABEL"));
   assert.ok(DRIVER_PAGE.includes("averageResponseTimeMs"));
   assert.ok(DRIVER_PAGE.includes("getZoneButtonPresentation"));
   assert.ok(DRIVER_PAGE.includes("Без подтверждённой зоны"));
   assert.ok(DRIVER_CSS.includes("repeat(2, minmax(0, 1fr))"));
   assert.ok(!DRIVER_PAGE.includes("navigator.geolocation"));
+});
+
+test("driver workspace показывает компактное время только при coverage", () => {
+  assert.ok(DRIVER_WORKSPACE.includes("getDriverShiftAnalyticsView"));
+  assert.ok(DRIVER_WORKSPACE.includes('"TODAY"'));
+  assert.ok(DRIVER_WORKSPACE.includes("ANALYTICS_TIME_ZONE"));
+  assert.ok(DRIVER_WORKSPACE.includes("nowMs > 0"));
+  assert.ok(DRIVER_WORKSPACE.includes("coverageStartedAt !== null"));
+  assert.ok(DRIVER_WORKSPACE.includes("Clock3"));
+  assert.ok(DRIVER_WORKSPACE.includes("SHIFT_DURATION_LABEL"));
+  assert.ok(DRIVER_WORKSPACE.includes("Онлайн"));
+  assert.ok(DRIVER_WORKSPACE_CSS.includes("flex-wrap: wrap"));
+  assert.ok(DRIVER_WORKSPACE_CSS.includes("max-width: 100%"));
 });
 
 test("admin navigation, route card и analytics route подключены", () => {
@@ -108,6 +145,10 @@ test("admin navigation, route card и analytics route подключены", () 
   assert.ok(ADMIN_PAGE.includes("DRIVER_STATUS_LABELS"));
   assert.ok(ADMIN_PAGE.includes("Неполный период"));
   assert.ok(ADMIN_PAGE.includes("Требует проверки"));
+  assert.ok(ADMIN_PAGE.includes("Всего предложений"));
+  assert.ok(ADMIN_PAGE.includes("Процент отказов"));
+  assert.ok(ADMIN_PAGE.includes("getOfferPresentationSummary"));
+  assert.ok(ADMIN_PAGE.includes("SHIFT_DURATION_LABEL"));
   assert.ok(ADMIN_PAGE.includes("<details"));
   assert.ok(ADMIN_PAGE.includes("getZoneButtonPresentation"));
   assert.ok(!ADMIN_PAGE.includes(".sort("));

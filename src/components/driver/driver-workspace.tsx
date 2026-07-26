@@ -25,6 +25,12 @@ import {
   type PlatformDriverCustomerCashCollectionView,
 } from "@/prototype/platform-driver-cash-collection";
 import { useNowMs } from "@/components/util/use-now";
+import {
+  ANALYTICS_TIME_ZONE,
+  SHIFT_DURATION_LABEL,
+  formatAnalyticsDuration,
+} from "@/components/analytics/analytics-presentation";
+import { getDriverShiftAnalyticsView } from "@/prototype/driver-shift-analytics";
 import type {
   DeliveryAddress,
   DriverOffer,
@@ -40,7 +46,7 @@ import {
   useAuthenticatedDriverId,
   writeAuthenticatedDriverId,
 } from "./driver-session";
-import { Banknote, BellOff, BellRing, CarFront, CreditCard, MapPin } from "lucide-react";
+import { Banknote, BellOff, BellRing, CarFront, Clock3, CreditCard, MapPin } from "lucide-react";
 
 import { useDriverOfferSoundPreference } from "./driver-offer-sound";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
@@ -175,10 +181,25 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
   const activeOrder = getDriverActiveOrder(state, driver.id);
   const newCount = openOffers.length;
   const workCount = activeOrder ? 1 : 0;
+  const todayAnalytics = nowMs > 0
+    ? getDriverShiftAnalyticsView(
+        state,
+        driver.id,
+        "TODAY",
+        new Date(nowMs).toISOString(),
+        ANALYTICS_TIME_ZONE,
+      )
+    : null;
+  const todayTime = todayAnalytics !== null && todayAnalytics.coverageStartedAt !== null
+    ? {
+        shiftDuration: formatAnalyticsDuration(todayAnalytics.shiftDurationMs),
+        onlineDuration: formatAnalyticsDuration(todayAnalytics.onlineDurationMs),
+      }
+    : null;
 
   return (
     <>
-      <ProfileLine driver={driver} />
+      <ProfileLine driver={driver} todayTime={todayTime} />
 
       {/* Компактная верхняя панель: статус, зона, колокольчик — в одной строке. */}
       <DriverQuickControls driver={driver} zoneName={zoneName} />
@@ -204,7 +225,13 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
  * Дублирующая сводка статуса и зоны под именем убрана — они видны в панели
  * управления сменой ниже.
  */
-function ProfileLine({ driver }: { driver: DriverProfile }) {
+function ProfileLine({
+  driver,
+  todayTime,
+}: {
+  driver: DriverProfile;
+  todayTime: { shiftDuration: string; onlineDuration: string } | null;
+}) {
   return (
     <section className={styles.profileLine} aria-label="Профиль водителя">
       <div className={styles.profileText}>
@@ -247,6 +274,17 @@ function ProfileLine({ driver }: { driver: DriverProfile }) {
             </>
           )}
         </span>
+        {todayTime ? (
+          <span
+            className={styles.driverTimeSummary}
+            aria-label={`Время водителя сегодня: на смене ${todayTime.shiftDuration}, онлайн ${todayTime.onlineDuration}`}
+          >
+            <Clock3 size={15} aria-hidden="true" className={styles.driverTimeIcon} />
+            <span>{SHIFT_DURATION_LABEL} <strong>{todayTime.shiftDuration}</strong></span>
+            <span aria-hidden="true">·</span>
+            <span>Онлайн <strong>{todayTime.onlineDuration}</strong></span>
+          </span>
+        ) : null}
       </div>
       <ProfileMenu driver={driver} />
     </section>

@@ -2,11 +2,12 @@ import type { DriverStatus, PrototypeState, ZoneId } from "../../prototype/model
 import { getZoneName } from "../../prototype/selectors";
 
 export const ANALYTICS_TIME_ZONE = "Europe/Chisinau";
+export const SHIFT_DURATION_LABEL = "На смене";
 
 export function formatAnalyticsDuration(durationMs: number | null): string {
   if (durationMs === null) return "—";
   if (durationMs === 0) return "0 мин";
-  if (durationMs < 60_000) return "< 1 мин";
+  if (durationMs < 60_000) return "до 1 мин";
   const totalMinutes = Math.floor(durationMs / 60_000);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
@@ -16,7 +17,7 @@ export function formatAnalyticsDuration(durationMs: number | null): string {
 
 export function formatResponseTime(durationMs: number | null): string {
   if (durationMs === null) return "—";
-  if (durationMs < 1_000) return "< 1 сек";
+  if (durationMs < 1_000) return "до 1 сек";
   const totalSeconds = Math.floor(durationMs / 1_000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -25,6 +26,10 @@ export function formatResponseTime(durationMs: number | null): string {
 }
 
 export function formatUtilization(valueBps: number | null): string {
+  return formatPercentageBps(valueBps);
+}
+
+export function formatPercentageBps(valueBps: number | null): string {
   if (valueBps === null) return "—";
   const value = valueBps / 100;
   return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}%`;
@@ -78,4 +83,23 @@ export function checkedSumIntegers(values: readonly number[]): number | null {
     total = next;
   }
   return total;
+}
+
+export interface OfferPresentationSummary {
+  totalOffers: number | null;
+  declineRateBps: number | null;
+}
+
+export function getOfferPresentationSummary(
+  accepted: number,
+  declined: number,
+  expired: number,
+): OfferPresentationSummary {
+  const totalOffers = checkedSumIntegers([accepted, declined, expired]);
+  if (totalOffers === null) return { totalOffers: null, declineRateBps: null };
+  if (totalOffers === 0) return { totalOffers: 0, declineRateBps: null };
+  return {
+    totalOffers,
+    declineRateBps: Math.round((declined / totalOffers) * 10_000),
+  };
 }
