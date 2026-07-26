@@ -609,7 +609,7 @@ test("старое состояние мигрирует с пустым мас�
   const parsed = parseStoredState(JSON.stringify(legacy));
   assert.ok(parsed);
   assert.equal(parsed.schemaVersion, PROTOTYPE_SCHEMA_VERSION);
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
   assert.deepEqual(parsed.restaurantSettlementRecords, []);
 });
 

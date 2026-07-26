@@ -8,6 +8,7 @@ import {
   type DriverDeliveryEventType,
   type DriverOffer,
   type DriverOfferStatus,
+  type DriverOperationalEvent,
   type DriverStatus,
   type FinancialSnapshot,
   type OrderStatus,
@@ -82,16 +83,87 @@ function str(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
 }
 
+/**
+ * Детерминированный id операционного события: один водитель имеет максимум одно
+ * событие в одной ревизии. Без Date.now — id полностью выводится из driverId и
+ * revision (v28).
+ */
+export function driverOperationalEventId(
+  driverId: string,
+  revision: number,
+): string {
+  return `driver-operational:${driverId}:revision:${revision}`;
+}
+
+/**
+ * Операционные события для одной мутации: по одному на каждого водителя, у
+ * которого РЕАЛЬНО изменился status или currentZoneId между исходным и финальным
+ * state. Изменения заметки/наличных/имени/телефона и суг­гестии зоны без смены
+ * status/currentZoneId события не создают. Все события одной мутации получают
+ * одинаковые revision и occurredAt; id различаются driverId.
+ */
+function buildDriverOperationalEvents(
+  currentState: PrototypeState,
+  nextState: PrototypeState,
+  revision: number,
+  occurredAt: string,
+): DriverOperationalEvent[] {
+  const before = new Map(currentState.drivers.map((d) => [d.id, d]));
+  const events: DriverOperationalEvent[] = [];
+  for (const after of nextState.drivers) {
+    const prev = before.get(after.id);
+    // Новый водитель (в прототипе не добавляется мутациями) не наблюдается: без
+    // предыдущего состояния «изменение» недоказуемо.
+    if (!prev) continue;
+    if (
+      prev.status === after.status &&
+      prev.currentZoneId === after.currentZoneId
+    ) {
+      continue;
+    }
+    events.push({
+      id: driverOperationalEventId(after.id, revision),
+      revision,
+      driverId: after.id,
+      occurredAt,
+      statusBefore: prev.status,
+      statusAfter: after.status,
+      currentZoneIdBefore: prev.currentZoneId,
+      currentZoneIdAfter: after.currentZoneId,
+    });
+  }
+  return events;
+}
+
+/**
+ * Единый authoritative финалайзер мутации: назначает schemaVersion, новую
+ * revision и updatedAt. Здесь же атомарно (без второго роста ревизии/updatedAt)
+ * пишется операционный журнал водителей: сравнивает драйверов до/после и
+ * добавляет по событию на каждое реальное изменение status/currentZoneId с той
+ * же revision и occurredAt === updatedAt. No-op action сюда не приходит (не
+ * меняет state и не растит ревизию), поэтому лишние события не создаются.
+ */
 export function finalizeMutation(
   currentState: PrototypeState,
   nextState: PrototypeState,
   timestamp = new Date().toISOString(),
 ): PrototypeState {
+  const revision = currentState.revision + 1;
+  const events = buildDriverOperationalEvents(
+    currentState,
+    nextState,
+    revision,
+    timestamp,
+  );
   return {
     ...nextState,
     schemaVersion: PROTOTYPE_SCHEMA_VERSION,
-    revision: currentState.revision + 1,
+    revision,
     updatedAt: timestamp,
+    driverOperationalEvents:
+      events.length > 0
+        ? [...nextState.driverOperationalEvents, ...events]
+        : nextState.driverOperationalEvents,
   };
 }
 
@@ -139,7 +211,7 @@ function hasPrototypeStateShape(value: unknown): boolean {
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
   7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-  27,
+  27, 28,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -1634,6 +1706,92 @@ function normalizeSeedPromotion(
   return { ...promotion, title, displayText };
 }
 
+const KNOWN_DRIVER_STATUSES: ReadonlySet<DriverStatus> = new Set<DriverStatus>([
+  "OFFLINE",
+  "AVAILABLE",
+  "PAUSED",
+  "BUSY_DIRECT",
+  "ZONE_CONFIRMATION_REQUIRED",
+]);
+
+function isKnownDriverStatus(value: unknown): value is DriverStatus {
+  return (
+    typeof value === "string" &&
+    KNOWN_DRIVER_STATUSES.has(value as DriverStatus)
+  );
+}
+
+/** Зона операционного события: null допустим; строка — только существующий ZoneId. */
+function operationalZone(
+  value: unknown,
+  validZoneIds: ReadonlySet<string>,
+): { ok: boolean; zone: ZoneId | null } {
+  if (value === null || value === undefined) return { ok: true, zone: null };
+  if (typeof value === "string" && validZoneIds.has(value)) {
+    return { ok: true, zone: value as ZoneId };
+  }
+  return { ok: false, zone: null };
+}
+
+/**
+ * Операционный журнал водителей (v28). Прошлое НЕ синтезируется: schema ≤ 27 →
+ * пустой список. Для schema ≥ 28 сохраняются только структурно-валидные события
+ * (непустой id, safe positive revision ≤ state.revision, существующий водитель,
+ * валидный ISO, известные статусы, зоны null/существующие, детерминированный id).
+ * Дубликаты (id или driverId+revision) НЕ удаляются и первый не выбирается —
+ * их обнаруживает read-model и ставит водителя в reviewRequired.
+ */
+function normalizeDriverOperationalEvents(
+  value: unknown,
+  driverIds: ReadonlySet<string>,
+  validZoneIds: ReadonlySet<string>,
+  stateRevision: number,
+  sourceSchemaVersion: number,
+): DriverOperationalEvent[] {
+  if (sourceSchemaVersion <= 27) return [];
+  if (!Array.isArray(value)) return [];
+  const kept: DriverOperationalEvent[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) continue;
+    if (typeof raw.id !== "string" || raw.id === "") continue;
+    if (
+      typeof raw.revision !== "number" ||
+      !Number.isSafeInteger(raw.revision) ||
+      raw.revision <= 0 ||
+      raw.revision > stateRevision
+    ) {
+      continue;
+    }
+    if (typeof raw.driverId !== "string" || !driverIds.has(raw.driverId)) {
+      continue;
+    }
+    if (
+      typeof raw.occurredAt !== "string" ||
+      Number.isNaN(Date.parse(raw.occurredAt))
+    ) {
+      continue;
+    }
+    if (!isKnownDriverStatus(raw.statusBefore)) continue;
+    if (!isKnownDriverStatus(raw.statusAfter)) continue;
+    const zb = operationalZone(raw.currentZoneIdBefore, validZoneIds);
+    const za = operationalZone(raw.currentZoneIdAfter, validZoneIds);
+    if (!zb.ok || !za.ok) continue;
+    // Детерминированный id обязателен (иначе запись не считается достоверной).
+    if (raw.id !== driverOperationalEventId(raw.driverId, raw.revision)) continue;
+    kept.push({
+      id: raw.id,
+      revision: raw.revision,
+      driverId: raw.driverId,
+      occurredAt: raw.occurredAt,
+      statusBefore: raw.statusBefore,
+      statusAfter: raw.statusAfter,
+      currentZoneIdBefore: zb.zone,
+      currentZoneIdAfter: za.zone,
+    });
+  }
+  return kept;
+}
+
 export function normalizePrototypeState(
   state: PrototypeState,
 ): PrototypeState {
@@ -1752,6 +1910,20 @@ export function normalizePrototypeState(
             ? (state.driverPayoutReceiptEvents as PrototypeState["driverPayoutReceiptEvents"])
             : [],
         });
+  // Операционный журнал водителей (v28): source ≤ 27 — пусто (прошлое не
+  // синтезируется); source ≥ 28 — только структурно-валидные события против уже
+  // нормализованных водителей и зон, с revision не больше текущей.
+  const normalizedZones = Array.isArray(state.zones)
+    ? state.zones
+    : defaults.zones;
+  const validZoneIds = new Set(normalizedZones.map((zone) => zone.id));
+  const normalizedDriverOperationalEvents = normalizeDriverOperationalEvents(
+    state.driverOperationalEvents,
+    normalizedDriverIds,
+    validZoneIds,
+    num(state.revision, 0),
+    sourceSchemaVersion,
+  );
   // v25: итоговое состояние собирается из ЯВНО перечисленных полей (без `...state`),
   // поэтому удалённый старый driver cash ledger не переносится из сырых данных
   // schema ≤ 24, а неизвестные лишние поля не «протекают» в нормализованный state.
@@ -1773,7 +1945,7 @@ export function normalizePrototypeState(
           ? state.platformSettings.platformDriverCashEnabled
           : false,
     },
-    zones: Array.isArray(state.zones) ? state.zones : defaults.zones,
+    zones: normalizedZones,
     tariffs: isRecord(state.tariffs) ? state.tariffs : defaults.tariffs,
     restaurants,
     menuItems: Array.isArray(state.menuItems)
@@ -1802,6 +1974,9 @@ export function normalizePrototypeState(
     // строго валидные батчи/подтверждения (см. keepValidPayout*).
     driverPayoutBatches: normalizedDriverPayoutBatches,
     driverPayoutReceiptEvents: normalizedDriverPayoutReceiptEvents,
+    // Операционный журнал водителей (v28): source ≤ 27 — пусто; source ≥ 28 —
+    // только структурно-валидные события (прошлое не синтезируется).
+    driverOperationalEvents: normalizedDriverOperationalEvents,
     cart: normalizeCart(state.cart, defaults.cart),
     orders: normalizedOrders,
     settlements: normalizedSettlements,

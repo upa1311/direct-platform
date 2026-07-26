@@ -7,7 +7,7 @@ import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 import type { OrderZoneSnapshot } from "@/lib/zones/types";
 
-export const PROTOTYPE_SCHEMA_VERSION = 27 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 28 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -906,6 +906,27 @@ export type DriverPayoutStatus =
   | "AWAITING_DRIVER_CONFIRMATION"
   | "CONFIRMED_RECEIVED";
 
+/**
+ * Append-only операционное событие водителя (v28): единственный источник учёта
+ * рабочего времени. Фиксирует РЕАЛЬНОЕ изменение DriverProfile.status и/или
+ * currentZoneId в конкретной ревизии state. Создаётся автоматически внутри
+ * общего finalizeMutation — не мышью, не вкладкой, не heartbeat, не GPS. Все
+ * интервалы времени всегда выводятся из этих событий, никакой mutable smена не
+ * хранится. Один водитель имеет максимум одно событие в одной ревизии.
+ */
+export interface DriverOperationalEvent {
+  id: string;
+  /** Ревизия финального state, в которой произошло изменение (строгий порядок). */
+  revision: number;
+  driverId: string;
+  /** Канонический момент изменения — тот же, что updatedAt мутации. */
+  occurredAt: string;
+  statusBefore: DriverStatus;
+  statusAfter: DriverStatus;
+  currentZoneIdBefore: ZoneId | null;
+  currentZoneIdAfter: ZoneId | null;
+}
+
 export interface FinancialSnapshot {
   currencyCode: CurrencyCode;
   deliveryMode: DeliveryMode;
@@ -1197,6 +1218,12 @@ export interface PrototypeState {
   driverPayoutBatches: DriverPayoutBatch[];
   /** Append-only подтверждения водителями получения выплат (v26). */
   driverPayoutReceiptEvents: DriverPayoutReceiptEvent[];
+  /**
+   * Append-only операционный журнал изменений статуса/зоны водителей (v28).
+   * Единственный источник учёта рабочего времени (shift analytics). Пишется
+   * автоматически в finalizeMutation; прошлое не синтезируется при миграции.
+   */
+  driverOperationalEvents: DriverOperationalEvent[];
   cart: Cart;
   orders: Order[];
   settlements: SettlementEntry[];

@@ -996,7 +996,7 @@ test("71: архивная запись полным расчётом не сч�
 });
 
 test("72: версия схемы поднята до 15", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
 });
 
 // --- 73–112: авторитетный cutoff и запрет при REVIEW_REQUIRED ------------------
@@ -1340,7 +1340,7 @@ test("98: устаревший снимок позиции по-прежнему
 });
 
 test("99: версия схемы остаётся 15", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
 });
 
 test("100: ресторанный экран продолжает показывать последний полный расчёт", () => {

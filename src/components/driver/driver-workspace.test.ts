@@ -271,7 +271,7 @@ test("Расчёты доступны только при сессии, без �
 // --- Regression ---------------------------------------------------------------
 
 test("63: schema остаётся 18 (не понижается этим UI-микробатчем)", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
 });
 
 test("64–65: driver offers домен и срок 30 секунд не изменены", () => {
@@ -536,7 +536,7 @@ test("h23: lifecycle-кнопки и прогресс 2×2 не ухудшены
 });
 
 test("h24: schema остаётся 18; наличные выключены", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
   assert.equal(
     createDefaultState().platformSettings.platformDriverCashEnabled,
     false,

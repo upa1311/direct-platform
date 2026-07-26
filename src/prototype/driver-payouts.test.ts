@@ -235,7 +235,7 @@ function cashCompleted(): PrototypeState {
 // --- §28 модель / дефолты -----------------------------------------------------
 
 test("1/2/3: схема 26, пустые payout-массивы по умолчанию", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 27);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 28);
   const d = createDefaultState();
   assert.deepEqual(d.driverPayoutBatches, []);
   assert.deepEqual(d.driverPayoutReceiptEvents, []);
@@ -245,7 +245,7 @@ test("4/58/59: schema25 мигрирует с пустыми payout-массив
   const { state } = oneEarning();
   const parsed = parseStoredState(JSON.stringify({ ...state, schemaVersion: 25 }));
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 27);
+  assert.equal(parsed.schemaVersion, 28);
   assert.deepEqual(parsed.driverPayoutBatches, []);
   assert.deepEqual(parsed.driverPayoutReceiptEvents, []);
   // Заработок остаётся невыплаченным DIRECT_PAYOUT_DUE.
