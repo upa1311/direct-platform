@@ -186,6 +186,17 @@ function isOrderDueForDispatch(
   return dueAt !== null && nowMs >= dueAt;
 }
 
+function isPreparingOrderNotYetDue(
+  state: PrototypeState,
+  order: Order,
+  nowMs: number,
+): boolean {
+  if (!isOrderEligibleForDriverOffers(state, order)) return false;
+  if (order.status !== "PREPARING") return false;
+  const dueAt = dispatchAtMs(state, order);
+  return dueAt !== null && nowMs < dueAt;
+}
+
 function wavesForOrder(
   state: PrototypeState,
   orderId: string,
@@ -212,6 +223,25 @@ function hasDeclinedOrder(
       offer.orderId === orderId &&
       offer.driverId === driverId &&
       offer.status === "DECLINED",
+  );
+}
+
+function waveWasCanceledBecauseOrderWasNotDue(
+  state: PrototypeState,
+  wave: DriverDispatchWave,
+): boolean {
+  const offers = state.driverOffers.filter((offer) => offer.waveId === wave.id);
+  return (
+    offers.length > 0 &&
+    offers.some(
+      (offer) => offer.systemCancellationReason === "ORDER_NOT_DUE",
+    ) &&
+    offers.every(
+      (offer) =>
+        offer.status === "DECLINED" ||
+        (offer.status === "CANCELED" &&
+          offer.systemCancellationReason === "ORDER_NOT_DUE"),
+    )
   );
 }
 
@@ -374,14 +404,23 @@ export function reconcileDriverOffers(
     }
     const order = state.orders.find((o) => o.id === offer.orderId) ?? null;
     const driver = state.drivers.find((d) => d.id === offer.driverId) ?? null;
+    const orderIsDue =
+      order !== null && isOrderDueForDispatch(state, order, nowMs);
     const stillValid =
+      orderIsDue &&
       order !== null &&
       driver !== null &&
-      isOrderDueForDispatch(state, order, nowMs) &&
       isDriverEligibleForOffer(state, driver, order);
     if (!stillValid) {
       canceledCount += 1;
-      return { ...offer, status: "CANCELED", resolvedAt: nowIso };
+      return {
+        ...offer,
+        status: "CANCELED",
+        resolvedAt: nowIso,
+        ...(order !== null && isPreparingOrderNotYetDue(state, order, nowMs)
+          ? { systemCancellationReason: "ORDER_NOT_DUE" as const }
+          : {}),
+      };
     }
     return offer;
   });
@@ -398,7 +437,16 @@ export function reconcileDriverOffers(
       .filter((wave) => wave.orderId === order.id)
       .sort((a, b) => a.waveNumber - b.waveNumber);
     const latest = orderWaves.at(-1) ?? null;
-    if (latest && nowMs < Date.parse(latest.offerExpiresAt)) continue;
+    const recoversCanceledEtaWave =
+      latest !== null &&
+      waveWasCanceledBecauseOrderWasNotDue(workingState, latest);
+    if (
+      latest &&
+      nowMs < Date.parse(latest.offerExpiresAt) &&
+      !recoversCanceledEtaWave
+    ) {
+      continue;
+    }
 
     const cooldownMs =
       state.platformSettings.driverOfferWaveCooldownSeconds * 1_000;
@@ -410,7 +458,7 @@ export function reconcileDriverOffers(
     );
     const canBypassCooldown =
       order.status === "READY" && inCooldown && !hasReadyUrgentWave;
-    if (inCooldown && !canBypassCooldown) continue;
+    if (inCooldown && !canBypassCooldown && !recoversCanceledEtaWave) continue;
 
     const waveNumber = (latest?.waveNumber ?? 0) + 1;
     const trigger: DriverDispatchWaveTrigger =
@@ -418,7 +466,9 @@ export function reconcileDriverOffers(
         ? order.status === "READY"
           ? "READY_URGENT"
           : "ETA_WINDOW"
-        : canBypassCooldown
+        : recoversCanceledEtaWave
+          ? "ETA_WINDOW"
+          : canBypassCooldown
           ? "READY_URGENT"
           : "RETRY";
     const waveId = driverDispatchWaveId(order.id, waveNumber);
@@ -593,7 +643,7 @@ export function acceptDriverOffer(
   const order = state.orders.find((o) => o.id === offer.orderId) ?? null;
   if (
     order === null ||
-    !isOrderEligibleForDriverOffers(state, order) ||
+    !isOrderDueForDispatch(state, order, nowMs) ||
     driver.currentZoneId !== order.restaurant.zoneId
   ) {
     return fail("Предложение уже недоступно.");

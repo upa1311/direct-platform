@@ -638,6 +638,8 @@ export interface DriverOffer {
   expiresAt: string;
   /** Момент принятия, отказа, истечения либо отмены; у OPEN — null. */
   resolvedAt: string | null;
+  /** Technical reason used only for safe automatic wave recovery. */
+  systemCancellationReason?: "ORDER_NOT_DUE";
   /**
    * Момент подтверждения водителем денежного запаса при принятии наличного
    * заказа (v20). null — подтверждения не было (все OPEN-предложения, любой

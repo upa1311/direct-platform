@@ -18,7 +18,6 @@ import {
   acceptDriverOffer,
   declineDriverOffer,
   getDriverDispatchState,
-  getNextDriverOfferReconciliationAt,
   reconcileDriverOffers,
 } from "./driver-offers.ts";
 import {
@@ -160,7 +159,7 @@ test("missing, corrupt, or lifecycle-inconsistent PREPARING ETA fails closed", (
   }
 });
 
-test("later ETA cancels premature OPEN offers; earlier ETA starts now", () => {
+test("later ETA cancellation is recovered immediately when an earlier ETA is due", () => {
   const prepared = preparingState();
   const started = reconcileDriverOffers(online(prepared.state, D1), iso(BASE_MS));
   const delayed: PrototypeState = {
@@ -175,9 +174,31 @@ test("later ETA cancels premature OPEN offers; earlier ETA starts now", () => {
   assert.equal(canceled.result.canceledCount, 1);
   assert.equal(canceled.state.driverOffers[0].status, "CANCELED");
   assert.equal(
-    getNextDriverOfferReconciliationAt(canceled.state, BASE_MS + 1_000),
-    BASE_MS + DRIVER_OFFER_DURATION_MS + DRIVER_OFFER_WAVE_COOLDOWN_MS,
+    canceled.state.driverOffers[0].systemCancellationReason,
+    "ORDER_NOT_DUE",
   );
+
+  const persisted = parseStoredState(JSON.stringify(canceled.state));
+  assert.ok(persisted);
+  const recoveredEarlier: PrototypeState = {
+    ...persisted,
+    orders: persisted.orders.map((order) =>
+      order.id === prepared.orderId
+        ? { ...order, expectedReadyAt: iso(BASE_MS + 5 * 60_000) }
+        : order,
+    ),
+  };
+  const recovered = reconcileDriverOffers(recoveredEarlier, iso(BASE_MS + 2_000));
+  assert.equal(recovered.state.driverDispatchWaves.length, 2);
+  assert.equal(recovered.state.driverDispatchWaves[0].id, started.state.driverDispatchWaves[0].id);
+  assert.equal(recovered.state.driverDispatchWaves[1].trigger, "ETA_WINDOW");
+  assert.equal(
+    recovered.state.driverOffers.filter((offer) => offer.status === "OPEN").length,
+    1,
+  );
+  assert.equal(recovered.state.driverOffers[0].status, "CANCELED");
+  const repeated = reconcileDriverOffers(recovered.state, iso(BASE_MS + 2_000));
+  assert.equal(repeated.state, recovered.state);
 
   const notDue = preparingState({
     expectedReadyAt: iso(BASE_MS + 20 * 60_000),
@@ -192,6 +213,63 @@ test("later ETA cancels premature OPEN offers; earlier ETA starts now", () => {
   };
   const immediate = reconcileDriverOffers(movedEarlier, iso(BASE_MS));
   assert.equal(immediate.result.createdCount, 1);
+});
+
+test("acceptance rejects an OPEN offer made premature by a later ETA", () => {
+  const prepared = preparingState();
+  const offered = reconcileDriverOffers(online(prepared.state, D1), iso(BASE_MS));
+  const stale: PrototypeState = {
+    ...offered.state,
+    orders: offered.state.orders.map((order) =>
+      order.id === prepared.orderId
+        ? { ...order, expectedReadyAt: iso(BASE_MS + 30 * 60_000) }
+        : order,
+    ),
+  };
+  const beforeRevision = stale.revision;
+  const accepted = acceptDriverOffer(
+    stale,
+    D1,
+    stale.driverOffers[0].id,
+    iso(BASE_MS + 1_000),
+    { cashReserveConfirmed: false },
+  );
+  assert.equal(accepted.result.ok, false);
+  assert.equal(accepted.result.error, "Предложение уже недоступно.");
+  assert.equal(accepted.state, stale);
+  assert.equal(accepted.state.revision, beforeRevision);
+  assert.equal(accepted.state.driverOffers[0].status, "OPEN");
+  assert.equal(accepted.state.orders.find((order) => order.id === prepared.orderId)?.assignedDriverId, null);
+  assert.equal(accepted.state.drivers.find((driver) => driver.id === D1)?.status, "AVAILABLE");
+});
+
+test("acceptance rejects an OPEN offer after kitchen or ETA lifecycle corruption", () => {
+  for (const orderPatch of [
+    { kitchenStartedAt: null },
+    { expectedReadyAt: "broken" },
+  ]) {
+    const prepared = preparingState();
+    const offered = reconcileDriverOffers(online(prepared.state, D1), iso(BASE_MS));
+    const corrupted: PrototypeState = {
+      ...offered.state,
+      orders: offered.state.orders.map((order) =>
+        order.id === prepared.orderId ? { ...order, ...orderPatch } : order,
+      ),
+    };
+    const accepted = acceptDriverOffer(
+      corrupted,
+      D1,
+      corrupted.driverOffers[0].id,
+      iso(BASE_MS + 1_000),
+      { cashReserveConfirmed: false },
+    );
+    assert.equal(accepted.result.ok, false);
+    assert.equal(accepted.result.error, "Предложение уже недоступно.");
+    assert.equal(accepted.state, corrupted);
+    assert.equal(accepted.state.driverOffers[0].status, "OPEN");
+    assert.equal(accepted.state.orders.find((order) => order.id === prepared.orderId)?.assignedDriverId, null);
+    assert.equal(accepted.state.drivers.find((driver) => driver.id === D1)?.status, "AVAILABLE");
+  }
 });
 
 test("expiry plus 15-second cooldown creates a retry wave and reoffers", () => {
