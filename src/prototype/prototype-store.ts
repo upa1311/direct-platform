@@ -1236,7 +1236,8 @@ function normalizeDriverOffers(
       offeredAt,
       expiresAt,
       resolvedAt: resolvedAt === null ? null : (resolvedAt as string),
-      ...(status === "CANCELED" &&
+      ...(sourceSchemaVersion >= 30 &&
+      status === "CANCELED" &&
       raw.systemCancellationReason === "ORDER_NOT_DUE"
         ? { systemCancellationReason: "ORDER_NOT_DUE" as const }
         : {}),

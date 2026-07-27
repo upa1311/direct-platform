@@ -272,6 +272,81 @@ test("acceptance rejects an OPEN offer after kitchen or ETA lifecycle corruption
   }
 });
 
+test("mixed terminal offers do not block immediate ETA recovery", () => {
+  const prepared = preparingState();
+  let state = online(prepared.state, D1);
+  state = online(state, D2);
+  const first = reconcileDriverOffers(state, iso(BASE_MS));
+  assert.equal(first.state.driverOffers.length, 2);
+  const firstWaveId = first.state.driverDispatchWaves[0].id;
+  const firstOfferIds = first.state.driverOffers.map((offer) => offer.id);
+
+  const oneIneligible: PrototypeState = {
+    ...first.state,
+    drivers: first.state.drivers.map((driver) =>
+      driver.id === D1 ? { ...driver, status: "PAUSED" } : driver,
+    ),
+  };
+  const partlyCanceled = reconcileDriverOffers(
+    oneIneligible,
+    iso(BASE_MS + 1_000),
+  );
+  assert.equal(
+    partlyCanceled.state.driverOffers.find((offer) => offer.driverId === D1)?.status,
+    "CANCELED",
+  );
+  assert.equal(
+    partlyCanceled.state.driverOffers.find((offer) => offer.driverId === D1)
+      ?.systemCancellationReason,
+    undefined,
+  );
+  assert.equal(
+    partlyCanceled.state.driverOffers.find((offer) => offer.driverId === D2)?.status,
+    "OPEN",
+  );
+
+  const delayed: PrototypeState = {
+    ...partlyCanceled.state,
+    orders: partlyCanceled.state.orders.map((order) =>
+      order.id === prepared.orderId
+        ? { ...order, expectedReadyAt: iso(BASE_MS + 30 * 60_000) }
+        : order,
+    ),
+  };
+  const notDue = reconcileDriverOffers(delayed, iso(BASE_MS + 2_000));
+  assert.equal(
+    notDue.state.driverOffers.find((offer) => offer.driverId === D2)
+      ?.systemCancellationReason,
+    "ORDER_NOT_DUE",
+  );
+
+  const earlier: PrototypeState = {
+    ...notDue.state,
+    orders: notDue.state.orders.map((order) =>
+      order.id === prepared.orderId
+        ? { ...order, expectedReadyAt: iso(BASE_MS + 5 * 60_000) }
+        : order,
+    ),
+  };
+  const recovered = reconcileDriverOffers(earlier, iso(BASE_MS + 3_000));
+  assert.equal(recovered.state.driverDispatchWaves.length, 2);
+  assert.equal(recovered.state.driverDispatchWaves[0].id, firstWaveId);
+  assert.equal(recovered.state.driverDispatchWaves[1].trigger, "ETA_WINDOW");
+  assert.deepEqual(
+    recovered.state.driverOffers.slice(0, 2).map((offer) => offer.id),
+    firstOfferIds,
+  );
+  assert.equal(recovered.state.driverOffers.length, 3);
+  const openOffers = recovered.state.driverOffers.filter(
+    (offer) => offer.status === "OPEN",
+  );
+  assert.equal(openOffers.length, 1);
+  assert.equal(new Set(openOffers.map((offer) => offer.waveId)).size, 1);
+  assert.notEqual(openOffers[0].waveId, firstWaveId);
+  const repeated = reconcileDriverOffers(recovered.state, iso(BASE_MS + 3_000));
+  assert.equal(repeated.state, recovered.state);
+});
+
 test("expiry plus 15-second cooldown creates a retry wave and reoffers", () => {
   const prepared = preparingState();
   const first = reconcileDriverOffers(online(prepared.state, D1), iso(BASE_MS));
@@ -384,6 +459,57 @@ test("v29 migration preserves offer history as deterministic LEGACY waves", () =
   assert.equal(migrated.driverDispatchWaves[0].trigger, "LEGACY");
   assert.equal(migrated.driverOffers[0].status, "DECLINED");
   assert.equal(migrated.driverOffers[0].waveNumber, 1);
+});
+
+test("v29 migration drops injected ETA recovery reason and preserves cooldown", () => {
+  const prepared = preparingState();
+  const state = online(prepared.state, D1);
+  const raw = {
+    ...state,
+    schemaVersion: 29,
+    driverOffers: [
+      {
+        id: "legacy-canceled-offer",
+        orderId: prepared.orderId,
+        driverId: D1,
+        status: "CANCELED",
+        offeredAt: iso(BASE_MS),
+        expiresAt: iso(BASE_MS + DRIVER_OFFER_DURATION_MS),
+        resolvedAt: iso(BASE_MS + 1_000),
+        systemCancellationReason: "ORDER_NOT_DUE",
+        cashReserveConfirmedAt: null,
+      },
+    ],
+  };
+  delete (raw as Partial<PrototypeState>).driverDispatchWaves;
+  const migrated = parseStoredState(JSON.stringify(raw));
+  assert.ok(migrated);
+  assert.equal(migrated.driverDispatchWaves[0].trigger, "LEGACY");
+  assert.equal(migrated.driverOffers[0].status, "CANCELED");
+  assert.equal(migrated.driverOffers[0].systemCancellationReason, undefined);
+
+  const beforeExpiry = reconcileDriverOffers(migrated, iso(BASE_MS + 2_000));
+  assert.equal(beforeExpiry.state, migrated);
+  const duringCooldown = reconcileDriverOffers(
+    migrated,
+    iso(
+      BASE_MS +
+        DRIVER_OFFER_DURATION_MS +
+        DRIVER_OFFER_WAVE_COOLDOWN_MS -
+        1,
+    ),
+  );
+  assert.equal(duringCooldown.state, migrated);
+  const afterCooldown = reconcileDriverOffers(
+    migrated,
+    iso(
+      BASE_MS +
+        DRIVER_OFFER_DURATION_MS +
+        DRIVER_OFFER_WAVE_COOLDOWN_MS,
+    ),
+  );
+  assert.equal(afterCooldown.state.driverDispatchWaves.length, 2);
+  assert.equal(afterCooldown.state.driverDispatchWaves[1].trigger, "RETRY");
 });
 
 test("serialized fresh-state reconciliation models two tabs without duplicate waves", () => {

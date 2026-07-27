@@ -239,8 +239,7 @@ function waveWasCanceledBecauseOrderWasNotDue(
     offers.every(
       (offer) =>
         offer.status === "DECLINED" ||
-        (offer.status === "CANCELED" &&
-          offer.systemCancellationReason === "ORDER_NOT_DUE"),
+        offer.status === "CANCELED",
     )
   );
 }
