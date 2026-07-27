@@ -10,6 +10,7 @@ import type {
   Restaurant,
 } from "./models";
 import { finalizeMutation } from "./prototype-store";
+import { getRestaurantWaitingView } from "./restaurant-waiting-analytics";
 
 export const DRIVER_ORDER_INCIDENT_REASONS = [
   "RESTAURANT_CLOSED",
@@ -253,11 +254,21 @@ export function reportDriverOrderIncident(
   if (TERMINAL_ORDER_STATUSES.has(order.status)) {
     return fail(state, "Заказ уже завершён или отменён.");
   }
-  if (!REPORTABLE_ORDER_STATUSES.has(order.status)) {
-    return fail(state, "Действие недоступно на текущем этапе заказа.");
-  }
   if (!isDriverOrderIncidentReason(input.reason)) {
     return fail(state, "Выберите причину проблемы.");
+  }
+  const reportedAt = new Date().toISOString();
+  let provenPreparingDelay = false;
+  if (order.status === "PREPARING" && input.reason === "ORDER_DELAYED") {
+    const waitingView = getRestaurantWaitingView(state, order.id, reportedAt);
+    provenPreparingDelay =
+      waitingView.status === "WAITING" &&
+      waitingView.driverId === input.driverId &&
+      waitingView.restaurantDelayMs !== null &&
+      waitingView.restaurantDelayMs > 0;
+  }
+  if (!REPORTABLE_ORDER_STATUSES.has(order.status) && !provenPreparingDelay) {
+    return fail(state, "Действие недоступно на текущем этапе заказа.");
   }
 
   const reviewOrderIds = integrityReviewOrderIds(state);
@@ -287,7 +298,6 @@ export function reportDriverOrderIncident(
   }
 
   const revision = state.revision + 1;
-  const reportedAt = new Date().toISOString();
   const incident: DriverOrderIncident = {
     id: driverOrderIncidentId(order.id, revision),
     revision,

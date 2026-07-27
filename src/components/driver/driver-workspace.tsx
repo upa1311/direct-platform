@@ -23,6 +23,10 @@ import {
   type DriverDeliveryStage,
 } from "@/prototype/driver-delivery";
 import {
+  getRestaurantWaitingView,
+  type RestaurantWaitingView,
+} from "@/prototype/restaurant-waiting-analytics";
+import {
   getPlatformDriverCashHandoffView,
   type PlatformDriverCashHandoffView,
 } from "@/prototype/platform-driver-cash-handoff";
@@ -226,7 +230,12 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
 
       <NewOffersSection driver={driver} nowMs={nowMs} zoneName={zoneName} />
 
-      <ActiveOrderSection driver={driver} order={activeOrder} zoneName={zoneName} />
+      <ActiveOrderSection
+        driver={driver}
+        order={activeOrder}
+        nowMs={nowMs}
+        zoneName={zoneName}
+      />
     </>
   );
 }
@@ -1199,10 +1208,12 @@ function emptyOffersText(status: DriverProfile["status"]): {
 function ActiveOrderSection({
   driver,
   order,
+  nowMs,
   zoneName,
 }: {
   driver: DriverProfile;
   order: Order | null;
+  nowMs: number;
   zoneName: (zoneId: ZoneId | null) => string;
 }) {
   // Приватные данные только назначенному водителю.
@@ -1220,7 +1231,14 @@ function ActiveOrderSection({
     return <div className={styles.emptyActive}>Активного заказа нет.</div>;
   }
 
-  return <ActiveOrderCard driverId={driver.id} order={order} zoneName={zoneName} />;
+  return (
+    <ActiveOrderCard
+      driverId={driver.id}
+      order={order}
+      nowMs={nowMs}
+      zoneName={zoneName}
+    />
+  );
 }
 
 /** Опорные точки маршрута для компактного прогресса. */
@@ -1245,10 +1263,12 @@ function activeStepIndex(stage: DriverDeliveryStage): number {
 function ActiveOrderCard({
   driverId,
   order,
+  nowMs,
   zoneName,
 }: {
   driverId: string;
   order: Order;
+  nowMs: number;
   zoneName: (zoneId: ZoneId | null) => string;
 }) {
   const {
@@ -1274,6 +1294,10 @@ function ActiveOrderCard({
     order.id,
     driverId,
   );
+  const waitingView =
+    nowMs > 0
+      ? getRestaurantWaitingView(state, order.id, new Date(nowMs).toISOString())
+      : null;
   const activeIndex = activeStepIndex(stage);
   // После получения заказа главная точка маршрута — клиент, а не ресторан.
   const pickedUp =
@@ -1284,6 +1308,16 @@ function ActiveOrderCard({
   const canReportIncident = ["READY", "OUT_FOR_DELIVERY", "ARRIVING"].includes(
     order.status,
   );
+  const canReportDelay =
+    waitingView?.status === "WAITING" &&
+    waitingView.restaurantDelayMs !== null &&
+    waitingView.restaurantDelayMs > 0;
+
+  const openIncidentSheet = (reason: DriverOrderIncidentReason | null = null) => {
+    setIncidentError(null);
+    setIncidentReason(reason);
+    setIncidentOpen(true);
+  };
 
   const closeIncidentSheet = () => {
     if (!incidentPendingRef.current) setIncidentOpen(false);
@@ -1351,6 +1385,8 @@ function ActiveOrderCard({
         <>
           <StagePanel
             stage={stage}
+            restaurantTimeZone={restaurantTimeZoneOf(state, order)}
+            waitingView={waitingView}
             pending={pending}
             onArrive={() => run(() => driverArriveAtRestaurant(driverId, order.id))}
             onPickUp={() => run(() => driverPickUpOrder(driverId, order.id))}
@@ -1363,6 +1399,8 @@ function ActiveOrderCard({
                 }),
               )
             }
+            onReportDelay={() => openIncidentSheet("ORDER_DELAYED")}
+            delayIncidentTriggerRef={incidentTriggerRef}
           />
           {error ? (
             <p className={styles.error} role="alert">
@@ -1378,10 +1416,7 @@ function ActiveOrderCard({
           type="button"
           className={styles.incidentReportButton}
           ref={incidentTriggerRef}
-          onClick={() => {
-            setIncidentError(null);
-            setIncidentOpen(true);
-          }}
+          onClick={() => openIncidentSheet()}
         >
           <CircleAlert size={18} aria-hidden="true" />
           Проблема с заказом
@@ -1404,8 +1439,10 @@ function ActiveOrderCard({
         >
           <fieldset className={styles.incidentReasons} disabled={incidentPending}>
             <legend>Что произошло</legend>
-            {DRIVER_ORDER_INCIDENT_REASONS.filter(
-              (reason) => order.paymentMethod === "CASH" || reason !== "CASH_PROBLEM",
+            {DRIVER_ORDER_INCIDENT_REASONS.filter((reason) =>
+              order.status === "PREPARING"
+                ? canReportDelay && reason === "ORDER_DELAYED"
+                : order.paymentMethod === "CASH" || reason !== "CASH_PROBLEM",
             ).map((reason) => (
               <label className={styles.incidentReason} key={reason}>
                 <input
@@ -1837,18 +1874,26 @@ function DriverCashHandoffBlock({
 
 function StagePanel({
   stage,
+  restaurantTimeZone,
+  waitingView,
   pending,
   onArrive,
   onPickUp,
   onArriving,
   onDeliver,
+  onReportDelay,
+  delayIncidentTriggerRef,
 }: {
   stage: DriverDeliveryStage;
+  restaurantTimeZone: string;
+  waitingView: RestaurantWaitingView | null;
   pending: boolean;
   onArrive: () => void;
   onPickUp: () => void;
   onArriving: () => void;
   onDeliver: () => void;
+  onReportDelay: () => void;
+  delayIncidentTriggerRef: React.RefObject<HTMLButtonElement | null>;
 }) {
   switch (stage) {
     case "GO_TO_RESTAURANT":
@@ -1859,9 +1904,12 @@ function StagePanel({
       );
     case "WAITING_AT_RESTAURANT":
       return (
-        <StageCard title="Вы в ресторане" hint="Заказ ещё готовится. Ожидаем готовность заказа.">
-          {null}
-        </StageCard>
+        <RestaurantWaitingPanel
+          restaurantTimeZone={restaurantTimeZone}
+          view={waitingView}
+          onReportDelay={onReportDelay}
+          triggerRef={delayIncidentTriggerRef}
+        />
       );
     case "READY_TO_PICK_UP":
       return (
@@ -1892,6 +1940,79 @@ function StagePanel({
         </div>
       );
   }
+}
+
+function formatWaitingClock(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(iso));
+}
+
+function RestaurantWaitingPanel({
+  restaurantTimeZone,
+  view,
+  onReportDelay,
+  triggerRef,
+}: {
+  restaurantTimeZone: string;
+  view: RestaurantWaitingView | null;
+  onReportDelay: () => void;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+}) {
+  if (view === null) {
+    return <StageCard title="Вы в ресторане" hint="Загружаем данные ожидания…" />;
+  }
+  if (view.status !== "WAITING" || view.expectedReadyAt === null) {
+    return (
+      <StageCard
+        title="Вы в ресторане"
+        hint="Данные ожидания требуют проверки Direct."
+      />
+    );
+  }
+
+  const expected = formatWaitingClock(
+    view.expectedReadyAt,
+    restaurantTimeZone,
+  );
+  const delayed = (view.restaurantDelayMs ?? 0) > 0;
+  return (
+    <StageCard title="Вы в ресторане">
+      {!delayed ? (
+        <p className={styles.restaurantCookingStatus}>Ресторан готовит заказ</p>
+      ) : null}
+      <dl className={styles.restaurantWaitingDetails} aria-live="polite">
+        <div>
+          <dt>Ждёте</dt>
+          <dd>{formatAnalyticsDuration(view.waitingDurationMs)}</dd>
+        </div>
+        {delayed ? (
+          <>
+            <div><dt>Ожидалось к</dt><dd>{expected}</dd></div>
+            <div className={styles.restaurantDelayRow}>
+              <dt>Ресторан опаздывает</dt>
+              <dd>{formatAnalyticsDuration(view.restaurantDelayMs)}</dd>
+            </div>
+          </>
+        ) : (
+          <div><dt>Ожидаемая готовность</dt><dd>{expected}</dd></div>
+        )}
+      </dl>
+      {delayed ? (
+        <button
+          type="button"
+          className={styles.incidentReportButton}
+          ref={triggerRef}
+          onClick={onReportDelay}
+        >
+          <CircleAlert size={18} aria-hidden="true" />
+          Сообщить о задержке
+        </button>
+      ) : null}
+    </StageCard>
+  );
 }
 
 function StageCard({

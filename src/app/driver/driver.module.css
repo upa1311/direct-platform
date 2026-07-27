@@ -1075,6 +1075,43 @@
   color: var(--kds-muted, #66706a);
 }
 
+.restaurantWaitingDetails {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.restaurantWaitingDetails > div {
+  display: grid;
+  grid-template-columns: minmax(132px, auto) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.restaurantWaitingDetails dt {
+  color: var(--kds-muted, #66706a);
+}
+
+.restaurantWaitingDetails dt::after {
+  content: ":";
+}
+
+.restaurantWaitingDetails dd {
+  min-width: 0;
+  margin: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.restaurantCookingStatus {
+  margin: 0;
+  color: #53635b;
+  font-weight: 700;
+}
+
+.restaurantDelayRow dd {
+  color: #9a4f00;
+}
+
 .incidentReportButton {
   width: 100%;
   min-width: 0;

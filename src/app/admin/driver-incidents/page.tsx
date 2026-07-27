@@ -2,6 +2,8 @@
 
 import { useMemo, useRef, useState } from "react";
 
+import { formatAnalyticsDuration } from "@/components/analytics/analytics-presentation";
+import { useNowMs } from "@/components/util/use-now";
 import { PageHeading } from "@/components/workspaces/route-content";
 import {
   DRIVER_ORDER_INCIDENT_REASON_LABELS,
@@ -9,6 +11,7 @@ import {
   getAdminDriverOrderIncidentViews,
   type AdminDriverOrderIncidentView,
 } from "@/prototype/driver-order-incidents";
+import { getRestaurantDelayAlerts } from "@/prototype/restaurant-waiting-analytics";
 import type { DriverOrderIncidentResolutionOutcome } from "@/prototype/models";
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -42,8 +45,16 @@ function checkedIncrement(value: number): number {
 
 export default function DriverIncidentsPage() {
   const { state } = usePrototype();
+  const nowMs = useNowMs(60_000);
   const [filter, setFilter] = useState<IncidentFilter>("OPEN");
   const rows = useMemo(() => getAdminDriverOrderIncidentViews(state), [state]);
+  const delayAlerts = useMemo(
+    () =>
+      nowMs > 0
+        ? getRestaurantDelayAlerts(state, new Date(nowMs).toISOString())
+        : [],
+    [nowMs, state],
+  );
   const summary = rows.reduce(
     (acc, row) => {
       if (row.status === "OPEN") acc.open = checkedIncrement(acc.open);
@@ -74,6 +85,33 @@ export default function DriverIncidentsPage() {
         <SummaryItem label="Требует проверки" value={summary.review} />
         <SummaryItem label="Закрыто" value={summary.resolved} />
       </section>
+
+      {delayAlerts.length > 0 ? (
+        <section className={styles.delayAlerts} aria-labelledby="restaurant-delay-title">
+          <div className={styles.delayAlertsHeading}>
+            <h2 id="restaurant-delay-title">Автоматические задержки ресторанов</h2>
+            <span>{delayAlerts.length}</span>
+          </div>
+          <p className={styles.delayAlertsHint}>
+            Выведены по факту прибытия водителя и просроченной ETA; сообщение водителя не требуется.
+          </p>
+          <div className={styles.delayAlertCards}>
+            {delayAlerts.map((alert) => (
+              <article className={styles.delayAlertCard} key={alert.orderId}>
+                <h3>Заказ №{alert.publicNumber}</h3>
+                <dl className={styles.details}>
+                  <Detail label="Ресторан" value={alert.restaurantName} />
+                  <Detail label="Водитель" value={alert.driverName} />
+                  <Detail label="ETA" value={formatDateTime(alert.expectedReadyAt)} />
+                  <Detail label="Фактическое ожидание" value={formatAnalyticsDuration(alert.waitingDurationMs)} />
+                  <Detail label="Опоздание" value={formatAnalyticsDuration(alert.restaurantDelayMs)} />
+                  <Detail label="Incident водителя" value={alert.driverIncidentExists ? "Есть" : "Нет"} />
+                </dl>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className={styles.filters} role="group" aria-label="Фильтр проблем">
         {FILTERS.map((item) => (

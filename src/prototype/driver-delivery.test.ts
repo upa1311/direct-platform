@@ -661,15 +661,18 @@ test("47–49: на этапах четыре русские кнопки, од�
   assert.ok(CURRENT_PAGE.includes("resolveDriverDeliveryStage"));
 });
 
-test("48: при ожидании активной кнопки получения нет", () => {
-  // WAITING_AT_RESTAURANT-ветка внутри StagePanel не содержит MainButton.
+test("48: при ожидании нет кнопки получения, но доступен доказанный delay incident", () => {
+  // WAITING_AT_RESTAURANT не содержит lifecycle MainButton: компактная кнопка
+  // задержки открывает существующий incident flow и не получает заказ.
   const panel = CURRENT_PAGE.slice(CURRENT_PAGE.indexOf("function StagePanel"));
   const start = panel.indexOf('case "WAITING_AT_RESTAURANT"');
   const end = panel.indexOf('case "READY_TO_PICK_UP"');
   assert.ok(start !== -1 && end !== -1);
   const block = panel.slice(start, end);
   assert.ok(!block.includes("MainButton"));
-  assert.ok(block.includes("Ожидаем готовность заказа"));
+  assert.ok(block.includes("RestaurantWaitingPanel"));
+  assert.ok(CURRENT_PAGE.includes("Сообщить о задержке"));
+  assert.ok(CURRENT_PAGE.includes('openIncidentSheet("ORDER_DELAYED")'));
 });
 
 test("50: после доставки не уводит на отдельный маршрут", () => {

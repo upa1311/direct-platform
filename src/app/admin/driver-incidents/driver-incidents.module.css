@@ -19,6 +19,29 @@
 .summaryItem span { color: #636b67; font-size: 13px; }
 .summaryItem strong { font-size: 24px; }
 
+.delayAlerts {
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid #e0c38d;
+  border-left: 4px solid #c58b22;
+  border-radius: 12px;
+  background: #fffaf0;
+}
+
+.delayAlertsHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delayAlertsHeading h2 { margin: 0; font-size: 18px; }
+.delayAlertsHeading span { font-weight: 800; }
+.delayAlertsHint { margin: 5px 0 12px; color: #636b67; font-size: 13px; }
+.delayAlertCards { display: grid; gap: 10px; }
+.delayAlertCard { padding: 12px; border-radius: 10px; background: #fff; }
+.delayAlertCard h3 { margin: 0 0 9px; font-size: 16px; }
+
 .filters {
   display: flex;
   flex-wrap: wrap;
