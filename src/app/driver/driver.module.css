@@ -1179,6 +1179,61 @@
   overflow-wrap: anywhere;
 }
 
+/* Приоритетная инструкция клиента: заметный отдельный блок, выделяется среди
+   обычных строк metadata. Текст — pre-wrap (переносы строк сохраняются), длинный
+   текст переносится и не обрезается ellipsis. */
+.customerInstructionCard {
+  border: 1px solid #2f7db8;
+  border-left-width: 4px;
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  background: #eef6fc;
+  overflow-wrap: anywhere;
+}
+
+.customerInstructionTitle {
+  font-size: 16px;
+  font-weight: 750;
+  color: #1b4e74;
+}
+
+.customerInstructionHint {
+  font-size: 13px;
+  font-weight: 600;
+  color: #3a6c92;
+}
+
+.customerInstructionText {
+  margin: 4px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--kds-text, #202522);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.customerInstructionReview {
+  border: 1px solid #b42318;
+  border-left-width: 4px;
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  background: #fff6f5;
+  overflow-wrap: anywhere;
+}
+
+.customerInstructionReviewText {
+  margin: 0;
+}
+
 .incidentForm {
   display: flex;
   flex-direction: column;

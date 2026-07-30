@@ -29,6 +29,10 @@ import {
   type RestaurantWaitingView,
 } from "@/prototype/restaurant-waiting-analytics";
 import {
+  getDriverCustomerInstructionView,
+  type DriverCustomerInstructionView,
+} from "@/prototype/driver-customer-instruction";
+import {
   getPlatformDriverCashHandoffView,
   type PlatformDriverCashHandoffView,
 } from "@/prototype/platform-driver-cash-handoff";
@@ -1301,6 +1305,10 @@ function ActiveOrderCard({
       ? getRestaurantWaitingView(state, order.id, new Date(nowMs).toISOString())
       : null;
   const activeIndex = activeStepIndex(stage);
+  // Приоритетная инструкция клиента из неизменяемого snapshot заказа. Видна на
+  // всём активном пути (не зависит от этапа и от pickedUp), одинаково для ONLINE
+  // и CASH.
+  const instructionView = getDriverCustomerInstructionView(order);
   // После получения заказа главная точка маршрута — клиент, а не ресторан.
   const pickedUp =
     order.status === "OUT_FOR_DELIVERY" || order.status === "ARRIVING";
@@ -1513,6 +1521,10 @@ function ActiveOrderCard({
         ))}
       </ol>
 
+      {/* Приоритетная инструкция клиента — заметный отдельный блок, виден на всём
+          активном пути (ONLINE и CASH), не зависит от pickedUp. */}
+      <CustomerInstructionCard view={instructionView} />
+
       {/* Блок 2: актуальная точка маршрута по этапу. */}
       <RoutePoint order={order} pickedUp={pickedUp} zoneName={zoneName} />
 
@@ -1554,6 +1566,45 @@ function DriverOrderZoneDetails({ order }: { order: Order }) {
   );
 }
 
+/**
+ * Приоритетная инструкция клиента по доставке. Один общий блок для ONLINE и CASH.
+ * Источник — только неизменяемый snapshot `order.address.comment` (через
+ * getDriverCustomerInstructionView). Текст выводится дословно: переносы строк
+ * сохраняются (pre-wrap), длинный текст переносится и не обрезается. Пустой
+ * комментарий не показывается и не заменяется выдуманным default.
+ */
+function CustomerInstructionCard({
+  view,
+}: {
+  view: DriverCustomerInstructionView;
+}) {
+  if (view.status === "NONE") return null;
+  if (view.status === "REVIEW_REQUIRED") {
+    return (
+      <section
+        className={styles.customerInstructionReview}
+        aria-label="Инструкция клиента"
+        role="status"
+      >
+        <span className={styles.customerInstructionTitle}>Инструкция клиента</span>
+        <span className={styles.customerInstructionReviewText}>
+          Данные инструкции требуют проверки Direct.
+        </span>
+      </section>
+    );
+  }
+  return (
+    <section
+      className={styles.customerInstructionCard}
+      aria-label="Инструкция клиента"
+    >
+      <span className={styles.customerInstructionTitle}>Инструкция клиента</span>
+      <span className={styles.customerInstructionHint}>Выполните при доставке</span>
+      <p className={styles.customerInstructionText}>{view.text}</p>
+    </section>
+  );
+}
+
 /** Актуальная точка маршрута: ресторан до получения, клиент — после. */
 function RoutePoint({
   order,
@@ -1577,12 +1628,9 @@ function RoutePoint({
               {addressExtras(order.address)}
             </span>
           ) : null}
-          {/* Зона доставки — из snapshot (блок «Зоны»), здесь не дублируется. */}
-          {order.address && order.address.comment.trim() !== "" ? (
-            <span className={styles.detailRowValue}>
-              Комментарий: {order.address.comment}
-            </span>
-          ) : null}
+          {/* Зона доставки — из snapshot (блок «Зоны»), здесь не дублируется.
+              Инструкция клиента — в отдельном приоритетном блоке CustomerInstructionCard,
+              здесь больше не повторяется. */}
         </div>
         {/* Ресторан свёрнут в компактную вторичную строку. */}
         <p className={styles.secondarySummary}>
