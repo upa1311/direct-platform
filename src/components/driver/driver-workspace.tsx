@@ -23,7 +23,9 @@ import {
   type DriverDeliveryStage,
 } from "@/prototype/driver-delivery";
 import {
+  getRestaurantWaitingSummary,
   getRestaurantWaitingView,
+  type RestaurantWaitingSummaryModel,
   type RestaurantWaitingView,
 } from "@/prototype/restaurant-waiting-analytics";
 import {
@@ -1380,6 +1382,10 @@ function ActiveOrderCard({
           stage={stage}
           view={cashView}
           collectionView={getPlatformDriverCustomerCashCollectionView(state, order)}
+          restaurantTimeZone={restaurantTimeZoneOf(state, order)}
+          waitingView={waitingView}
+          onReportDelay={() => openIncidentSheet("ORDER_DELAYED")}
+          delayIncidentTriggerRef={incidentTriggerRef}
         />
       ) : (
         <>
@@ -1614,12 +1620,20 @@ function DriverCashHandoffBlock({
   stage,
   view,
   collectionView,
+  restaurantTimeZone,
+  waitingView,
+  onReportDelay,
+  delayIncidentTriggerRef,
 }: {
   driverId: string;
   order: Order;
   stage: DriverDeliveryStage;
   view: PlatformDriverCashHandoffView;
   collectionView: PlatformDriverCustomerCashCollectionView;
+  restaurantTimeZone: string;
+  waitingView: RestaurantWaitingView | null;
+  onReportDelay: () => void;
+  delayIncidentTriggerRef: React.RefObject<HTMLButtonElement | null>;
 }) {
   const {
     driverArriveAtRestaurant,
@@ -1643,6 +1657,10 @@ function DriverCashHandoffBlock({
     collectionView.amountCents !== null
       ? formatMoney(collectionView.amountCents, order.financials.currencyCode)
       : "—";
+  // Канонический waiting summary — тот же, что и в ONLINE StagePanel. Не заменяет
+  // cash handoff card: показывается дополнительным верхним блоком только пока
+  // заказ реально готовится (status WAITING); после READY — null.
+  const waitingSummary = getRestaurantWaitingSummary(waitingView);
 
   const openCollect = (event: React.MouseEvent<HTMLButtonElement>) => {
     collectTriggerRef.current = event.currentTarget;
@@ -1694,21 +1712,65 @@ function DriverCashHandoffBlock({
       </StageCard>
     );
   } else if (stage === "WAITING_AT_RESTAURANT" || stage === "READY_TO_PICK_UP") {
-    if (view.status === "DRIVER_ACTION_REQUIRED") {
+    // Кнопка передачи наличных ресторану — одна и та же и с waiting summary, и без.
+    const handoffButton = (
+      <button
+        type="button"
+        ref={reportTriggerRef}
+        className={styles.primaryButton}
+        disabled={pending}
+        onClick={openReport}
+      >
+        Я передал ресторану {amount}
+      </button>
+    );
+    if (waitingSummary !== null && stage === "WAITING_AT_RESTAURANT") {
+      // Пока идёт активное ожидание: единый блок «Вы в ресторане» = канонический
+      // waiting summary сверху + текущий cash-статус/действие снизу. Cash
+      // lifecycle не подменяется — кнопки и статусы остаются рабочими.
+      let cashStatus: React.ReactNode;
+      if (view.status === "DRIVER_ACTION_REQUIRED") {
+        cashStatus = (
+          <>
+            <p className={styles.cashHandoffLine}>Нужно передать ресторану: {amount}</p>
+            {handoffButton}
+          </>
+        );
+      } else if (view.status === "RESTAURANT_CONFIRMATION_REQUIRED") {
+        cashStatus = (
+          <p className={styles.cashHandoffLine}>Ожидаем подтверждение ресторана</p>
+        );
+      } else if (view.status === "CONFIRMED") {
+        cashStatus = (
+          <p className={styles.cashHandoffLine}>
+            Ресторан подтвердил получение {amount}
+          </p>
+        );
+      } else {
+        cashStatus = (
+          <p className={styles.cashHandoffLine}>
+            Наличная передача требует проверки Direct.
+          </p>
+        );
+      }
+      card = (
+        <StageCard title="Вы в ресторане">
+          <RestaurantWaitingSummary
+            model={waitingSummary}
+            restaurantTimeZone={restaurantTimeZone}
+            onReportDelay={onReportDelay}
+            triggerRef={delayIncidentTriggerRef}
+            footer={cashStatus}
+          />
+        </StageCard>
+      );
+    } else if (view.status === "DRIVER_ACTION_REQUIRED") {
       card = (
         <StageCard
           title="Передайте наличные ресторану"
           hint={`Передайте ресторану ${amount} наличными и сообщите об этом.`}
         >
-          <button
-            type="button"
-            ref={reportTriggerRef}
-            className={styles.primaryButton}
-            disabled={pending}
-            onClick={openReport}
-          >
-            Я передал ресторану {amount}
-          </button>
+          {handoffButton}
         </StageCard>
       );
     } else if (view.status === "RESTAURANT_CONFIRMATION_REQUIRED") {
@@ -1950,6 +2012,12 @@ function formatWaitingClock(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
+/**
+ * ONLINE waiting stage panel. Fail-closed: while the canonical summary is
+ * unavailable (loading or a REVIEW_REQUIRED view) the driver never sees invented
+ * numbers. When available, it renders the one shared RestaurantWaitingSummary —
+ * the exact same block CASH reuses.
+ */
 function RestaurantWaitingPanel({
   restaurantTimeZone,
   view,
@@ -1961,46 +2029,75 @@ function RestaurantWaitingPanel({
   onReportDelay: () => void;
   triggerRef: React.RefObject<HTMLButtonElement | null>;
 }) {
-  if (view === null) {
-    return <StageCard title="Вы в ресторане" hint="Загружаем данные ожидания…" />;
-  }
-  if (view.status !== "WAITING" || view.expectedReadyAt === null) {
+  const summary = getRestaurantWaitingSummary(view);
+  if (summary === null) {
     return (
       <StageCard
         title="Вы в ресторане"
-        hint="Данные ожидания требуют проверки Direct."
+        hint={
+          view === null
+            ? "Загружаем данные ожидания…"
+            : "Данные ожидания требуют проверки Direct."
+        }
       />
     );
   }
-
-  const expected = formatWaitingClock(
-    view.expectedReadyAt,
-    restaurantTimeZone,
-  );
-  const delayed = (view.restaurantDelayMs ?? 0) > 0;
   return (
     <StageCard title="Вы в ресторане">
-      {!delayed ? (
+      <RestaurantWaitingSummary
+        model={summary}
+        restaurantTimeZone={restaurantTimeZone}
+        onReportDelay={onReportDelay}
+        triggerRef={triggerRef}
+      />
+    </StageCard>
+  );
+}
+
+/**
+ * Single canonical presentation of the driver's restaurant wait, shared by
+ * ONLINE and CASH. No waiting maths here — it renders the pure
+ * RestaurantWaitingSummaryModel. `footer` lets CASH slot its handoff status/
+ * action between the wait details and the delay-report action.
+ */
+function RestaurantWaitingSummary({
+  model,
+  restaurantTimeZone,
+  onReportDelay,
+  triggerRef,
+  footer,
+}: {
+  model: RestaurantWaitingSummaryModel;
+  restaurantTimeZone: string;
+  onReportDelay: () => void;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  footer?: React.ReactNode;
+}) {
+  const expected = formatWaitingClock(model.expectedReadyAt, restaurantTimeZone);
+  return (
+    <>
+      {!model.delayed ? (
         <p className={styles.restaurantCookingStatus}>Ресторан готовит заказ</p>
       ) : null}
       <dl className={styles.restaurantWaitingDetails} aria-live="polite">
         <div>
           <dt>Ждёте</dt>
-          <dd>{formatAnalyticsDuration(view.waitingDurationMs)}</dd>
+          <dd>{formatAnalyticsDuration(model.waitingDurationMs)}</dd>
         </div>
-        {delayed ? (
+        {model.delayed ? (
           <>
             <div><dt>Ожидалось к</dt><dd>{expected}</dd></div>
             <div className={styles.restaurantDelayRow}>
               <dt>Ресторан опаздывает</dt>
-              <dd>{formatAnalyticsDuration(view.restaurantDelayMs)}</dd>
+              <dd>{formatAnalyticsDuration(model.restaurantDelayMs)}</dd>
             </div>
           </>
         ) : (
           <div><dt>Ожидаемая готовность</dt><dd>{expected}</dd></div>
         )}
       </dl>
-      {delayed ? (
+      {footer}
+      {model.canReportDelay ? (
         <button
           type="button"
           className={styles.incidentReportButton}
@@ -2011,7 +2108,7 @@ function RestaurantWaitingPanel({
           Сообщить о задержке
         </button>
       ) : null}
-    </StageCard>
+    </>
   );
 }
 

@@ -20,6 +20,44 @@ export interface RestaurantWaitingView {
   readyAtArrival: boolean | null;
 }
 
+/**
+ * Canonical presentation model for the driver's "you are at the restaurant"
+ * waiting block. Derived purely from the shared RestaurantWaitingView so ONLINE
+ * and CASH render one identical summary (duration, expected readiness, lateness,
+ * and the right to report a proven delay). Returns null when there is nothing to
+ * show — before arrival, once READY, or on any fail-closed view — so the CASH
+ * handoff card is never replaced by the waiting summary.
+ */
+export interface RestaurantWaitingSummaryModel {
+  waitingDurationMs: number;
+  expectedReadyAt: string;
+  delayed: boolean;
+  restaurantDelayMs: number;
+  canReportDelay: boolean;
+}
+
+export function getRestaurantWaitingSummary(
+  view: RestaurantWaitingView | null,
+): RestaurantWaitingSummaryModel | null {
+  if (
+    view === null ||
+    view.status !== "WAITING" ||
+    view.expectedReadyAt === null ||
+    view.waitingDurationMs === null
+  ) {
+    return null;
+  }
+  const restaurantDelayMs = view.restaurantDelayMs ?? 0;
+  const delayed = restaurantDelayMs > 0;
+  return {
+    waitingDurationMs: view.waitingDurationMs,
+    expectedReadyAt: view.expectedReadyAt,
+    delayed,
+    restaurantDelayMs,
+    canReportDelay: delayed,
+  };
+}
+
 export interface RestaurantWaitingAnalyticsView {
   restaurantId: string;
   provenArrivalCount: number;
