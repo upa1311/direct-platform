@@ -23,6 +23,7 @@ import {
 import { useOperatorOrderReadySound } from "@/components/operator/use-operator-order-ready-sound";
 import { canPrintOperatorProductionTicket } from "@/components/operator/operator-production-print";
 import { SOUND_ACTIVATION_MESSAGE } from "@/components/kitchen/sound-preference";
+import { KitchenSystemNotifications } from "@/components/notifications/kitchen-system-notifications";
 import { RestaurantMenuAvailabilityPanel } from "@/components/kitchen/restaurant-menu-availability-panel";
 import { RestaurantCashHandoffPanel } from "@/components/restaurant/restaurant-cash-handoff-panel";
 import { rememberMenuWorkspaceRole } from "@/components/menu/menu-workspace-context";
@@ -980,6 +981,19 @@ export default function RestaurantOperatorPage() {
           {SOUND_ACTIVATION_MESSAGE}
         </p>
       ) : null}
+
+      {/* Системные уведомления оператора — отдельный канал от звука; предпочтение
+          scoped по ресторану и роли OPERATOR. Активны только в SPLIT (как звук). */}
+      <div className={kds.notificationControl}>
+        <KitchenSystemNotifications
+          restaurantId={selectedRestaurantId}
+          workspaceRole="OPERATOR"
+          active={
+            isHydrated &&
+            restaurant?.orderWorkflowMode === "SPLIT_OPERATOR_KITCHEN"
+          }
+        />
+      </div>
 
       {!isHydrated ? (
         <div className={kds.empty}>Загружаем заказы…</div>

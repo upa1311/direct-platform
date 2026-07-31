@@ -24,6 +24,7 @@ import {
   useNewOrderSound,
 } from "@/components/kitchen/new-order-sound";
 import { SOUND_ACTIVATION_MESSAGE } from "@/components/kitchen/sound-preference";
+import { KitchenSystemNotifications } from "@/components/notifications/kitchen-system-notifications";
 import { useSplitKitchenPreparingSound } from "@/components/kitchen/use-split-kitchen-preparing-sound";
 import { PreparationProblemResolveBlock } from "@/components/kitchen/preparation-problem-resolve";
 import {
@@ -1287,6 +1288,17 @@ export default function RestaurantKitchenPage() {
           {SOUND_ACTIVATION_MESSAGE}
         </p>
       ) : null}
+
+      {/* Системные уведомления кухни — отдельный канал от звука; предпочтение
+          scoped по ресторану и роли. В SPLIT новые заказы у кухни не звучат,
+          поэтому и уведомления неактивны (их ведёт оператор). */}
+      <div className={kds.notificationControl}>
+        <KitchenSystemNotifications
+          restaurantId={selectedRestaurantId}
+          workspaceRole={isSplit ? "KITCHEN" : "COMBINED"}
+          active={!isSplit}
+        />
+      </div>
 
       {!isHydrated ? (
         <div className={kds.empty}>Загружаем кухню…</div>

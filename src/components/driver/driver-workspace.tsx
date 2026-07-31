@@ -71,6 +71,7 @@ import {
 import { Banknote, BellOff, BellRing, CarFront, CircleAlert, Clock3, CreditCard, MapPin } from "lucide-react";
 
 import { useDriverOfferSoundPreference } from "./driver-offer-sound";
+import { DriverSystemNotifications } from "@/components/notifications/driver-system-notifications";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
 import { driverOrderZoneView } from "@/lib/zones/driver-zone-view";
 import { getZoneButtonPresentation } from "@/lib/zones/zone-presentation";
@@ -237,6 +238,11 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
           <span className={styles.workCount}>Новые — {newCount}</span>
           <span className={styles.workCount}>В работе — {workCount}</span>
         </div>
+      </div>
+
+      {/* Системные уведомления — отдельный канал от звука предложений. */}
+      <div className={styles.notificationControlSpacing}>
+        <DriverSystemNotifications driverId={driver.id} />
       </div>
 
       <NewOffersSection driver={driver} nowMs={nowMs} zoneName={zoneName} />

@@ -82,6 +82,11 @@
   min-width: 0;
 }
 
+.notificationControlSpacing {
+  margin-top: 10px;
+  min-width: 0;
+}
+
 .workBar {
   display: flex;
   flex-wrap: wrap;

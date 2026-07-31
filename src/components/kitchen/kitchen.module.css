@@ -129,6 +129,12 @@
   font-weight: 600;
 }
 
+.notificationControl {
+  width: 100%;
+  margin: 0 0 12px;
+  min-width: 0;
+}
+
 /* --- Buttons ------------------------------------------------------------ */
 .btn {
   min-height: 40px;
