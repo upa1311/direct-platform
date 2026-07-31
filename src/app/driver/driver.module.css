@@ -1234,6 +1234,61 @@
   margin: 0;
 }
 
+/* Политика передачи заказа: компактная semantic-карточка на этапах пути к
+   клиенту. Три визуально различимых состояния (default / приоритет / review).
+   Полный текст комментария клиента здесь не повторяется. */
+.handoffPolicyCard {
+  border: 1px solid var(--kds-border, #cfd5d1);
+  border-left: 4px solid #2f8f5b;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  background: #f2faf5;
+  overflow-wrap: anywhere;
+}
+
+.handoffPolicyTitle {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--kds-muted, #66706a);
+}
+
+.handoffPolicyMethod {
+  font-size: 16px;
+  font-weight: 750;
+  color: #1f6b45;
+}
+
+.handoffPolicyHint {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #3a4a42;
+  overflow-wrap: anywhere;
+}
+
+.handoffPolicyReview {
+  border: 1px solid #b42318;
+  border-left-width: 4px;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  background: #fff6f5;
+  overflow-wrap: anywhere;
+}
+
+.handoffPolicyReviewText {
+  margin: 0;
+}
+
 .incidentForm {
   display: flex;
   flex-direction: column;

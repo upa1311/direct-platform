@@ -33,6 +33,11 @@ import {
   type DriverCustomerInstructionView,
 } from "@/prototype/driver-customer-instruction";
 import {
+  getDriverDeliveryHandoffPolicyView,
+  isDeliveryHandoffStage,
+  type DriverDeliveryHandoffPolicyView,
+} from "@/prototype/driver-delivery-handoff";
+import {
   getPlatformDriverCashHandoffView,
   type PlatformDriverCashHandoffView,
 } from "@/prototype/platform-driver-cash-handoff";
@@ -1309,6 +1314,11 @@ function ActiveOrderCard({
   // всём активном пути (не зависит от этапа и от pickedUp), одинаково для ONLINE
   // и CASH.
   const instructionView = getDriverCustomerInstructionView(order);
+  // Операционная политика передачи заказа: default «лично в руки», приоритет —
+  // у инструкции клиента. Без разбора текста; показывается только на этапах пути
+  // к клиенту. Один общий блок для ONLINE и CASH.
+  const handoffPolicyView = getDriverDeliveryHandoffPolicyView(order);
+  const showHandoffPolicy = isDeliveryHandoffStage(stage);
   // После получения заказа главная точка маршрута — клиент, а не ресторан.
   const pickedUp =
     order.status === "OUT_FOR_DELIVERY" || order.status === "ARRIVING";
@@ -1525,6 +1535,12 @@ function ActiveOrderCard({
           активном пути (ONLINE и CASH), не зависит от pickedUp. */}
       <CustomerInstructionCard view={instructionView} />
 
+      {/* Политика передачи заказа — только на этапах пути к клиенту (общая для
+          ONLINE и CASH). Полный текст комментария не дублируется. */}
+      {showHandoffPolicy ? (
+        <DeliveryHandoffPolicyCard view={handoffPolicyView} />
+      ) : null}
+
       {/* Блок 2: актуальная точка маршрута по этапу. */}
       <RoutePoint order={order} pickedUp={pickedUp} zoneName={zoneName} />
 
@@ -1601,6 +1617,57 @@ function CustomerInstructionCard({
       <span className={styles.customerInstructionTitle}>Инструкция клиента</span>
       <span className={styles.customerInstructionHint}>Выполните при доставке</span>
       <p className={styles.customerInstructionText}>{view.text}</p>
+    </section>
+  );
+}
+
+/**
+ * Политика передачи заказа клиенту. Операционное правило, не классификатор
+ * текста: default Direct — «лично в руки», инструкция клиента имеет приоритет.
+ * Полный текст комментария клиента здесь НЕ дублируется — он уже показан в
+ * приоритетной карточке «Инструкция клиента» выше. Один общий блок для ONLINE и
+ * CASH; никаких дополнительных кнопок подтверждения.
+ */
+function DeliveryHandoffPolicyCard({
+  view,
+}: {
+  view: DriverDeliveryHandoffPolicyView;
+}) {
+  if (view.status === "REVIEW_REQUIRED") {
+    return (
+      <section
+        className={styles.handoffPolicyReview}
+        aria-label="Передача заказа"
+        role="status"
+      >
+        <span className={styles.handoffPolicyTitle}>Передача заказа</span>
+        <span className={styles.handoffPolicyReviewText}>
+          Способ передачи требует проверки Direct.
+        </span>
+      </section>
+    );
+  }
+  if (view.status === "CUSTOMER_INSTRUCTION_PRIORITY") {
+    return (
+      <section className={styles.handoffPolicyCard} aria-label="Передача заказа">
+        <span className={styles.handoffPolicyTitle}>Передача заказа</span>
+        <span className={styles.handoffPolicyMethod}>
+          Инструкция клиента имеет приоритет
+        </span>
+        <p className={styles.handoffPolicyHint}>
+          Следуйте инструкции клиента выше. Если она не меняет способ передачи —
+          передайте заказ лично в руки.
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section className={styles.handoffPolicyCard} aria-label="Передача заказа">
+      <span className={styles.handoffPolicyTitle}>Передача заказа</span>
+      <span className={styles.handoffPolicyMethod}>Лично в руки</span>
+      <p className={styles.handoffPolicyHint}>
+        Передайте заказ непосредственно клиенту.
+      </p>
     </section>
   );
 }
