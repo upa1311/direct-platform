@@ -63,16 +63,24 @@ export type BrowserNotificationPermission = "default" | "granted" | "denied";
 const SCOPE: DirectNotificationDeliveryScope = "DIRECT_CLIENT_REQUIRED";
 
 /**
- * Resolve capability from four independent inputs: technical support, browser
- * permission, the user's Direct preference and worker readiness. `granted`
- * permission does NOT imply the user enabled Direct notifications, and a missing
- * worker/coordination degrades honestly instead of showing a false "enabled".
+ * Resolve capability from ALL inputs that must hold to guarantee
+ * one-intent-one-notification: technical support, browser permission, the user's
+ * durable Direct preference, worker readiness, preference-storage readiness,
+ * ledger-storage readiness, cross-tab lock readiness and the absence of a runtime
+ * delivery failure. `granted` permission does NOT imply an enabled preference,
+ * and if we cannot durably dedupe (any storage/lock component down or a delivery
+ * failure) the honest result is DEGRADED — never a false ENABLED. Defaults keep
+ * the readiness inputs optional so existing callers stay valid.
  */
 export function resolveDirectNotificationCapability(input: {
   supported: boolean;
   permission: BrowserNotificationPermission | null;
   preferenceEnabled: boolean;
   workerReady: boolean;
+  preferenceStorageReady?: boolean;
+  ledgerStorageReady?: boolean;
+  lockReady?: boolean;
+  deliveryFailed?: boolean;
 }): DirectNotificationCapability {
   if (!input.supported || input.permission === null) {
     return { status: "UNSUPPORTED", deliveryScope: null };
@@ -83,7 +91,19 @@ export function resolveDirectNotificationCapability(input: {
   }
   // permission === "granted"
   if (!input.preferenceEnabled) return { status: "DISABLED", deliveryScope: SCOPE };
-  if (!input.workerReady) return { status: "DEGRADED", deliveryScope: SCOPE };
+  const preferenceStorageReady = input.preferenceStorageReady ?? true;
+  const ledgerStorageReady = input.ledgerStorageReady ?? true;
+  const lockReady = input.lockReady ?? true;
+  const deliveryFailed = input.deliveryFailed ?? false;
+  if (
+    !input.workerReady ||
+    !preferenceStorageReady ||
+    !ledgerStorageReady ||
+    !lockReady ||
+    deliveryFailed
+  ) {
+    return { status: "DEGRADED", deliveryScope: SCOPE };
+  }
   return { status: "ENABLED", deliveryScope: SCOPE };
 }
 
@@ -218,17 +238,17 @@ export function intentToPayload(
 // --- Cross-tab delivery ledger (browser, not PrototypeState) -------------------
 
 /**
- * Audience scope for the delivery ledger. Role is intentionally excluded from
- * the KITCHEN scope so the COMBINED and OPERATOR screens of one restaurant
- * dedupe together (one OS notification per order), while driver and kitchen —
- * and different restaurants — keep separate ledgers.
+ * Audience scope for the delivery ledger. It must match the preference/intent
+ * scope exactly: driver by id, kitchen by restaurant AND workspace role. One
+ * role must never absorb another role's delivered key, close its notification as
+ * stale, or touch its ledger. Cross-tab dedupe still holds within the same role.
  */
 export function notificationAudienceScope(
   audience: DirectSystemNotificationAudience,
 ): string {
   return audience.type === "DRIVER"
     ? `driver:${audience.driverId}`
-    : `kitchen:${audience.restaurantId}`;
+    : `kitchen:${audience.restaurantId}:${audience.workspaceRole}`;
 }
 
 export const NOTIFICATION_LEDGER_MAX = 100;
@@ -291,4 +311,104 @@ export function forgetDeliveredKeys(
 ): string[] {
   const forget = new Set(keysToForget);
   return deliveredKeys.filter((key) => !forget.has(key));
+}
+
+// --- Fail-closed delivery reconciliation --------------------------------------
+
+/** Explicit browser-storage read result: empty is NOT the same as unreadable. */
+export type BrowserStorageReadResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: "UNAVAILABLE" | "INVALID_DATA" };
+
+/** Explicit cross-tab lock result: no fallback execution on failure. */
+export type NotificationLockResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: "LOCK_UNAVAILABLE" | "LOCK_FAILED" };
+
+export type NotificationDegradeReason =
+  | "LEDGER_READ"
+  | "LEDGER_WRITE"
+  | "LOCK_UNAVAILABLE"
+  | "LOCK_FAILED";
+
+/**
+ * Injectable ports for the delivery critical section. The pure reconciler drives
+ * them; the hook wires real browser adapters and tests wire fakes (including a
+ * shared ledger + serializing lock for concurrency).
+ */
+export interface NotificationDeliveryPorts {
+  readLedger: () => BrowserStorageReadResult<string[]>;
+  writeLedger: (keys: string[]) => boolean;
+  show: (intent: DirectSystemNotificationIntent) => Promise<boolean>;
+  close: (tag: string) => void;
+  runExclusive: <T>(fn: () => Promise<T>) => Promise<NotificationLockResult<T>>;
+}
+
+export type NotificationReconcileOutcome =
+  | { status: "OK"; shownKeys: string[] }
+  | { status: "DEGRADED"; reason: NotificationDegradeReason; shownKeys: string[] };
+
+/**
+ * Fail-closed cross-tab delivery. Everything runs inside a real exclusive lock —
+ * there is NO unsynchronised fallback. A delivered key is persisted only after a
+ * confirmed show; if that persist fails the just-shown tag is closed, the intent
+ * is quarantined in-memory (so the next tick cannot re-show it) and the run
+ * degrades immediately without touching further intents. A missing/failed lock
+ * or an unreadable ledger performs no show at all.
+ *
+ * `quarantine` is a caller-owned in-memory Set (per browser tab); it is mutated
+ * only to record a shown-but-unpersisted key.
+ */
+export async function reconcileNotificationDelivery(
+  intents: readonly DirectSystemNotificationIntent[],
+  quarantine: Set<string>,
+  ports: NotificationDeliveryPorts,
+): Promise<NotificationReconcileOutcome> {
+  const locked = await ports.runExclusive(async () => {
+    const read = ports.readLedger();
+    if (!read.ok) {
+      return { degraded: "LEDGER_READ" as NotificationDegradeReason, shownKeys: [] };
+    }
+    let ledger = read.value;
+    const shownKeys: string[] = [];
+
+    const undelivered = selectUndeliveredIntents(intents, ledger).filter(
+      (intent) => !quarantine.has(intent.key),
+    );
+    for (const intent of undelivered) {
+      const shown = await ports.show(intent);
+      // A failed show is never recorded — it is retried on a later tick.
+      if (!shown) continue;
+      const next = recordDeliveredKey(ledger, intent.key);
+      if (!ports.writeLedger(next)) {
+        // Shown but not persisted → quarantine, close, stop, degrade.
+        quarantine.add(intent.key);
+        ports.close(intent.tag);
+        return { degraded: "LEDGER_WRITE" as NotificationDegradeReason, shownKeys };
+      }
+      ledger = next;
+      shownKeys.push(intent.key);
+    }
+
+    const staleTags = selectStaleNotificationTags(intents, ledger);
+    if (staleTags.length > 0) {
+      for (const tag of staleTags) ports.close(tag);
+      const forgotten = forgetDeliveredKeys(ledger, staleTags);
+      if (!ports.writeLedger(forgotten)) {
+        return { degraded: "LEDGER_WRITE" as NotificationDegradeReason, shownKeys };
+      }
+      ledger = forgotten;
+    }
+
+    return { degraded: null as NotificationDegradeReason | null, shownKeys };
+  });
+
+  if (!locked.ok) {
+    return { status: "DEGRADED", reason: locked.reason, shownKeys: [] };
+  }
+  const inner = locked.value;
+  if (inner.degraded !== null) {
+    return { status: "DEGRADED", reason: inner.degraded, shownKeys: inner.shownKeys };
+  }
+  return { status: "OK", shownKeys: inner.shownKeys };
 }

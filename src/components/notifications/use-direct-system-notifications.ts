@@ -5,27 +5,29 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   driverNotificationPreferenceKey,
   kitchenNotificationPreferenceKey,
-  ledgerAfterDeliveryAttempt,
   notificationAudienceScope,
+  reconcileNotificationDelivery,
   resolveDirectNotificationCapability,
-  selectStaleNotificationTags,
-  selectUndeliveredIntents,
-  forgetDeliveredKeys,
   type BrowserNotificationPermission,
   type DirectNotificationCapability,
   type DirectSystemNotificationAudience,
   type DirectSystemNotificationIntent,
+  type NotificationDeliveryPorts,
 } from "@/prototype/direct-notifications";
 import {
   closeNotificationViaWorker,
   getSystemNotificationPermission,
+  isNotificationLockAvailable,
+  isNotificationStorageReady,
   isSystemNotificationSupported,
   readNotificationLedger,
+  readNotificationPreference,
   registerDirectNotificationWorker,
   requestSystemNotificationPermission,
+  runWithNotificationLock,
   showNotificationViaWorker,
-  withNotificationLock,
   writeNotificationLedger,
+  writeNotificationPreference,
 } from "./notification-runtime";
 
 /** Preference storage key for an audience (driver per id; kitchen per restaurant+role). */
@@ -40,22 +42,14 @@ export function notificationPreferenceKey(
       );
 }
 
-function readPreference(key: string): boolean {
-  try {
-    return typeof window !== "undefined"
-      ? window.localStorage.getItem(key) === "1"
-      : false;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Orchestrates Direct system notifications for one audience (driver or kitchen)
- * as a channel independent of sound. It never requests permission automatically
- * — only from the explicit enable() user gesture — never writes a sound
- * preference, and shows at most one OS notification per intent across tabs using
- * a Web-Lock-guarded, audience-scoped browser delivery ledger.
+ * as a channel independent of sound. Fail-closed: it never requests permission
+ * automatically (only from the explicit enable() gesture), never writes a sound
+ * preference, and shows at most one OS notification per intent across tabs. The
+ * preference is considered ON only after a durable write; if preference storage,
+ * ledger storage or the cross-tab lock is not ready, or a delivery attempt
+ * fails, capability degrades to DEGRADED instead of risking duplicates.
  */
 export function useDirectSystemNotifications({
   audience,
@@ -82,32 +76,48 @@ export function useDirectSystemNotifications({
     useState<BrowserNotificationPermission | null>(null);
   const [preferenceEnabled, setPreferenceEnabled] = useState(false);
   const [workerReady, setWorkerReady] = useState(false);
+  const [preferenceStorageReady, setPreferenceStorageReady] = useState(false);
+  const [ledgerStorageReady, setLedgerStorageReady] = useState(false);
+  const [lockReady, setLockReady] = useState(false);
+  const [deliveryFailed, setDeliveryFailed] = useState(false);
   const registrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const reconcilingRef = useRef(false);
+  // Per-tab in-memory quarantine of shown-but-unpersisted intents: prevents a
+  // failed ledger write from re-showing the same notification on a later tick.
+  const quarantineRef = useRef<Set<string>>(new Set());
 
-  // Initial browser read (client only) + cross-tab preference sync. Reading the
-  // real browser state after mount (SSR renders "off") is the intended pattern,
-  // same as useNowMs; the one-time client init is not a cascading render.
+  // Probe browser readiness on mount, on every tick and on cross-tab changes.
+  // Reading real browser state after mount (SSR renders "off") is the intended
+  // pattern, same as useNowMs.
   useEffect(() => {
-    /* eslint-disable react-hooks/set-state-in-effect */
-    setSupported(isSystemNotificationSupported());
-    setPermission(getSystemNotificationPermission());
-    setPreferenceEnabled(readPreference(preferenceKey));
-    /* eslint-enable react-hooks/set-state-in-effect */
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === preferenceKey) {
-        setPreferenceEnabled(readPreference(preferenceKey));
+    const probe = () => {
+      const storageReady = isNotificationStorageReady();
+      const pref = readNotificationPreference(preferenceKey);
+      const ledger = readNotificationLedger(scope);
+      setSupported(isSystemNotificationSupported());
+      setPermission(getSystemNotificationPermission());
+      setPreferenceStorageReady(storageReady && pref.ok);
+      setPreferenceEnabled(pref.ok ? pref.value : false);
+      setLedgerStorageReady(storageReady && ledger.ok);
+      setLockReady(isNotificationLockAvailable());
+      // Recovery: once storage and lock are healthy again, clear the transient
+      // delivery failure so a NEW intent can be delivered once.
+      if (storageReady && pref.ok && ledger.ok && isNotificationLockAvailable()) {
+        setDeliveryFailed(false);
       }
+    };
+    probe();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === preferenceKey) probe();
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [preferenceKey]);
+  }, [preferenceKey, scope, nowMs]);
 
   // Register the worker only once the user has opted in and granted permission —
   // never speculatively. Registration is not a permission prompt.
   useEffect(() => {
     if (!supported || permission !== "granted" || !preferenceEnabled) return;
-    // Already registered — workerReady is already set from the async result.
     if (registrationRef.current) return;
     let cancelled = false;
     void registerDirectNotificationWorker().then((registration) => {
@@ -125,9 +135,13 @@ export function useDirectSystemNotifications({
     permission,
     preferenceEnabled,
     workerReady,
+    preferenceStorageReady,
+    ledgerStorageReady,
+    lockReady,
+    deliveryFailed,
   });
 
-  // Reconcile: show undelivered intents once per key across tabs, close stale.
+  // Reconcile only when we can guarantee one-intent-one-notification (ENABLED).
   useEffect(() => {
     if (capability.status !== "ENABLED") return;
     if (nowMs === 0) return;
@@ -136,27 +150,23 @@ export function useDirectSystemNotifications({
     if (reconcilingRef.current) return;
     reconcilingRef.current = true;
 
-    void withNotificationLock(scope, async () => {
-      let ledger = readNotificationLedger(scope);
+    const ports: NotificationDeliveryPorts = {
+      readLedger: () => readNotificationLedger(scope),
+      writeLedger: (keys) => writeNotificationLedger(scope, keys),
+      show: (intent) => showNotificationViaWorker(registration, intent),
+      close: (tag) => closeNotificationViaWorker(registration, tag),
+      runExclusive: (fn) => runWithNotificationLock(scope, fn),
+    };
 
-      const undelivered = selectUndeliveredIntents(intents, ledger);
-      for (const intent of undelivered) {
-        const shown = await showNotificationViaWorker(registration, intent);
-        ledger = ledgerAfterDeliveryAttempt(ledger, intent.key, shown);
-      }
-
-      const staleTags = selectStaleNotificationTags(intents, ledger);
-      for (const tag of staleTags) {
-        closeNotificationViaWorker(registration, tag);
-      }
-      if (staleTags.length > 0) {
-        ledger = forgetDeliveredKeys(ledger, staleTags);
-      }
-
-      writeNotificationLedger(scope, ledger);
-    })
+    void reconcileNotificationDelivery(intents, quarantineRef.current, ports)
+      .then((outcome) => {
+        if (outcome.status === "DEGRADED") {
+          // Fail-closed: stop reconciling until the next probe confirms recovery.
+          setDeliveryFailed(true);
+        }
+      })
       .catch(() => {
-        // Degraded path already handled inside the adapters; never throw.
+        setDeliveryFailed(true);
       })
       .finally(() => {
         reconcilingRef.current = false;
@@ -179,20 +189,19 @@ export function useDirectSystemNotifications({
     const registration = await registerDirectNotificationWorker();
     registrationRef.current = registration;
     setWorkerReady(registration !== null && registration.active !== null);
-    try {
-      window.localStorage.setItem(preferenceKey, "1");
-    } catch {
-      // ignore storage failure
+    // Preference is ON only after a confirmed durable write. If storage cannot
+    // persist it, do not claim it is enabled.
+    const durable = writeNotificationPreference(preferenceKey, true);
+    setPreferenceStorageReady(durable);
+    setPreferenceEnabled(durable);
+    if (durable) {
+      quarantineRef.current = new Set();
+      setDeliveryFailed(false);
     }
-    setPreferenceEnabled(true);
   }, [preferenceKey]);
 
   const disable = useCallback(() => {
-    try {
-      window.localStorage.setItem(preferenceKey, "0");
-    } catch {
-      // ignore
-    }
+    writeNotificationPreference(preferenceKey, false);
     setPreferenceEnabled(false);
   }, [preferenceKey]);
 

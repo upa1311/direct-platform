@@ -6,7 +6,9 @@ import {
 import {
   intentToPayload,
   type BrowserNotificationPermission,
+  type BrowserStorageReadResult,
   type DirectSystemNotificationIntent,
+  type NotificationLockResult,
 } from "@/prototype/direct-notifications";
 import { validateWorkerNotificationMessage } from "@/prototype/direct-notification-worker-contract";
 
@@ -19,6 +21,7 @@ import { validateWorkerNotificationMessage } from "@/prototype/direct-notificati
 
 export const DIRECT_NOTIFICATION_WORKER_URL = "/direct-notifications-sw.js";
 const LEDGER_KEY_PREFIX = "direct-notification-ledger";
+const STORAGE_PROBE_KEY = "direct-notification-probe";
 
 export function isSystemNotificationSupported(): boolean {
   try {
@@ -88,47 +91,113 @@ function ledgerStorageKey(scope: string): string {
   return `${LEDGER_KEY_PREFIX}:${scope}`;
 }
 
-export function readNotificationLedger(scope: string): string[] {
+/** Durable preference read distinguishing "off" from an unreadable store. */
+export function readNotificationPreference(
+  key: string,
+): BrowserStorageReadResult<boolean> {
   try {
-    if (typeof window === "undefined") return [];
-    const raw = window.localStorage.getItem(ledgerStorageKey(scope));
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === "string")
-      : [];
+    if (typeof window === "undefined") return { ok: false, error: "UNAVAILABLE" };
+    return { ok: true, value: window.localStorage.getItem(key) === "1" };
   } catch {
-    return [];
+    return { ok: false, error: "UNAVAILABLE" };
   }
 }
 
-export function writeNotificationLedger(scope: string, keys: readonly string[]): void {
+/** Durable preference write; true only when the value was actually persisted. */
+export function writeNotificationPreference(key: string, on: boolean): boolean {
   try {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(ledgerStorageKey(scope), JSON.stringify(keys));
+    if (typeof window === "undefined") return false;
+    window.localStorage.setItem(key, on ? "1" : "0");
+    // Confirm durability: read the value back.
+    return window.localStorage.getItem(key) === (on ? "1" : "0");
   } catch {
-    // Storage unavailable — safe no-op (worst case a duplicate on another tab).
+    return false;
   }
 }
 
 /**
- * Serialize a critical section across tabs with Web Locks when available;
- * otherwise run directly (degraded — no domain mutation, at worst a rare
- * duplicate). Never throws.
+ * Ledger read that distinguishes an empty ledger ({ok:true, value:[]}) from an
+ * unreadable/corrupt store ({ok:false}) — the latter must never be treated as
+ * "nothing delivered yet".
  */
-export async function withNotificationLock<T>(
+export function readNotificationLedger(
+  scope: string,
+): BrowserStorageReadResult<string[]> {
+  let raw: string | null;
+  try {
+    if (typeof window === "undefined") return { ok: false, error: "UNAVAILABLE" };
+    raw = window.localStorage.getItem(ledgerStorageKey(scope));
+  } catch {
+    return { ok: false, error: "UNAVAILABLE" };
+  }
+  if (raw === null) return { ok: true, value: [] };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return { ok: false, error: "INVALID_DATA" };
+    return {
+      ok: true,
+      value: parsed.filter((item): item is string => typeof item === "string"),
+    };
+  } catch {
+    return { ok: false, error: "INVALID_DATA" };
+  }
+}
+
+/** Ledger write; true only when the keys were actually persisted. */
+export function writeNotificationLedger(
+  scope: string,
+  keys: readonly string[],
+): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    window.localStorage.setItem(ledgerStorageKey(scope), JSON.stringify(keys));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether cross-tab serialization (Web Locks) is available at all. */
+export function isNotificationLockAvailable(): boolean {
+  return getPrototypeLockManager() !== null;
+}
+
+/**
+ * Probe that storage is durably usable right now (read + write + cleanup).
+ * Used to keep capability honest and to recover from a transient outage.
+ */
+export function isNotificationStorageReady(): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    window.localStorage.setItem(STORAGE_PROBE_KEY, "1");
+    const ok = window.localStorage.getItem(STORAGE_PROBE_KEY) === "1";
+    window.localStorage.removeItem(STORAGE_PROBE_KEY);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Serialize a critical section across tabs with Web Locks. FAIL-CLOSED: there is
+ * no unsynchronised fallback. A missing lock manager returns LOCK_UNAVAILABLE and
+ * a failed/aborted request returns LOCK_FAILED — in both cases `fn` never runs,
+ * so no notification is shown without exclusive coordination.
+ */
+export async function runWithNotificationLock<T>(
   scope: string,
   fn: () => Promise<T>,
-): Promise<T> {
+): Promise<NotificationLockResult<T>> {
   const manager = getPrototypeLockManager();
-  if (!manager) return fn();
+  if (!manager) return { ok: false, reason: "LOCK_UNAVAILABLE" };
   try {
-    return (await manager.request(
+    const value = (await manager.request(
       `direct-notification-lock:${scope}`,
       fn,
     )) as T;
+    return { ok: true, value };
   } catch {
-    return fn();
+    return { ok: false, reason: "LOCK_FAILED" };
   }
 }
 

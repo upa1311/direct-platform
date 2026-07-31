@@ -360,23 +360,24 @@ test("34-35: delivered key recorded only on success", () => {
   assert.deepEqual(ledgerAfterDeliveryAttempt([], "k", false), []);
 });
 
-test("36: ledger scope is audience-specific", () => {
+test("36: ledger scope is audience-specific (driver by id; kitchen by restaurant+role)", () => {
   const driverScope = notificationAudienceScope({ type: "DRIVER", driverId: DRIVER });
-  const kitchenScope = notificationAudienceScope({
+  const combinedScope = notificationAudienceScope({
     type: "KITCHEN",
     restaurantId: REST,
     workspaceRole: "COMBINED",
   });
-  assert.notEqual(driverScope, kitchenScope);
-  // Role does not split the kitchen ledger (COMBINED+OPERATOR dedupe together).
-  assert.equal(
-    kitchenScope,
-    notificationAudienceScope({
-      type: "KITCHEN",
-      restaurantId: REST,
-      workspaceRole: "OPERATOR",
-    }),
-  );
+  const operatorScope = notificationAudienceScope({
+    type: "KITCHEN",
+    restaurantId: REST,
+    workspaceRole: "OPERATOR",
+  });
+  assert.notEqual(driverScope, combinedScope);
+  // Role now splits the kitchen ledger: COMBINED and OPERATOR never share it.
+  assert.notEqual(combinedScope, operatorScope);
+  assert.equal(combinedScope, `kitchen:${REST}:COMBINED`);
+  assert.equal(operatorScope, `kitchen:${REST}:OPERATOR`);
+  assert.equal(driverScope, `driver:${DRIVER}`);
 });
 
 test("37: ledger is bounded with deterministic oldest-first pruning", () => {
