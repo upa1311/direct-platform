@@ -3,6 +3,10 @@
 // checkout-редактора и submit-гейта, проверяемые без render-harness.
 import type { CashTenderIntent } from "../../prototype/models";
 
+// Отпечаток намерения живёт в pure prototype-ядре (compare-and-set сохранение не
+// зависит от UI). Реэкспорт — чтобы существующие UI-импорты не ломались.
+export { cashTenderIntentKey } from "../../prototype/cash-tender-intent";
+
 /** Целые безопасные центы: конечное неотрицательное целое ≤ MAX_SAFE_INTEGER. */
 export function isSafeCents(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0;
@@ -11,15 +15,6 @@ export function isSafeCents(value: number): boolean {
 /** cents → «20.00» для поля ввода. */
 export function tenderCentsToText(cents: number): string {
   return (cents / 100).toFixed(2);
-}
-
-/**
- * Отпечаток authoritative intent для сверки вкладок и подтверждения сохранения:
- * NULL | EXACT | CHANGE_FROM:<cents>. Разные суммы CHANGE_FROM различимы.
- */
-export function cashTenderIntentKey(intent: CashTenderIntent): string {
-  if (intent === null) return "NULL";
-  return intent.mode === "EXACT" ? "EXACT" : `CHANGE_FROM:${intent.tenderCents}`;
 }
 
 /**

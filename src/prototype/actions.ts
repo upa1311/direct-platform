@@ -112,6 +112,7 @@ import {
   buildPlatformDriverCashSnapshot,
   buildPlatformDriverCashTenderSnapshot,
 } from "./platform-driver-cash";
+import { cashTenderIntentKey } from "./cash-tender-intent";
 
 export interface ActionResult<T> {
   state: PrototypeState;
@@ -329,6 +330,57 @@ export function setCartCashTenderIntent(
     ...state,
     cart: { ...state.cart, cashTenderIntent: intent },
   });
+}
+
+/** Результат compare-and-set сохранения наличного намерения (v31). */
+export interface CashTenderIntentSaveResult {
+  ok: boolean;
+  error: string | null;
+  /** true — сохранение отклонено из-за рассинхронизации/сброса, без мутации. */
+  conflict: boolean;
+}
+
+/**
+ * Compare-and-set сохранение наличного намерения (v31). Выполняется ВНУТРИ общей
+ * serialized-мутации над СВЕЖИМ baseState под Web Lock, поэтому проверка ожидаемого
+ * отпечатка происходит в домене, а не в React до запуска.
+ *
+ * Fail-closed:
+ *  - способ оплаты уже не CASH (payment-method reset / гонка) → conflict, без мутации;
+ *  - текущий отпечаток корзины ≠ expectedIntentKey (другая вкладка/устаревший
+ *    queued save) → conflict, без мутации, без роста revision, без перезаписи
+ *    incoming намерения.
+ *
+ * Idempotent: если следующий отпечаток совпадает с текущим — допустимый no-op
+ * (state без изменения, revision не растёт, ack ok/changed:false). Иначе намерение
+ * применяется единой мутацией. Экономика заказа не затрагивается.
+ */
+export function saveCartCashTenderIntent(
+  state: PrototypeState,
+  expectedIntentKey: string,
+  nextIntent: CashTenderIntent,
+): ActionResult<CashTenderIntentSaveResult> {
+  const conflict = (error: string): ActionResult<CashTenderIntentSaveResult> => ({
+    state,
+    result: { ok: false, error, conflict: true },
+  });
+
+  if (state.cart.paymentMethod !== "CASH") {
+    return conflict("Наличная оплата больше не выбрана.");
+  }
+  const currentKey = cashTenderIntentKey(state.cart.cashTenderIntent);
+  if (currentKey !== expectedIntentKey) {
+    return conflict("Выбор наличной оплаты изменился. Подтвердите заново.");
+  }
+  // Idempotent: то же значение — без мутации и без роста revision.
+  if (cashTenderIntentKey(nextIntent) === currentKey) {
+    return { state, result: { ok: true, error: null, conflict: false } };
+  }
+  const nextState = finalizeMutation(state, {
+    ...state,
+    cart: { ...state.cart, cashTenderIntent: nextIntent },
+  });
+  return { state: nextState, result: { ok: true, error: null, conflict: false } };
 }
 
 export function setCartFulfillmentChoice(

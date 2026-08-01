@@ -49,7 +49,7 @@ export default function ClientCartPage() {
     updateAddress: updateAddressAck,
     updateCustomer: updateCustomerAck,
     setPaymentMethod: setPaymentMethodAck,
-    setCashTenderIntent: setCashTenderIntentAck,
+    saveCashTenderIntent,
     createOrder,
   } = usePrototype();
   // Исправление 5.7: общий баннер ошибок мутаций корзины. Значения на странице
@@ -70,9 +70,6 @@ export default function ClientCartPage() {
     runCartMutation(() => updateCustomerAck(...args));
   const setPaymentMethod = (...args: Parameters<typeof setPaymentMethodAck>) =>
     runCartMutation(() => setPaymentMethodAck(...args));
-  const setCashTenderIntent = (
-    ...args: Parameters<typeof setCashTenderIntentAck>
-  ) => runCartMutation(() => setCashTenderIntentAck(...args));
   const nowMs = useNowMs();
   const [submitError, setSubmitError] = useState("");
   const [addressError, setAddressError] = useState("");
@@ -119,57 +116,58 @@ export default function ClientCartPage() {
   // фактического совпадения authoritative intent с ожидаемым.
   const cashIntent = state.cart.cashTenderIntent;
   const cashTotalCents = pricing.customerTotalCents;
-  const cashSavingRef = useRef(false);
+  const cashAttemptRef = useRef(0);
   const [cashEditor, setCashEditor] = useState<CashTenderEditorState>(() =>
     initCashTenderEditor(cashIntent),
   );
   const [lastPaymentMethod, setLastPaymentMethod] = useState(
     state.cart.paymentMethod,
   );
-  // Смена способа оплаты (CASH→ONLINE→CASH) сбрасывает редактор к свежему intent.
+  const cashCtx = { intent: cashIntent, customerTotalCents: cashTotalCents };
+  // Смена способа оплаты (CASH→ONLINE→CASH) сбрасывает редактор к свежему intent
+  // и инвалидирует активную попытку: поздний ответ старой попытки игнорируется.
   if (state.cart.paymentMethod !== lastPaymentMethod) {
     setLastPaymentMethod(state.cart.paymentMethod);
     setCashEditor(initCashTenderEditor(cashIntent));
   } else if (cashTenderIntentKey(cashIntent) !== cashEditor.baseIntentKey) {
     // Пришёл новый authoritative intent (сохранение приземлилось / другая вкладка).
     setCashEditor(
-      reduceCashTenderEditor(
-        cashEditor,
-        { type: "SYNC", intent: cashIntent },
-        { intent: cashIntent, customerTotalCents: cashTotalCents },
-      ).state,
+      reduceCashTenderEditor(cashEditor, { type: "SYNC", intent: cashIntent }, cashCtx)
+        .state,
     );
   }
-  const runCashSave = async (candidate: CashTenderIntent) => {
-    if (cashSavingRef.current) return; // защита от двойного save
-    cashSavingRef.current = true;
-    try {
-      const ack = await setCashTenderIntent(candidate);
-      if (!ack.ok) {
-        setCashEditor(
-          (s) =>
-            reduceCashTenderEditor(
-              s,
-              {
-                type: "SAVE_FAILED",
-                error: ack.error ?? "Не удалось сохранить выбор.",
-              },
-              { intent: cashIntent, customerTotalCents: cashTotalCents },
-            ).state,
-        );
-      }
-      // ok: фактический incoming intent переведёт редактор в CLEAN через SYNC.
-    } finally {
-      cashSavingRef.current = false;
-    }
+  const runCashSave = async (effect: {
+    attemptId: number;
+    expectedIntentKey: string;
+    nextIntent: CashTenderIntent;
+  }) => {
+    // compare-and-set сохранение в домене под Web Lock; результат помечается
+    // attemptId, поэтому поздний ответ устаревшей попытки будет отброшен редьюсером.
+    const ack = await saveCashTenderIntent(effect.expectedIntentKey, effect.nextIntent);
+    setCashEditor(
+      (s) =>
+        reduceCashTenderEditor(
+          s,
+          {
+            type: "SAVE_ACK",
+            attemptId: effect.attemptId,
+            ok: ack.ok,
+            conflict: ack.conflict,
+            changed: ack.changed,
+            error: ack.error,
+          },
+          { intent: state.cart.cashTenderIntent, customerTotalCents: cashTotalCents },
+        ).state,
+    );
   };
   const dispatchCashEditor = (action: CashTenderEditorAction) => {
-    const result = reduceCashTenderEditor(cashEditor, action, {
-      intent: cashIntent,
-      customerTotalCents: cashTotalCents,
-    });
+    const result = reduceCashTenderEditor(cashEditor, action, cashCtx);
     setCashEditor(result.state);
-    if (result.shouldSave) void runCashSave(result.saveIntent);
+    if (result.save) void runCashSave(result.save);
+  };
+  const nextCashAttemptId = () => {
+    cashAttemptRef.current += 1;
+    return cashAttemptRef.current;
   };
   const cashView = cashTenderEditorView(cashEditor, cashIntent, cashTotalCents);
   const cashSubmitReady = canSubmitCashTender(cashEditor, cashIntent, cashTotalCents);
@@ -572,14 +570,24 @@ export default function ClientCartPage() {
                 isCashSelected={isCashSelected}
                 view={cashView}
                 customerTotalCents={pricing.customerTotalCents}
-                onSelectExact={() => dispatchCashEditor({ type: "SELECT_EXACT" })}
+                onSelectExact={() =>
+                  dispatchCashEditor({
+                    type: "SELECT_EXACT",
+                    attemptId: nextCashAttemptId(),
+                  })
+                }
                 onSelectChangeFrom={() =>
                   dispatchCashEditor({ type: "SELECT_CHANGE_FROM" })
                 }
                 onEditText={(text) =>
                   dispatchCashEditor({ type: "EDIT_TEXT", text })
                 }
-                onConfirm={() => dispatchCashEditor({ type: "CONFIRM" })}
+                onConfirm={() =>
+                  dispatchCashEditor({
+                    type: "CONFIRM",
+                    attemptId: nextCashAttemptId(),
+                  })
+                }
               />
             ) : (
               <p className={flowStyles.compactPayment}>Оплата онлайн</p>
@@ -826,26 +834,38 @@ function CheckoutPaymentChoice({
             <span>Нужна сдача с суммы</span>
           </label>
           {view.showChangeInput ? (
-            <>
-              <label className={flowStyles.field}>
-                <span>С какой суммы нужна сдача</span>
-                <input
-                  inputMode="decimal"
-                  value={view.changeAmountText}
-                  disabled={view.saving}
-                  onChange={(event) => onEditText(event.target.value)}
-                  placeholder="Например: 20.00"
-                />
-              </label>
-              <button
-                type="button"
-                className={flowStyles.secondaryButton}
-                disabled={!view.confirmEnabled || view.saving}
-                onClick={onConfirm}
-              >
-                Подтвердить сумму
-              </button>
-            </>
+            <label className={flowStyles.field}>
+              <span>С какой суммы нужна сдача</span>
+              <input
+                inputMode="decimal"
+                value={view.changeAmountText}
+                disabled={view.saving}
+                onChange={(event) => onEditText(event.target.value)}
+                placeholder="Например: 20.00"
+              />
+            </label>
+          ) : null}
+          {/* Явное подтверждение (DIRTY CHANGE_FROM) или повтор после ошибки
+              сохранения (ERROR, в т.ч. EXACT) — обе операции создают новую попытку
+              и запускают ровно одну CAS-мутацию. */}
+          {view.confirmEnabled ? (
+            <button
+              type="button"
+              className={flowStyles.secondaryButton}
+              disabled={view.saving}
+              onClick={onConfirm}
+            >
+              Подтвердить сумму
+            </button>
+          ) : view.retryEnabled ? (
+            <button
+              type="button"
+              className={flowStyles.secondaryButton}
+              disabled={view.saving}
+              onClick={onConfirm}
+            >
+              Повторить сохранение
+            </button>
           ) : null}
           {customerTotalCents !== null ? (
             <p className={flowStyles.summaryHint}>

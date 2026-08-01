@@ -67,8 +67,8 @@ import {
   requestOrderCancellationByRestaurant,
   resetPrototypeState,
   restoreDefaultTariffs,
+  saveCartCashTenderIntent,
   saveTariffs,
-  setCartCashTenderIntent,
   setCartFulfillmentChoice,
   setCartItemComment,
   setCartItemQuantity,
@@ -86,6 +86,7 @@ import {
   type AdjustOrderEtaResult,
   type AdminActionResult,
   type BulkOperationalResult,
+  type CashTenderIntentSaveResult,
   type ClientCancelResult,
   type CompletePickupResult,
   type CreateOrderResult,
@@ -201,6 +202,18 @@ export type { MutationAck } from "./prototype-store";
 /** Promise-подтверждение мутации в API провайдера. */
 type MutationAckPromise = Promise<MutationAck>;
 
+/**
+ * Подтверждение compare-and-set сохранения наличного намерения (v31).
+ * `conflict` — CAS отклонён на свежем state (без мутации); `changed` — было ли
+ * фактическое изменение (идемпотентный no-op → false).
+ */
+export interface CashTenderSaveAck {
+  ok: boolean;
+  error: string | null;
+  conflict: boolean;
+  changed: boolean;
+}
+
 export interface PrototypeContextValue {
   state: PrototypeState;
   isHydrated: boolean;
@@ -232,7 +245,15 @@ export interface PrototypeContextValue {
     patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>,
   ) => MutationAckPromise;
   setPaymentMethod: (paymentMethod: PaymentMethod) => MutationAckPromise;
-  setCashTenderIntent: (intent: CashTenderIntent) => MutationAckPromise;
+  /**
+   * Compare-and-set сохранение наличного намерения (v31): применяет nextIntent
+   * ТОЛЬКО если отпечаток корзины под Web Lock всё ещё равен expectedIntentKey.
+   * conflict — доменный отказ без мутации; changed:false — идемпотентный no-op.
+   */
+  saveCashTenderIntent: (
+    expectedIntentKey: string,
+    nextIntent: CashTenderIntent,
+  ) => Promise<CashTenderSaveAck>;
   setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => MutationAckPromise;
   createOrder: () => Promise<CreateOrderResult>;
   repeatOrder: (orderId: string) => Promise<RepeatOrderResult>;
@@ -1002,12 +1023,30 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [runSerializedStateMutation],
   );
 
-  const setCashTenderIntent = useCallback(
-    (intent: CashTenderIntent) =>
-      runSerializedStateMutation({
-        mutation: (baseState) => setCartCashTenderIntent(baseState, intent),
-      }),
-    [runSerializedStateMutation],
+  const saveCashTenderIntent = useCallback(
+    async (
+      expectedIntentKey: string,
+      nextIntent: CashTenderIntent,
+    ): Promise<CashTenderSaveAck> => {
+      // CAS выполняется в домене над свежим baseState под Web Lock; changed —
+      // из фактического committed (идемпотентный no-op → false).
+      const outcome = await runSerializedMutationCore<CashTenderIntentSaveResult>({
+        mutation: (baseState) =>
+          saveCartCashTenderIntent(baseState, expectedIntentKey, nextIntent),
+        infrastructureFailure: (error) => ({
+          ok: false,
+          error,
+          conflict: false,
+        }),
+      });
+      return {
+        ok: outcome.result.ok,
+        error: outcome.result.error,
+        conflict: outcome.result.conflict,
+        changed: outcome.committed,
+      };
+    },
+    [runSerializedMutationCore],
   );
 
   const setFulfillmentChoice = useCallback(
@@ -2165,7 +2204,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       updateAddress,
       updateCustomer,
       setPaymentMethod,
-      setCashTenderIntent,
+      saveCashTenderIntent,
       setFulfillmentChoice,
       createOrder,
       repeatOrder,
@@ -2249,7 +2288,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       updateAddress,
       updateCustomer,
       setPaymentMethod,
-      setCashTenderIntent,
+      saveCashTenderIntent,
       setFulfillmentChoice,
       createOrder,
       repeatOrder,

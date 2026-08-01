@@ -1,12 +1,19 @@
 // Импорты относительные: модуль проверяется node:test, где alias «@/» не
-// резолвится. ЧИСТАЯ editor state machine наличной сдачи (без React/DOM):
-// authoritative `cart.cashTenderIntent` — единственный persisted источник, а
-// editor — только локальный UI-draft со строгим ack-протоколом. Позволяет
-// проверить mutation-failure / cross-tab / rapid-typing переходы поведенчески.
+// резолвится. ЧИСТАЯ editor state machine наличной сдачи (без React/DOM).
+//
+// authoritative `cart.cashTenderIntent` — единственный persisted источник. Editor
+// — локальный UI-draft со строгим ack-протоколом поверх compare-and-set записи:
+//  - ввод меняет только draft (без provider-мутации);
+//  - сохранение считается подтверждённым ТОЛЬКО когда И mutation ack success, И
+//    authoritative intent фактически стал ожидаемым (или идемпотентный no-op с
+//    changed:false, когда authoritative уже равен ожидаемому);
+//  - у каждой попытки уникальный attemptId; поздний ответ старой попытки (после
+//    конфликта/сброса/новой попытки) полностью игнорируется;
+//  - cross-tab конфликт принимает incoming intent и инвалидирует попытку.
 import type { CashTenderIntent } from "../../prototype/models";
+import { cashTenderIntentKey } from "../../prototype/cash-tender-intent";
 import { parseMoneyInput } from "../menu/dish-builder-form";
 import {
-  cashTenderIntentKey,
   isCashTenderIntentValidForTotal,
   isSafeCents,
   tenderCentsToText,
@@ -14,18 +21,28 @@ import {
 
 export type CashTenderEditorStatus = "CLEAN" | "DIRTY" | "SAVING" | "ERROR";
 
+/** Активная попытка сохранения (compare-and-set) — только в статусе SAVING. */
+export interface CashTenderSaveAttempt {
+  id: number;
+  /** Отпечаток authoritative intent, на котором строится CAS (expectedIntentKey). */
+  casBaseKey: string;
+  /** Сохраняемое намерение (не null). */
+  nextIntent: CashTenderIntent;
+  nextKey: string;
+  /** Пришёл ли успешный ack сохранения для этой попытки. */
+  ackReceived: boolean;
+  /** Замечен ли authoritative intent, равный ожидаемому. */
+  authoritativeMatched: boolean;
+}
+
 export interface CashTenderEditorState {
-  /** Локально выбранный режим (draft); в CLEAN отображение идёт из intent. */
-  draftMode: "EXACT" | "CHANGE_FROM" | null;
-  /** Черновой текст суммы CHANGE_FROM (только локально во время ввода). */
-  draftText: string;
-  /** Отпечаток authoritative intent, на котором построен editor (cross-tab). */
-  baseIntentKey: string;
-  /** Intent, отправленный на сохранение (SAVING/ожидание подтверждения). */
-  expectedIntent: CashTenderIntent;
   status: CashTenderEditorStatus;
+  draftMode: "EXACT" | "CHANGE_FROM" | null;
+  draftText: string;
+  /** authoritative отпечаток, с которым синхронизирован editor. */
+  baseIntentKey: string;
+  attempt: CashTenderSaveAttempt | null;
   error: string | null;
-  /** Нейтральное сообщение о cross-tab изменении, иначе null. */
   notice: string | null;
 }
 
@@ -36,11 +53,11 @@ export function initCashTenderEditor(
   intent: CashTenderIntent,
 ): CashTenderEditorState {
   return {
+    status: "CLEAN",
     draftMode: null,
     draftText: "",
     baseIntentKey: cashTenderIntentKey(intent),
-    expectedIntent: null,
-    status: "CLEAN",
+    attempt: null,
     error: null,
     notice: null,
   };
@@ -86,18 +103,30 @@ export function cashTenderCandidateFromDraft(
 }
 
 export type CashTenderEditorAction =
-  | { type: "SELECT_EXACT" }
+  | { type: "SELECT_EXACT"; attemptId: number }
   | { type: "SELECT_CHANGE_FROM" }
   | { type: "EDIT_TEXT"; text: string }
-  | { type: "CONFIRM" }
-  | { type: "SAVE_FAILED"; error: string }
+  | { type: "CONFIRM"; attemptId: number }
+  | {
+      type: "SAVE_ACK";
+      attemptId: number;
+      ok: boolean;
+      conflict: boolean;
+      changed: boolean;
+      error: string | null;
+    }
   | { type: "SYNC"; intent: CashTenderIntent };
+
+/** Побочный эффект: запустить compare-and-set сохранение через provider. */
+export interface CashTenderSaveEffect {
+  attemptId: number;
+  expectedIntentKey: string;
+  nextIntent: CashTenderIntent;
+}
 
 export interface CashTenderReduceResult {
   state: CashTenderEditorState;
-  /** true → компонент обязан запустить сохранение saveIntent по ack-протоколу. */
-  shouldSave: boolean;
-  saveIntent: CashTenderIntent;
+  save: CashTenderSaveEffect | null;
 }
 
 export interface CashTenderReduceContext {
@@ -106,12 +135,13 @@ export interface CashTenderReduceContext {
 }
 
 function noSave(state: CashTenderEditorState): CashTenderReduceResult {
-  return { state, shouldSave: false, saveIntent: null };
+  return { state, save: null };
 }
 
-/** Пытается перейти в SAVING: валидный кандидат → SAVING+save, иначе ERROR. */
+/** Пытается начать сохранение: валидный кандидат → SAVING+effect, иначе ERROR. */
 function startSave(
   state: CashTenderEditorState,
+  attemptId: number,
   customerTotalCents: number | null,
 ): CashTenderReduceResult {
   const candidate = cashTenderCandidateFromDraft(state, customerTotalCents);
@@ -120,24 +150,28 @@ function startSave(
       ...state,
       status: "ERROR",
       error: candidate.error,
-      expectedIntent: null,
+      attempt: null,
       notice: null,
     });
   }
+  const attempt: CashTenderSaveAttempt = {
+    id: attemptId,
+    casBaseKey: state.baseIntentKey,
+    nextIntent: candidate.intent,
+    nextKey: cashTenderIntentKey(candidate.intent),
+    ackReceived: false,
+    authoritativeMatched: false,
+  };
   return {
-    state: {
-      ...state,
-      status: "SAVING",
-      expectedIntent: candidate.intent,
-      error: null,
-      notice: null,
+    state: { ...state, status: "SAVING", attempt, error: null, notice: null },
+    save: {
+      attemptId,
+      expectedIntentKey: attempt.casBaseKey,
+      nextIntent: candidate.intent,
     },
-    shouldSave: true,
-    saveIntent: candidate.intent,
   };
 }
 
-/** Сверка editor с входящим authoritative intent (cross-tab / приход save). */
 function syncIntent(
   state: CashTenderEditorState,
   intent: CashTenderIntent,
@@ -145,16 +179,20 @@ function syncIntent(
   const incomingKey = cashTenderIntentKey(intent);
   if (incomingKey === state.baseIntentKey) return state; // внешних изменений нет
 
-  if (state.status === "SAVING") {
-    if (
-      state.expectedIntent !== null &&
-      incomingKey === cashTenderIntentKey(state.expectedIntent)
-    ) {
-      // Наша попытка сохранения подтверждена фактическим incoming state → CLEAN.
-      return initCashTenderEditor(intent);
+  if (state.attempt !== null) {
+    // SAVING: authoritative может стать ожидаемым (наш save) или другим (конфликт).
+    if (incomingKey === state.attempt.nextKey) {
+      if (state.attempt.ackReceived) {
+        return initCashTenderEditor(intent); // оба условия выполнены → CLEAN
+      }
+      // authoritative совпал; ждём ack. База обновляется, чтобы SYNC не повторялся.
+      return {
+        ...state,
+        baseIntentKey: incomingKey,
+        attempt: { ...state.attempt, authoritativeMatched: true },
+      };
     }
-    // Пришёл ДРУГОЙ intent: попытка проиграла конфликт — принимаем incoming,
-    // локальный pending завершаем, expected не считаем сохранённым.
+    // Конфликт: пришло иное намерение — принимаем incoming, попытку инвалидируем.
     return { ...initCashTenderEditor(intent), notice: CASH_TENDER_CROSS_TAB_NOTICE };
   }
 
@@ -162,9 +200,7 @@ function syncIntent(
     // Локальный draft устарел относительно нового authoritative intent.
     return { ...initCashTenderEditor(intent), notice: CASH_TENDER_CROSS_TAB_NOTICE };
   }
-
-  // CLEAN → сразу отражаем новый intent.
-  return initCashTenderEditor(intent);
+  return initCashTenderEditor(intent); // CLEAN → сразу отражаем новый intent
 }
 
 export function reduceCashTenderEditor(
@@ -180,11 +216,11 @@ export function reduceCashTenderEditor(
         draftMode: "EXACT",
         draftText: "",
         status: "DIRTY",
+        attempt: null,
         error: null,
         notice: null,
-        expectedIntent: null,
       };
-      return startSave(dirty, ctx.customerTotalCents);
+      return startSave(dirty, action.attemptId, ctx.customerTotalCents);
     }
     case "SELECT_CHANGE_FROM": {
       const text =
@@ -196,9 +232,9 @@ export function reduceCashTenderEditor(
         draftMode: "CHANGE_FROM",
         draftText: text,
         status: "DIRTY",
+        attempt: null,
         error: null,
         notice: null,
-        expectedIntent: null,
       });
     }
     case "EDIT_TEXT":
@@ -208,27 +244,64 @@ export function reduceCashTenderEditor(
         draftMode: "CHANGE_FROM",
         draftText: action.text,
         status: "DIRTY",
+        attempt: null,
         error: null,
         notice: null,
-        expectedIntent: null,
       });
     case "CONFIRM":
       if (state.status === "SAVING") return noSave(state); // защита от двойного save
-      return startSave(state, ctx.customerTotalCents);
-    case "SAVE_FAILED":
-      // Authoritative intent не изменён; draft остаётся видимым как несохранённый.
+      return startSave(state, action.attemptId, ctx.customerTotalCents);
+    case "SAVE_ACK": {
+      // Поздний ответ чужой/устаревшей попытки полностью игнорируется.
+      if (state.attempt === null || state.attempt.id !== action.attemptId) {
+        return noSave(state);
+      }
+      if (!action.ok) {
+        return noSave({
+          ...state,
+          status: "ERROR",
+          error: action.error ?? "Не удалось сохранить выбор.",
+          attempt: null,
+          notice: null,
+        });
+      }
+      if (!action.changed) {
+        // Идемпотентный no-op: authoritative уже равен ожидаемому → CLEAN.
+        return noSave(initCashTenderEditor(state.attempt.nextIntent));
+      }
+      if (state.attempt.authoritativeMatched) {
+        return noSave(initCashTenderEditor(state.attempt.nextIntent)); // оба → CLEAN
+      }
+      // Ack есть, ждём фактического совпадения authoritative intent.
       return noSave({
         ...state,
-        status: "ERROR",
-        error: action.error,
-        expectedIntent: null,
-        notice: null,
+        attempt: { ...state.attempt, ackReceived: true },
       });
+    }
     case "SYNC":
       return noSave(syncIntent(state, action.intent));
     default:
       return noSave(state);
   }
+}
+
+/**
+ * Отправка наличного заказа разрешена ТОЛЬКО когда: editor CLEAN, нет активной
+ * попытки, base-отпечаток равен authoritative, и сохранённый intent валиден для
+ * текущего итога. В CLEAN отображение выводится из intent, поэтому «показанное =
+ * authoritative». Любой DIRTY/SAVING/ERROR/конфликт/устаревший итог → false.
+ */
+export function canSubmitCashTender(
+  state: CashTenderEditorState,
+  intent: CashTenderIntent,
+  customerTotalCents: number | null,
+): boolean {
+  return (
+    state.status === "CLEAN" &&
+    state.attempt === null &&
+    state.baseIntentKey === cashTenderIntentKey(intent) &&
+    isCashTenderIntentValidForTotal(intent, customerTotalCents)
+  );
 }
 
 export interface CashTenderEditorView {
@@ -239,30 +312,13 @@ export interface CashTenderEditorView {
   error: string | null;
   notice: string | null;
   saving: boolean;
-  /** Доступна ли кнопка «Подтвердить сумму» (валидный CHANGE_FROM в DIRTY). */
+  /** Кнопка «Подтвердить сумму» (валидный CHANGE_FROM draft в DIRTY). */
   confirmEnabled: boolean;
-  /** Разрешена ли отправка заказа для наличных (CLEAN + валидно для итога). */
+  /** Кнопка «Повторить сохранение» (валидный draft в ERROR). */
+  retryEnabled: boolean;
   canSubmit: boolean;
 }
 
-/**
- * Отправка наличного заказа разрешена ТОЛЬКО когда editor CLEAN и сохранённый
- * intent валиден для текущего итога. В CLEAN отображение выводится из intent,
- * поэтому «показанное = authoritative» и pending отсутствует автоматически;
- * DIRTY/SAVING/ERROR или устаревший intent → false.
- */
-export function canSubmitCashTender(
-  state: CashTenderEditorState,
-  intent: CashTenderIntent,
-  customerTotalCents: number | null,
-): boolean {
-  return (
-    state.status === "CLEAN" &&
-    isCashTenderIntentValidForTotal(intent, customerTotalCents)
-  );
-}
-
-/** Чистое представление редактора для рендера. */
 export function cashTenderEditorView(
   state: CashTenderEditorState,
   intent: CashTenderIntent,
@@ -270,6 +326,7 @@ export function cashTenderEditorView(
 ): CashTenderEditorView {
   const clean = state.status === "CLEAN";
   const saving = state.status === "SAVING";
+  const candidate = cashTenderCandidateFromDraft(state, customerTotalCents);
 
   let selectedMode: "EXACT" | "CHANGE_FROM" | null;
   let changeAmountText = "";
@@ -287,9 +344,11 @@ export function cashTenderEditorView(
   let previewChangeCents: number | null = null;
 
   if (clean) {
-    // Сохранённый intent, ставший невалидным после роста итога: показываем
-    // сумму, явную ошибку и блокируем submit — нужно отредактировать заново.
-    if (intent !== null && !isCashTenderIntentValidForTotal(intent, customerTotalCents)) {
+    if (
+      intent !== null &&
+      !isCashTenderIntentValidForTotal(intent, customerTotalCents)
+    ) {
+      // Сохранённый intent устарел после роста итога — явная ошибка, submit off.
       error =
         intent.mode === "CHANGE_FROM"
           ? "Сумма должна быть больше суммы заказа."
@@ -303,25 +362,24 @@ export function cashTenderEditorView(
     }
   } else if (state.status === "ERROR") {
     error = state.error;
-    if (selectedMode === "CHANGE_FROM") {
-      const candidate = cashTenderCandidateFromDraft(state, customerTotalCents);
-      if (candidate.ok && candidate.intent !== null && candidate.intent.mode === "CHANGE_FROM" && customerTotalCents !== null) {
-        previewChangeCents = candidate.intent.tenderCents - customerTotalCents;
-      }
-    }
   } else if (state.status === "DIRTY" && selectedMode === "CHANGE_FROM") {
-    const candidate = cashTenderCandidateFromDraft(state, customerTotalCents);
-    if (candidate.ok && candidate.intent !== null && candidate.intent.mode === "CHANGE_FROM" && customerTotalCents !== null) {
-      previewChangeCents = candidate.intent.tenderCents - customerTotalCents;
-    } else if (!candidate.ok && state.draftText.trim() !== "") {
-      error = candidate.error;
-    }
+    if (!candidate.ok && state.draftText.trim() !== "") error = candidate.error;
+  }
+
+  if (
+    !clean &&
+    selectedMode === "CHANGE_FROM" &&
+    candidate.ok &&
+    candidate.intent !== null &&
+    candidate.intent.mode === "CHANGE_FROM" &&
+    customerTotalCents !== null
+  ) {
+    previewChangeCents = candidate.intent.tenderCents - customerTotalCents;
   }
 
   const confirmEnabled =
-    state.status === "DIRTY" &&
-    selectedMode === "CHANGE_FROM" &&
-    cashTenderCandidateFromDraft(state, customerTotalCents).ok;
+    state.status === "DIRTY" && selectedMode === "CHANGE_FROM" && candidate.ok;
+  const retryEnabled = state.status === "ERROR" && candidate.ok;
 
   return {
     selectedMode,
@@ -332,6 +390,7 @@ export function cashTenderEditorView(
     notice: state.notice,
     saving,
     confirmEnabled,
+    retryEnabled,
     canSubmit: canSubmitCashTender(state, intent, customerTotalCents),
   };
 }

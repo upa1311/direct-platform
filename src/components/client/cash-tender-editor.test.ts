@@ -7,44 +7,36 @@ import {
   initCashTenderEditor,
   reduceCashTenderEditor,
   type CashTenderEditorAction,
+  type CashTenderSaveEffect,
 } from "./cash-tender-editor.ts";
 import type { CashTenderIntent } from "../../prototype/models.ts";
 
 /**
  * Behavioral tests for the cash-tender editor state machine
- * (`fix: serialize cash tender editor state`). Модель воспроизводит реальные
- * переходы: draft/save separation, ack-протокол, cross-tab, rapid typing,
+ * (`fix: make cash tender saves compare-and-set`). Модель воспроизводит реальные
+ * переходы: attempt identity, two-condition ack (ack success AND authoritative
+ * match), idempotent no-op, cross-tab конфликт, late-response suppression, retry,
  * double-save. Source-string проверок здесь нет.
  */
 
 const TOTAL = 1600;
 
-/**
- * Мини-драйвер: применяет действия к редактору, эмулируя async-ack как явные
- * шаги. Считает число реальных save-эффектов (mutation spy). authoritative
- * intent обновляется вызовом applyIntent (эмулирует incoming persisted prop).
- */
 function makeDriver(initialIntent: CashTenderIntent, total: number | null = TOTAL) {
   let intent = initialIntent;
   let state = initCashTenderEditor(intent);
-  const saves: CashTenderIntent[] = [];
-
+  let attemptSeq = 0;
+  const saves: CashTenderSaveEffect[] = [];
   const ctx = () => ({ intent, customerTotalCents: total });
 
   const dispatch = (action: CashTenderEditorAction) => {
-    const result = reduceCashTenderEditor(state, action, ctx());
-    state = result.state;
-    if (result.shouldSave) saves.push(result.saveIntent);
-    return result;
+    const r = reduceCashTenderEditor(state, action, ctx());
+    state = r.state;
+    if (r.save) saves.push(r.save);
+    return r;
   };
-  // Эмуляция прихода нового authoritative intent (save ack ok / cross-tab).
-  const applyIntent = (next: CashTenderIntent) => {
-    intent = next;
-    state = reduceCashTenderEditor(state, { type: "SYNC", intent }, ctx()).state;
-  };
-  // Эмуляция провала сохранения.
-  const failSave = (error: string) => {
-    state = reduceCashTenderEditor(state, { type: "SAVE_FAILED", error }, ctx()).state;
+  const nextAttempt = () => {
+    attemptSeq += 1;
+    return attemptSeq;
   };
 
   return {
@@ -62,234 +54,280 @@ function makeDriver(initialIntent: CashTenderIntent, total: number | null = TOTA
     },
     view: () => cashTenderEditorView(state, intent, total),
     canSubmit: () => canSubmitCashTender(state, intent, total),
-    dispatch,
-    applyIntent,
-    failSave,
+    selectExact: () => dispatch({ type: "SELECT_EXACT", attemptId: nextAttempt() }),
+    selectChangeFrom: () => dispatch({ type: "SELECT_CHANGE_FROM" }),
+    edit: (text: string) => dispatch({ type: "EDIT_TEXT", text }),
+    confirm: () => dispatch({ type: "CONFIRM", attemptId: nextAttempt() }),
+    // provider ack для указанной (по умолчанию — последней) попытки.
+    ack: (opts: {
+      ok: boolean;
+      changed?: boolean;
+      conflict?: boolean;
+      error?: string | null;
+      attemptId?: number;
+    }) =>
+      dispatch({
+        type: "SAVE_ACK",
+        attemptId: opts.attemptId ?? saves[saves.length - 1].attemptId,
+        ok: opts.ok,
+        changed: opts.changed ?? false,
+        conflict: opts.conflict ?? false,
+        error: opts.error ?? null,
+      }),
+    // приход нового authoritative intent (применённый save / другая вкладка).
+    incoming: (next: CashTenderIntent) => {
+      intent = next;
+      dispatch({ type: "SYNC", intent });
+    },
   };
 }
 
-// --- 1–2: CLEAN persisted rendering ------------------------------------------
+// --- 1–3: same-value / idempotent --------------------------------------------
 
-test("1: CLEAN persisted EXACT рендерит EXACT", () => {
+test("1: same-value CHANGE_FROM save → success/CLEAN (changed:false)", () => {
+  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
+  d.edit("20"); // тот же $20
+  d.confirm();
+  assert.equal(d.state.status, "SAVING");
+  d.ack({ ok: true, changed: false }); // idempotent no-op
+  assert.equal(d.state.status, "CLEAN");
+  assert.equal(d.canSubmit(), true);
+});
+
+test("2: same-value EXACT save → success/CLEAN", () => {
   const d = makeDriver({ mode: "EXACT" });
-  const v = d.view();
-  assert.equal(v.selectedMode, "EXACT");
-  assert.equal(v.showChangeInput, false);
-  assert.equal(d.canSubmit(), true);
-});
-
-test("2: CLEAN persisted CHANGE_FROM рендерит сохранённую сумму", () => {
-  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
-  const v = d.view();
-  assert.equal(v.selectedMode, "CHANGE_FROM");
-  assert.equal(v.changeAmountText, "20.00");
-  assert.equal(v.previewChangeCents, 400);
-  assert.equal(d.canSubmit(), true);
-});
-
-// --- 3–5: DIRTY draft blocks submit ------------------------------------------
-
-test("3: правка создаёт DIRTY draft и блокирует submit", () => {
-  const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_CHANGE_FROM" });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" });
-  assert.equal(d.state.status, "DIRTY");
-  assert.equal(d.canSubmit(), false);
-  assert.equal(d.saveCount, 0);
-});
-
-test("4: DIRTY draft не даёт submit по старому валидному intent", () => {
-  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
-  assert.equal(d.canSubmit(), true); // сначала CLEAN валиден
-  d.dispatch({ type: "EDIT_TEXT", text: "30" }); // начали править
-  assert.equal(d.state.status, "DIRTY");
-  assert.equal(d.canSubmit(), false); // нельзя submit по старому $20
-});
-
-test("5: старый $20 + draft $25 → submit false", () => {
-  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" });
-  assert.equal(d.view().changeAmountText, "25");
-  assert.equal(d.canSubmit(), false);
-});
-
-// --- 6–9: save ack protocol --------------------------------------------------
-
-test("6: провал сохранения оставляет draft, ERROR, submit false", () => {
-  const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_CHANGE_FROM" });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" });
-  d.dispatch({ type: "CONFIRM" });
+  d.selectExact();
   assert.equal(d.state.status, "SAVING");
-  assert.equal(d.saveCount, 1);
-  d.failSave("Не удалось сохранить выбор.");
-  assert.equal(d.state.status, "ERROR");
-  assert.equal(d.view().changeAmountText, "25"); // draft виден
-  assert.equal(d.canSubmit(), false);
-});
-
-test("7: успешный ack без совпадения incoming prop остаётся SAVING", () => {
-  const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_CHANGE_FROM" });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" });
-  d.dispatch({ type: "CONFIRM" });
-  // Promise ok, но authoritative intent ещё не пришёл → не CLEAN.
-  assert.equal(d.state.status, "SAVING");
-  assert.equal(d.canSubmit(), false);
-});
-
-test("8: incoming intent совпал с expected → CLEAN", () => {
-  const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_CHANGE_FROM" });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" });
-  d.dispatch({ type: "CONFIRM" });
-  d.applyIntent({ mode: "CHANGE_FROM", tenderCents: 2500 }); // save landed
-  assert.equal(d.state.status, "CLEAN");
-  assert.equal(d.view().changeAmountText, "25.00");
-  assert.equal(d.canSubmit(), true);
-});
-
-test("9: конфликтный incoming во время SAVING → принять incoming, без ложного успеха", () => {
-  const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_CHANGE_FROM" });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" });
-  d.dispatch({ type: "CONFIRM" }); // expected 2500
-  d.applyIntent({ mode: "EXACT" }); // другая вкладка сохранила EXACT
-  assert.equal(d.state.status, "CLEAN");
-  assert.equal(d.view().selectedMode, "EXACT"); // incoming, не expected
-  assert.ok(d.state.notice); // нейтральное сообщение о конфликте
-});
-
-// --- 10–12: cross-tab reconciliation -----------------------------------------
-
-test("10: внешний null во время DIRTY очищает stale draft", () => {
-  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
-  d.dispatch({ type: "EDIT_TEXT", text: "30" }); // DIRTY draft 30
-  d.applyIntent(null); // другая вкладка сняла выбор
-  assert.equal(d.state.status, "CLEAN");
-  assert.equal(d.view().selectedMode, null);
-  assert.ok(d.state.notice);
-});
-
-test("11: внешний EXACT во время DIRTY отражает EXACT", () => {
-  const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_CHANGE_FROM" });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" });
-  d.applyIntent({ mode: "EXACT" });
+  d.ack({ ok: true, changed: false });
   assert.equal(d.state.status, "CLEAN");
   assert.equal(d.view().selectedMode, "EXACT");
 });
 
-test("12: внешний CHANGE_FROM $30 при draft $25 отражает $30", () => {
-  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" }); // draft 25
-  d.applyIntent({ mode: "CHANGE_FROM", tenderCents: 3000 });
+test("3: idempotent no-op ack достаточно (без incoming) → CLEAN", () => {
+  const d = makeDriver({ mode: "EXACT" });
+  d.selectExact();
+  d.ack({ ok: true, changed: false });
   assert.equal(d.state.status, "CLEAN");
-  assert.equal(d.view().changeAmountText, "30.00");
+  assert.equal(d.state.attempt, null);
 });
 
-// --- 13–15: typing / save effects --------------------------------------------
+// --- 4–5: CAS effect payload -------------------------------------------------
 
-test("13: rapid typing меняет только draft; save count 0", () => {
+test("4: CAS effect несёт expected base key и next intent", () => {
+  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
+  d.edit("25");
+  d.confirm();
+  assert.equal(d.lastSave.expectedIntentKey, "CHANGE_FROM:2000"); // текущий authoritative
+  assert.deepEqual(d.lastSave.nextIntent, { mode: "CHANGE_FROM", tenderCents: 2500 });
+});
+
+test("5: невалидный draft не запускает save (ERROR, 0 mutations)", () => {
   const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_CHANGE_FROM" });
-  for (const t of ["2", "25", "25.0", "25.00"]) {
-    d.dispatch({ type: "EDIT_TEXT", text: t });
-  }
+  d.selectChangeFrom();
+  d.edit("5"); // < total 1600 → invalid
+  d.confirm();
+  assert.equal(d.saveCount, 0);
+  assert.equal(d.state.status, "ERROR");
+  assert.equal(d.canSubmit(), false);
+});
+
+// --- 6–9: two-condition ack --------------------------------------------------
+
+test("6: incoming expected ДО ack → остаётся SAVING", () => {
+  const d = makeDriver(null);
+  d.selectChangeFrom();
+  d.edit("25");
+  d.confirm();
+  d.incoming({ mode: "CHANGE_FROM", tenderCents: 2500 }); // authoritative совпал
+  assert.equal(d.state.status, "SAVING"); // ack ещё не пришёл
+  assert.equal(d.canSubmit(), false);
+});
+
+test("7: ack ДО incoming expected → остаётся SAVING", () => {
+  const d = makeDriver(null);
+  d.selectChangeFrom();
+  d.edit("25");
+  d.confirm();
+  d.ack({ ok: true, changed: true }); // ack есть, authoritative ещё нет
+  assert.equal(d.state.status, "SAVING");
+  assert.equal(d.canSubmit(), false);
+});
+
+test("8: ack + incoming expected (любой порядок) → CLEAN", () => {
+  const a = makeDriver(null);
+  a.selectChangeFrom();
+  a.edit("25");
+  a.confirm();
+  a.ack({ ok: true, changed: true });
+  a.incoming({ mode: "CHANGE_FROM", tenderCents: 2500 });
+  assert.equal(a.state.status, "CLEAN");
+  assert.equal(a.canSubmit(), true);
+
+  const b = makeDriver(null);
+  b.selectChangeFrom();
+  b.edit("25");
+  b.confirm();
+  b.incoming({ mode: "CHANGE_FROM", tenderCents: 2500 });
+  b.ack({ ok: true, changed: true });
+  assert.equal(b.state.status, "CLEAN");
+});
+
+test("9: конфликтный incoming во время SAVING → принять incoming, notice", () => {
+  const d = makeDriver(null);
+  d.selectChangeFrom();
+  d.edit("25");
+  d.confirm(); // expected CHANGE_FROM:2500
+  d.incoming({ mode: "EXACT" }); // другая вкладка сохранила EXACT
+  assert.equal(d.state.status, "CLEAN");
+  assert.equal(d.view().selectedMode, "EXACT");
+  assert.ok(d.state.notice);
+});
+
+// --- 10–13: late-response suppression ----------------------------------------
+
+test("10: late failure после конфликта игнорируется", () => {
+  const d = makeDriver(null);
+  d.selectChangeFrom();
+  d.edit("25");
+  d.confirm();
+  const staleAttempt = d.lastSave.attemptId;
+  d.incoming({ mode: "EXACT" }); // конфликт → attempt инвалидирован
+  d.ack({ ok: false, error: "boom", attemptId: staleAttempt }); // поздний провал
+  assert.equal(d.state.status, "CLEAN"); // не ERROR
+  assert.equal(d.view().selectedMode, "EXACT");
+});
+
+test("11: late success после конфликта игнорируется", () => {
+  const d = makeDriver(null);
+  d.selectChangeFrom();
+  d.edit("25");
+  d.confirm();
+  const staleAttempt = d.lastSave.attemptId;
+  d.incoming({ mode: "CHANGE_FROM", tenderCents: 9999 }); // конфликт (иная сумма)
+  d.ack({ ok: true, changed: true, attemptId: staleAttempt }); // поздний успех
+  assert.equal(d.view().changeAmountText, "99.99"); // incoming, не наш 25
+});
+
+test("12: late response после сброса editor игнорируется", () => {
+  const d = makeDriver(null);
+  d.selectChangeFrom();
+  d.edit("25");
+  d.confirm();
+  const staleAttempt = d.lastSave.attemptId;
+  // Эмуляция payment-method reset: редактор пересоздан из свежего intent.
+  const fresh = initCashTenderEditor(null);
+  const after = reduceCashTenderEditor(
+    fresh,
+    {
+      type: "SAVE_ACK",
+      attemptId: staleAttempt,
+      ok: true,
+      changed: true,
+      conflict: false,
+      error: null,
+    },
+    { intent: null, customerTotalCents: TOTAL },
+  );
+  assert.equal(after.state.status, "CLEAN");
+  assert.equal(after.state.attempt, null);
+});
+
+// --- 13: rapid typing --------------------------------------------------------
+
+test("13: rapid typing меняет только draft; 0 mutations", () => {
+  const d = makeDriver(null);
+  d.selectChangeFrom();
+  for (const t of ["2", "25", "25.0", "25.00"]) d.edit(t);
   assert.equal(d.view().changeAmountText, "25.00");
   assert.equal(d.saveCount, 0);
 });
 
-test("14: явный Save вызывает mutation один раз с финальными 2500", () => {
+// --- 14–18: retry / double save ----------------------------------------------
+
+test("14: failed CHANGE_FROM save оставляет draft и даёт retry", () => {
   const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_CHANGE_FROM" });
-  for (const t of ["2", "25", "25.0", "25.00"]) {
-    d.dispatch({ type: "EDIT_TEXT", text: t });
-  }
-  d.dispatch({ type: "CONFIRM" });
-  assert.equal(d.saveCount, 1);
-  assert.deepEqual(d.lastSave, { mode: "CHANGE_FROM", tenderCents: 2500 });
-});
-
-test("15: двойной Save вызывает mutation один раз", () => {
-  const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_CHANGE_FROM" });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" });
-  d.dispatch({ type: "CONFIRM" }); // SAVING, save #1
-  d.dispatch({ type: "CONFIRM" }); // guard: SAVING → no-op
-  assert.equal(d.saveCount, 1);
-});
-
-// --- 16: reset on payment method (CASH→ONLINE→CASH) --------------------------
-
-test("16: CASH→ONLINE→CASH очищает редактор и требует нового выбора", () => {
-  // Возврат к CASH заново инициализирует редактор из свежего (очищенного) intent.
-  const reset = initCashTenderEditor(null);
-  const v = cashTenderEditorView(reset, null, TOTAL);
-  assert.equal(v.selectedMode, null);
-  assert.equal(canSubmitCashTender(reset, null, TOTAL), false);
-});
-
-// --- 17–18: total changes ----------------------------------------------------
-
-test("17: persisted tender стал невалидным после роста итога → submit false", () => {
-  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 }, 2500);
-  assert.equal(d.state.status, "CLEAN");
+  d.selectChangeFrom();
+  d.edit("25");
+  d.confirm();
+  d.ack({ ok: false, error: "нет сети" });
+  assert.equal(d.state.status, "ERROR");
+  assert.equal(d.view().changeAmountText, "25"); // draft виден
+  assert.equal(d.view().retryEnabled, true);
   assert.equal(d.canSubmit(), false);
-  assert.notEqual(d.view().error, null); // явная ошибка
-  assert.equal(d.view().changeAmountText, "20.00"); // сумма показана
 });
 
-test("18: EXACT остаётся валидным после изменения итога", () => {
+test("15: retry CHANGE_FROM запускает ровно одну новую mutation", () => {
+  const d = makeDriver(null);
+  d.selectChangeFrom();
+  d.edit("25");
+  d.confirm(); // save #1
+  d.ack({ ok: false, error: "нет сети" });
+  d.confirm(); // retry → save #2
+  assert.equal(d.saveCount, 2);
+  assert.equal(d.state.status, "SAVING");
+  assert.deepEqual(d.lastSave.nextIntent, { mode: "CHANGE_FROM", tenderCents: 2500 });
+});
+
+test("16: failed EXACT save даёт явный retry", () => {
+  const d = makeDriver(null);
+  d.selectExact();
+  d.ack({ ok: false, error: "нет сети" });
+  assert.equal(d.state.status, "ERROR");
+  assert.equal(d.view().retryEnabled, true);
+});
+
+test("17: retry EXACT работает", () => {
+  const d = makeDriver(null);
+  d.selectExact(); // save #1
+  d.ack({ ok: false, error: "нет сети" });
+  d.confirm(); // retry EXACT → save #2
+  assert.equal(d.saveCount, 2);
+  assert.deepEqual(d.lastSave.nextIntent, { mode: "EXACT" });
+});
+
+test("18: двойной Save запускает максимум одну mutation", () => {
+  const d = makeDriver(null);
+  d.selectChangeFrom();
+  d.edit("25");
+  d.confirm(); // SAVING, save #1
+  d.confirm(); // guard: SAVING → no-op
+  assert.equal(d.saveCount, 1);
+});
+
+// --- 19–22: submit gate / fingerprint parity ---------------------------------
+
+test("19: старый валидный persisted intent + провал нового draft → submit false", () => {
+  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
+  d.edit("25");
+  d.confirm();
+  d.ack({ ok: false, error: "нет сети" });
+  assert.equal(d.state.status, "ERROR");
+  assert.equal(d.canSubmit(), false); // нельзя submit по старому $20
+});
+
+test("20: EXACT остаётся валидным после изменения итога", () => {
   const d = makeDriver({ mode: "EXACT" }, 2500);
   assert.equal(d.canSubmit(), true);
 });
 
-// --- 19–20: submit/order-creation safety -------------------------------------
-
-test("19: mutation failure со старым валидным intent не даёт submit", () => {
-  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
-  d.dispatch({ type: "EDIT_TEXT", text: "25" });
-  d.dispatch({ type: "CONFIRM" });
-  d.failSave("Ошибка сохранения.");
-  // Старый persisted intent = $20 всё ещё валиден для итога, НО редактор не CLEAN.
-  assert.equal(
-    canSubmitCashTender(d.state, { mode: "CHANGE_FROM", tenderCents: 2000 }, TOTAL),
-    false,
-  );
+test("21: persisted tender стал невалидным после роста итога → submit false", () => {
+  const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 }, 2500);
+  assert.equal(d.canSubmit(), false);
+  assert.notEqual(d.view().error, null);
+  assert.equal(d.view().changeAmountText, "20.00");
 });
 
-test("20: при submit=true показанное и submitted намерение совпадают", () => {
+test("22: при submit=true показанное = authoritative fingerprint", () => {
   const d = makeDriver({ mode: "CHANGE_FROM", tenderCents: 2000 });
   assert.equal(d.canSubmit(), true);
-  const v = d.view();
-  // authoritative intent, который использует order creation, = $20; показанное = $20.
-  assert.equal(v.changeAmountText, "20.00");
-  assert.equal(
-    (d.intent as { tenderCents: number }).tenderCents,
-    2000,
-  );
+  assert.equal(d.view().changeAmountText, "20.00");
+  assert.equal((d.intent as { tenderCents: number }).tenderCents, 2000);
+  // editor base совпадает с authoritative — часть submit-гейта.
+  assert.equal(d.state.baseIntentKey, "CHANGE_FROM:2000");
 });
 
-// EXACT save protocol (ack) --------------------------------------------------
-
-test("EXACT save: select запускает save, submit заблокирован до подтверждения", () => {
-  const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_EXACT" });
-  assert.equal(d.state.status, "SAVING");
-  assert.equal(d.saveCount, 1);
-  assert.deepEqual(d.lastSave, { mode: "EXACT" });
-  assert.equal(d.canSubmit(), false);
-  d.failSave("нет сети"); // провал не показывает ложный сохранённый EXACT
-  assert.equal(d.canSubmit(), false);
-  assert.equal(d.state.status, "ERROR");
-});
-
-test("EXACT save: success подтверждается только при incoming EXACT", () => {
-  const d = makeDriver(null);
-  d.dispatch({ type: "SELECT_EXACT" });
-  assert.equal(d.state.status, "SAVING");
-  d.applyIntent({ mode: "EXACT" });
-  assert.equal(d.state.status, "CLEAN");
-  assert.equal(d.canSubmit(), true);
+test("23: CASH→ONLINE→CASH — свежий editor требует нового выбора", () => {
+  const reset = initCashTenderEditor(null);
+  assert.equal(cashTenderEditorView(reset, null, TOTAL).selectedMode, null);
+  assert.equal(canSubmitCashTender(reset, null, TOTAL), false);
 });
