@@ -391,8 +391,10 @@ function migrateLegacyLedgerString(
 ): NotificationLedgerEntry | null {
   if (value.length === 0) return null;
   if (scope.startsWith("driver:")) {
-    // Driver legacy keys are unchanged.
-    return { key: value, tag: value, state: "DELIVERED" };
+    // Driver legacy keys are unchanged, but must be a real driver tag.
+    return value.startsWith("driver-offer:")
+      ? { key: value, tag: value, state: "DELIVERED" }
+      : null;
   }
   const kitchen = parseKitchenScope(scope);
   if (kitchen === null) return null;
@@ -413,6 +415,30 @@ function migrateLegacyLedgerString(
     };
   }
   return null;
+}
+
+/** The legacy (role-less) ledger scope for a kitchen role scope, else null. */
+export function legacyKitchenLedgerScope(scope: string): string | null {
+  const kitchen = parseKitchenScope(scope);
+  return kitchen === null ? null : `kitchen:${kitchen.restaurantId}`;
+}
+
+/**
+ * Whether a structured entry's key/tag belong to the current audience scope (or
+ * a valid legacy kitchen migration): a driver entry must use a `driver-offer:`
+ * tag; a kitchen entry's key must be role-scoped for this restaurant+role and its
+ * tag must belong to this restaurant (role-scoped or the legacy role-less form).
+ * An entry of another restaurant/role/driver fails closed.
+ */
+function entryMatchesScope(key: string, tag: string, scope: string): boolean {
+  if (scope.startsWith("driver:")) {
+    return key.startsWith("driver-offer:") && tag.startsWith("driver-offer:");
+  }
+  const kitchen = parseKitchenScope(scope);
+  if (kitchen === null) return false;
+  const roleKeyPrefix = `${KITCHEN_TAG_PREFIX}${kitchen.restaurantId}:${kitchen.workspaceRole}:`;
+  const roleLessTagPrefix = `${KITCHEN_TAG_PREFIX}${kitchen.restaurantId}:`;
+  return key.startsWith(roleKeyPrefix) && tag.startsWith(roleLessTagPrefix);
 }
 
 /**
@@ -445,7 +471,8 @@ export function parseNotificationLedger(
         record.key.length > 0 &&
         typeof record.tag === "string" &&
         record.tag.length > 0 &&
-        (record.state === "PENDING" || record.state === "DELIVERED")
+        (record.state === "PENDING" || record.state === "DELIVERED") &&
+        entryMatchesScope(record.key, record.tag, scope)
       ) {
         entry = { key: record.key, tag: record.tag, state: record.state };
       } else {
@@ -456,8 +483,10 @@ export function parseNotificationLedger(
     }
     const existing = byKey.get(entry.key);
     if (existing) {
-      // Conflicting duplicate key → keep it PENDING (fail-closed: a PENDING
-      // block is never downgraded to DELIVERED by a stray duplicate).
+      // Duplicate key with a DIFFERENT tag is unresolvable → fail closed.
+      if (existing.tag !== entry.tag) return { ok: false, error: "INVALID_DATA" };
+      // Same tag, conflicting state → keep PENDING (a block is never downgraded
+      // to DELIVERED by a stray duplicate).
       const state =
         existing.state === "PENDING" || entry.state === "PENDING"
           ? "PENDING"

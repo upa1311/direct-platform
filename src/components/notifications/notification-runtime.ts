@@ -5,13 +5,17 @@ import {
 } from "@/prototype/browser-adapters";
 import {
   intentToPayload,
-  parseNotificationLedger,
   type BrowserNotificationPermission,
   type BrowserStorageReadResult,
   type DirectSystemNotificationIntent,
   type NotificationLedgerEntry,
   type NotificationLockResult,
 } from "@/prototype/direct-notifications";
+import {
+  ledgerStorageKeyFor,
+  readMigratedLedger,
+  type LedgerStorage,
+} from "@/prototype/notification-ledger-storage";
 import { validateWorkerNotificationMessage } from "@/prototype/direct-notification-worker-contract";
 import {
   isAckOk,
@@ -27,7 +31,6 @@ import {
  */
 
 export const DIRECT_NOTIFICATION_WORKER_URL = "/direct-notifications-sw.js";
-const LEDGER_KEY_PREFIX = "direct-notification-ledger";
 const STORAGE_PROBE_KEY = "direct-notification-probe";
 
 export function isSystemNotificationSupported(): boolean {
@@ -94,9 +97,27 @@ export async function registerDirectNotificationWorker(): Promise<ServiceWorkerR
   }
 }
 
-function ledgerStorageKey(scope: string): string {
-  return `${LEDGER_KEY_PREFIX}:${scope}`;
-}
+/** Real localStorage bound to the ledger adapter: read distinguishes absent from
+ * unavailable, write reports durability. */
+const localStorageLedgerPort: LedgerStorage = {
+  read: (storageKey) => {
+    try {
+      if (typeof window === "undefined") return { ok: false };
+      return { ok: true, raw: window.localStorage.getItem(storageKey) };
+    } catch {
+      return { ok: false };
+    }
+  },
+  write: (storageKey, value) => {
+    try {
+      if (typeof window === "undefined") return false;
+      window.localStorage.setItem(storageKey, value);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
 
 /** Durable preference read distinguishing "off" from an unreadable store. */
 export function readNotificationPreference(
@@ -123,47 +144,25 @@ export function writeNotificationPreference(key: string, on: boolean): boolean {
 }
 
 /**
- * Ledger read that distinguishes an empty ledger ({ok:true, value:[]}) from an
- * unreadable/corrupt store ({ok:false}) — the latter must never be treated as
- * "nothing delivered yet".
+ * Ledger read via the scope-aware migrating adapter: reads the new role-scoped
+ * key, and only when it is absent migrates a legacy shared kitchen key into it
+ * (fail-closed parse; empty vs unreadable vs corrupt are distinguished).
  */
 export function readNotificationLedger(
   scope: string,
 ): BrowserStorageReadResult<NotificationLedgerEntry[]> {
-  let raw: string | null;
-  try {
-    if (typeof window === "undefined") return { ok: false, error: "UNAVAILABLE" };
-    raw = window.localStorage.getItem(ledgerStorageKey(scope));
-  } catch {
-    return { ok: false, error: "UNAVAILABLE" };
-  }
-  if (raw === null) return { ok: true, value: [] };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { ok: false, error: "INVALID_DATA" };
-  }
-  // Fail-closed parse/migration (scope-aware). Any malformed element → the whole
-  // read is INVALID_DATA, never a silently-emptied ledger.
-  const result = parseNotificationLedger(parsed, scope);
-  return result.ok
-    ? { ok: true, value: result.entries }
-    : { ok: false, error: "INVALID_DATA" };
+  return readMigratedLedger(localStorageLedgerPort, scope);
 }
 
-/** Ledger write; true only when the entries were actually persisted. */
+/** Ledger write to the new role-scoped key; true only when actually persisted. */
 export function writeNotificationLedger(
   scope: string,
   entries: readonly NotificationLedgerEntry[],
 ): boolean {
-  try {
-    if (typeof window === "undefined") return false;
-    window.localStorage.setItem(ledgerStorageKey(scope), JSON.stringify(entries));
-    return true;
-  } catch {
-    return false;
-  }
+  return localStorageLedgerPort.write(
+    ledgerStorageKeyFor(scope),
+    JSON.stringify(entries),
+  );
 }
 
 /** Whether cross-tab serialization (Web Locks) is available at all. */
