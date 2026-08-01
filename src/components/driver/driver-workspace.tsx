@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { usePrototype } from "@/prototype/prototype-provider";
 import {
@@ -72,6 +79,9 @@ import { Banknote, BellOff, BellRing, CarFront, CircleAlert, Clock3, CreditCard,
 
 import { useDriverOfferSoundPreference } from "./driver-offer-sound";
 import { DriverSystemNotifications } from "@/components/notifications/driver-system-notifications";
+import { useDriverConnection } from "./use-driver-connection";
+import { DriverConnectionBlock } from "./driver-connection-block";
+import type { DriverConnectionView } from "@/prototype/driver-connection";
 import { DriverOfferCard, restaurantTimeZoneOf } from "./driver-offer-card";
 import { driverOrderZoneView } from "@/lib/zones/driver-zone-view";
 import { getZoneButtonPresentation } from "@/lib/zones/zone-presentation";
@@ -194,6 +204,7 @@ function DriverLoginForm() {
 
 function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
   const { state } = usePrototype();
+  const { view: connectionView, retry: retryConnection } = useDriverConnection();
   const nowMs = useNowMs();
   const zones = state.zones;
   const zoneName = (zoneId: ZoneId | null): string =>
@@ -221,8 +232,14 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
     : null;
 
   return (
-    <>
+    <DriverConnectionContext.Provider value={connectionView}>
       <ProfileLine driver={driver} todayTime={todayTime} />
+
+      {/* Один компактный блок соединения: после профиля, перед быстрыми
+          контролами. Оффлайн показывает последние данные; действия заблокированы. */}
+      <div className={styles.connectionBlockSpacing}>
+        <DriverConnectionBlock view={connectionView} onRetry={retryConnection} />
+      </div>
 
       {/* Компактная верхняя панель: статус, зона, колокольчик — в одной строке. */}
       <div className={styles.quickControlsSpacing}>
@@ -253,7 +270,7 @@ function WorkspaceScreen({ driver }: { driver: DriverProfile }) {
         nowMs={nowMs}
         zoneName={zoneName}
       />
-    </>
+    </DriverConnectionContext.Provider>
   );
 }
 
@@ -555,18 +572,44 @@ function NoteForm({
 type ActionResult = { ok: boolean; error: string | null };
 
 /** Общий helper вызова provider-действия с блокировкой и ошибкой. */
+/**
+ * Tab-local connection view for the driver workspace. A single gate: driver
+ * mutations run only when `canMutate` (ONLINE). Non-mutation UI (reading the
+ * active order, instruction, route, navigation, logout, retry) is never gated.
+ * Default null → outside the provider, treat as allowed (does not affect the
+ * workspace, which always provides it).
+ */
+const DriverConnectionContext = createContext<DriverConnectionView | null>(null);
+
+export const DRIVER_CONNECTION_BLOCKED_MESSAGE =
+  "Действие недоступно без соединения. Данные обновятся автоматически.";
+
+/** Whether driver mutations are currently blocked by the connection gate. */
+function useDriverActionsBlocked(): boolean {
+  const connection = useContext(DriverConnectionContext);
+  return connection !== null && !connection.canMutate;
+}
+
 function useAction(): {
   pending: boolean;
   error: string | null;
+  blocked: boolean;
   clearError: () => void;
   run: (action: () => Promise<ActionResult>) => Promise<ActionResult>;
 } {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const blocked = useDriverActionsBlocked();
   const run = async (
     action: () => Promise<ActionResult>,
   ): Promise<ActionResult> => {
     if (pending) return { ok: false, error: null };
+    // Connection gate: without a confirmed connection the mutation is not run,
+    // not queued and not replayed — the user re-triggers it after reconnect.
+    if (blocked) {
+      setError(DRIVER_CONNECTION_BLOCKED_MESSAGE);
+      return { ok: false, error: DRIVER_CONNECTION_BLOCKED_MESSAGE };
+    }
     setPending(true);
     setError(null);
     const result = await action();
@@ -574,7 +617,7 @@ function useAction(): {
     if (!result.ok) setError(result.error);
     return result;
   };
-  return { pending, error, clearError: () => setError(null), run };
+  return { pending, error, blocked, clearError: () => setError(null), run };
 }
 
 /**
@@ -656,7 +699,7 @@ function DriverQuickControls({
     driverChangeZone,
     driverConfirmZone,
   } = usePrototype();
-  const { pending, error, clearError, run } = useAction();
+  const { pending, error, clearError, run, blocked } = useAction();
   // Единственный звуковой control страницы — иконка в этой панели.
   const { soundEnabled, soundBlocked, enableSound, disableSound } =
     useDriverOfferSoundPreference();
@@ -703,7 +746,7 @@ function DriverQuickControls({
           className={`${styles.quickButton} ${styles.quickButtonOffline}`}
           aria-label="Выйти онлайн и начать получать заказы"
           title="Нажмите, чтобы выйти онлайн"
-          disabled={pending}
+          disabled={pending || blocked}
           onClick={() => void run(() => driverGoOnline(driver.id, zoneDraft))}
         >
           <span className={styles.quickButtonStatusText}>Сейчас не в сети</span>
@@ -749,7 +792,7 @@ function DriverQuickControls({
         aria-haspopup="dialog"
         aria-expanded={openMenu === "status"}
         aria-controls={STATUS_MENU_ID}
-        disabled={pending}
+        disabled={pending || blocked}
         onClick={() => setOpenMenu((m) => (m === "status" ? null : "status"))}
       >
         <span className={styles.quickButtonStatusText}>
@@ -829,7 +872,7 @@ function DriverQuickControls({
           aria-haspopup="dialog"
           aria-expanded={openMenu === "zone"}
           aria-controls={ZONE_MENU_ID}
-          disabled={pending || zoneDisabled}
+          disabled={pending || zoneDisabled || blocked}
           onClick={() => setOpenMenu((m) => (m === "zone" ? null : "zone"))}
         >
           {/* Иконка-капля местоположения остаётся всегда, поверх цвета зоны. */}
@@ -1050,7 +1093,7 @@ function NewOffersSection({
   zoneName: (zoneId: ZoneId | null) => string;
 }) {
   const { state, driverAcceptOffer, driverDeclineOffer } = usePrototype();
-  const { pending, error, clearError, run } = useAction();
+  const { pending, error, clearError, run, blocked } = useAction();
 
   const offers = nowMs > 0 ? getOpenDriverOffersForDriver(state, driver.id, nowMs) : [];
 
@@ -1131,7 +1174,7 @@ function NewOffersSection({
                 remainingMs={Date.parse(offer.expiresAt) - nowMs}
                 zoneName={zoneName}
                 restaurantTimeZone={restaurantTimeZoneOf(state, order)}
-                disabled={pending}
+                disabled={pending || blocked}
                 cashHandoffCents={cashHandoffCents}
                 onAccept={handleAccept(offer, order, cashHandoffCents)}
                 onDecline={() => decline(offer.id)}
@@ -1296,7 +1339,7 @@ function ActiveOrderCard({
     driverCompleteDelivery,
     driverReportOrderIncident,
   } = usePrototype();
-  const { pending, error, run } = useAction();
+  const { pending, error, run, blocked } = useAction();
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [incidentReason, setIncidentReason] =
     useState<DriverOrderIncidentReason | null>(null);
@@ -1351,6 +1394,12 @@ function ActiveOrderCard({
 
   const submitIncident = async () => {
     if (incidentPendingRef.current) return;
+    // Connection gate: reporting an incident is a mutation — blocked offline,
+    // not queued, not replayed.
+    if (blocked) {
+      setIncidentError(DRIVER_CONNECTION_BLOCKED_MESSAGE);
+      return;
+    }
     if (incidentReason === null) {
       setIncidentError("Выберите причину проблемы.");
       return;
@@ -1446,6 +1495,7 @@ function ActiveOrderCard({
           type="button"
           className={styles.incidentReportButton}
           ref={incidentTriggerRef}
+          disabled={blocked}
           onClick={() => openIncidentSheet()}
         >
           <CircleAlert size={18} aria-hidden="true" />
@@ -1506,7 +1556,11 @@ function ActiveOrderCard({
             <p className={styles.error} role="alert">{incidentError}</p>
           ) : null}
           <div className={styles.incidentFormActions}>
-            <button type="submit" className={styles.primaryButton} disabled={incidentPending}>
+            <button
+              type="submit"
+              className={styles.primaryButton}
+              disabled={incidentPending || blocked}
+            >
               Сообщить Direct
             </button>
             <button
@@ -1763,7 +1817,7 @@ function DriverCashHandoffBlock({
     driverCompleteDelivery,
     driverReportCashHandoffToRestaurant,
   } = usePrototype();
-  const { pending, error, clearError, run } = useAction();
+  const { pending, error, clearError, run, blocked } = useAction();
   const [reportOpen, setReportOpen] = useState(false);
   const reportTriggerRef = useRef<HTMLButtonElement>(null);
   // Подтверждение получения полной суммы от клиента (отдельный лист).
@@ -1839,7 +1893,7 @@ function DriverCashHandoffBlock({
         type="button"
         ref={reportTriggerRef}
         className={styles.primaryButton}
-        disabled={pending}
+        disabled={pending || blocked}
         onClick={openReport}
       >
         Я передал ресторану {amount}
@@ -1956,7 +2010,7 @@ function DriverCashHandoffBlock({
           type="button"
           ref={collectTriggerRef}
           className={styles.primaryButton}
-          disabled={pending}
+          disabled={pending || blocked}
           onClick={openCollect}
         >
           Получил {customerAmount} и передал заказ
@@ -2260,11 +2314,14 @@ function MainButton({
   pending: boolean;
   onClick: () => void;
 }) {
+  // Lifecycle/cash primary actions are disabled while the connection gate blocks
+  // mutations (offline/recovering/degraded/initializing).
+  const blocked = useDriverActionsBlocked();
   return (
     <button
       type="button"
       className={styles.primaryButton}
-      disabled={pending}
+      disabled={pending || blocked}
       onClick={onClick}
     >
       {label}

@@ -101,6 +101,8 @@ Direct объединяет клиента, ресторан, независим
 
 Системные (browser/OS) уведомления водителя и кухни — отдельный от звука канал (V1). Работают только при открытом Direct-клиенте (не remote Web Push при закрытом приложении — это показано в UI и не выдаётся за фон). Разрешение — по явному клику; предпочтения браузерные и раздельные (водитель по `driverId`, кухня по ресторану и роли, не в `PrototypeState`); события — из canonical selectors (предложения водителя, actionable-заказы кухни), приватность до принятия, дедуп между вкладками, минимальный service worker без fetch/cache/push и без мутаций домена. Подробности — в [`notifications.md`](notifications.md).
 
+Соединение и восстановление связи водителя (V1): tab-local модель состояния (`INITIALIZING/ONLINE/OFFLINE/RECOVERING/DEGRADED`), поверх существующего state lifecycle, не в `PrototypeState`. `navigator.onLine` — только браузерный сигнал сети, не доказательство рабочего backend. Оффлайн показывает последние доступные данные (активный заказ, CASH, инструкция, предложения) и блокирует действия; очереди и авто-replay нет; при reconnect сначала read-only refresh сохранённого состояния (принимает более новое, не создаёт мутацию/событие/revision), затем действия снова доступны и повторяются вручную. Cross-tab — существующие `storage`/`BroadcastChannel`/Web Lock. Service-worker offline-cache не реализован; production connection health потребует backend transport. Подробности — в [`driver-experience.md`](driver-experience.md).
+
 ## 8. Управление рестораном без изменения кода
 
 `SUPER_ADMIN` или явно авторизованный `CONTENT_MANAGER` должен иметь возможность без программиста и без изменения исходного кода:

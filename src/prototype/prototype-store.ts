@@ -2608,4 +2608,54 @@ export function isNewerState(
   );
 }
 
+/** Explicit result of reading/accepting the authoritative persisted state. */
+export type PrototypeRefreshResult =
+  | { ok: true; revision: number; updatedAt: string; changed: boolean }
+  | { ok: false; error: string };
+
+/** Message when the persisted state is unreadable/corrupt during a refresh. */
+export const PROTOTYPE_REFRESH_FAILED_ERROR =
+  "Не удалось прочитать актуальные данные. Действия временно недоступны.";
+
+/**
+ * Pure resolution for a connection-recovery refresh (READ, not a mutation).
+ * Given the freshly-read persisted state (`stored`, or null when unavailable/
+ * corrupt) and the current local state, decide what to accept:
+ *  - stored === null → failure (caller degrades; never a silent "current").
+ *  - stored newer than local → accept it (changed: true).
+ *  - otherwise → keep local, confirm actuality (changed: false).
+ * Never lowers a revision, creates a new revision/updatedAt or emits an event.
+ */
+export function resolvePrototypeRefresh(
+  stored: PrototypeState | null,
+  current: PrototypeState,
+): { result: PrototypeRefreshResult; accepted: PrototypeState | null } {
+  if (stored === null) {
+    return {
+      result: { ok: false, error: PROTOTYPE_REFRESH_FAILED_ERROR },
+      accepted: null,
+    };
+  }
+  if (isNewerState(stored, current)) {
+    return {
+      result: {
+        ok: true,
+        revision: stored.revision,
+        updatedAt: stored.updatedAt,
+        changed: true,
+      },
+      accepted: stored,
+    };
+  }
+  return {
+    result: {
+      ok: true,
+      revision: current.revision,
+      updatedAt: current.updatedAt,
+      changed: false,
+    },
+    accepted: null,
+  };
+}
+
 export { createEmptyCart };

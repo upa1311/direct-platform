@@ -185,7 +185,9 @@ import {
   readLegacyPrototypeState,
   resolveBootstrapState,
   safeReadStoredState,
+  resolvePrototypeRefresh,
   type MutationAck,
+  type PrototypeRefreshResult,
 } from "./prototype-store";
 
 /** Общее имя Web Lock для сериализации мутаций заказа между вкладками. */
@@ -200,6 +202,14 @@ type MutationAckPromise = Promise<MutationAck>;
 export interface PrototypeContextValue {
   state: PrototypeState;
   isHydrated: boolean;
+  /**
+   * Re-read the authoritative persisted state and accept it locally if it is
+   * newer (via the existing safeReadStoredState + isNewerState + replaceState).
+   * READ-ONLY: never lowers revision, replaces newer local state, creates a new
+   * revision/updatedAt, writes state, broadcasts, or emits a domain event. Used
+   * by connection recovery — not a mutation.
+   */
+  refreshFromPersistedState: () => PrototypeRefreshResult;
   addItem: (
     menuItemId: string,
     variantId?: string | null,
@@ -596,6 +606,21 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       state: nextState,
     } satisfies PrototypeChannelMessage);
   }, []);
+
+  /**
+   * Connection-recovery refresh: re-read the authoritative persisted state and
+   * accept it only if it is newer than the local one. This is a READ, not a
+   * mutation — it never persists, broadcasts, creates a revision/updatedAt or
+   * emits a domain event, and it never downgrades a newer local state. A missing
+   * or corrupt persisted state (safeReadStoredState → null) fails explicitly so
+   * the caller can degrade rather than silently claim the state is current.
+   */
+  const refreshFromPersistedState = useCallback((): PrototypeRefreshResult => {
+    const stored = safeReadStoredState(PROTOTYPE_STORAGE_KEY);
+    const { result, accepted } = resolvePrototypeRefresh(stored, stateRef.current);
+    if (accepted !== null) replaceState(accepted);
+    return result;
+  }, [replaceState]);
 
   /**
    * Исправление 1–3: ЕДИНСТВЕННЫЙ путь сохранения изменённого PrototypeState.
@@ -2122,6 +2147,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     () => ({
       state,
       isHydrated,
+      refreshFromPersistedState,
       addItem,
       setItemQuantity,
       setItemComment,
@@ -2204,6 +2230,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     [
       state,
       isHydrated,
+      refreshFromPersistedState,
       addItem,
       setItemQuantity,
       setItemComment,

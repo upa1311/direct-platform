@@ -87,6 +87,83 @@
   min-width: 0;
 }
 
+/* --- Соединение / восстановление связи ---------------------------------- */
+.connectionBlockSpacing {
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.connectionOnline,
+.connectionRecovering,
+.connectionOffline,
+.connectionDegraded {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  border-radius: 10px;
+  padding: 8px 12px;
+  overflow-wrap: anywhere;
+}
+
+/* ONLINE — ненавязчивая нейтральная строка. */
+.connectionOnline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 6px 12px;
+  background: #f2f7f4;
+  border: 1px solid var(--kds-border, #cfd5d1);
+}
+
+.connectionRecovering {
+  background: #eef4fb;
+  border: 1px solid #2f7db8;
+  border-left-width: 4px;
+}
+
+.connectionOffline {
+  background: #fbf4ea;
+  border: 1px solid #c58b22;
+  border-left-width: 4px;
+}
+
+.connectionDegraded {
+  background: #fff6f5;
+  border: 1px solid #b42318;
+  border-left-width: 4px;
+}
+
+.connectionTitle {
+  font-weight: 750;
+  color: var(--kds-text, #202522);
+}
+
+.connectionDetail {
+  font-size: 13px;
+  line-height: 1.35;
+  color: #55605a;
+}
+
+.connectionRetryButton {
+  align-self: flex-start;
+  margin-top: 6px;
+  min-height: 40px;
+  padding: 8px 16px;
+  border: 1px solid #b42318;
+  border-radius: 10px;
+  background: #fff;
+  color: #b42318;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.connectionRetryButton:hover {
+  background: #fdeceb;
+}
+
 .workBar {
   display: flex;
   flex-wrap: wrap;
