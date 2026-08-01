@@ -39,6 +39,7 @@ export type DriverConnectionEvent =
   | { type: "HYDRATED"; online: boolean }
   | { type: "BROWSER_OFFLINE" }
   | { type: "BROWSER_ONLINE" }
+  | { type: "REFRESH_STARTED" }
   | { type: "REFRESH_SUCCEEDED"; revision: number; updatedAt: string }
   | { type: "REFRESH_FAILED" }
   | { type: "RETRY" };
@@ -49,8 +50,9 @@ export type DriverConnectionEvent =
  *  - ONLINE is reachable ONLY via a successful refresh (never from a raw browser
  *    signal), and never while the browser is offline;
  *  - a failed refresh → DEGRADED (unless already OFFLINE);
- *  - `online`/`RETRY`/hydration-while-online move to RECOVERING, where actions
- *    stay blocked until the refresh confirms actuality.
+ *  - `online`/`RETRY`/hydration-while-online AND any refresh start move to
+ *    RECOVERING, where actions stay blocked until the refresh confirms actuality
+ *    — so even a focus/visibility freshness refresh blocks mutations while it runs.
  */
 export function driverConnectionReducer(
   state: DriverConnectionState,
@@ -64,6 +66,11 @@ export function driverConnectionReducer(
       return state.status === "OFFLINE" ? state : { ...state, status: "OFFLINE" };
     case "BROWSER_ONLINE":
     case "RETRY":
+      // An explicit reconnect intent always moves to RECOVERING (from OFFLINE too).
+      return state.status === "RECOVERING" ? state : { ...state, status: "RECOVERING" };
+    case "REFRESH_STARTED":
+      // A refresh start blocks mutations, but never overrides a live OFFLINE.
+      if (state.status === "OFFLINE") return state;
       return state.status === "RECOVERING" ? state : { ...state, status: "RECOVERING" };
     case "REFRESH_SUCCEEDED":
       // A refresh that lands after the browser went offline must not claim ONLINE;
@@ -141,73 +148,109 @@ export interface DriverConnectionController {
 /**
  * Wire browser events to the reducer via injected deps. Event-driven (no
  * aggressive polling): `offline`→OFFLINE, `online`→RECOVERING+refresh,
- * `focus`/`visibilitychange`(visible) while online → a silent freshness refresh.
- * Overlapping refreshes are prevented; after stop() no late async result mutates
- * state and all listeners are removed.
+ * `focus`/`visibilitychange`(visible) while online → a blocking freshness refresh
+ * (RECOVERING while it runs, canMutate:false).
+ *
+ * A monotonic `generation` serializes reconnect: every `offline`/`online`/`retry`/
+ * hydration bumps it. A refresh captures the generation at start; on completion it
+ * dispatches SUCCEEDED/FAILED only when NOT stopped, still online AND the captured
+ * generation is still current — so a refresh begun before a reconnect can never
+ * confirm ONLINE afterwards (a stale completion is fully ignored). Refreshes never
+ * run in parallel: a request during an in-flight refresh is coalesced into a
+ * single follow-up (one boolean flag — NOT a buffer of driver actions) that runs
+ * once the in-flight one settles, keeping status RECOVERING until a current
+ * refresh succeeds. After stop() no late completion or follow-up mutates state
+ * and all listeners are removed.
  */
 export function createDriverConnectionController(
   env: DriverConnectionEnv,
   deps: DriverConnectionDeps,
 ): DriverConnectionController {
   let stopped = false;
-  let refreshing = false;
+  let generation = 0;
+  let inFlight = false;
+  let rerunRequired = false;
 
-  const runRefresh = (): void => {
-    if (stopped || refreshing) return;
+  const startRefresh = (): void => {
+    if (stopped || inFlight) return;
     // Fail-closed: never refresh (or reach ONLINE) while the browser is offline.
     // A successful persisted-state read is NOT proof of network connectivity.
     if (!env.isOnline()) {
       deps.dispatch({ type: "BROWSER_OFFLINE" });
       return;
     }
-    refreshing = true;
+    inFlight = true;
+    const capturedGeneration = generation;
+    // Any actual refresh start blocks mutations until it confirms/fails.
+    deps.dispatch({ type: "REFRESH_STARTED" });
     deps
       .refresh()
       .then((result) => {
         if (stopped) return;
-        // The network may have dropped during the refresh — re-check right before
-        // claiming ONLINE, so a stale success cannot flip state to ONLINE.
+        // Stale: a reconnect (offline/online/retry) happened after this refresh
+        // began — fully ignore it, neither ONLINE nor DEGRADED for the new gen.
+        if (capturedGeneration !== generation) return;
+        // The network dropped mid-refresh (same generation): reflect OFFLINE, do
+        // not claim ONLINE.
         if (!env.isOnline()) {
           deps.dispatch({ type: "BROWSER_OFFLINE" });
           return;
         }
-        if (result.ok) {
-          deps.dispatch({
-            type: "REFRESH_SUCCEEDED",
-            revision: result.revision,
-            updatedAt: result.updatedAt,
-          });
-        } else {
-          deps.dispatch({ type: "REFRESH_FAILED" });
-        }
+        deps.dispatch(
+          result.ok
+            ? {
+                type: "REFRESH_SUCCEEDED",
+                revision: result.revision,
+                updatedAt: result.updatedAt,
+              }
+            : { type: "REFRESH_FAILED" },
+        );
       })
       .catch(() => {
-        if (stopped) return;
+        if (stopped || capturedGeneration !== generation) return;
         deps.dispatch(
           env.isOnline() ? { type: "REFRESH_FAILED" } : { type: "BROWSER_OFFLINE" },
         );
       })
       .finally(() => {
-        refreshing = false;
+        inFlight = false;
+        if (stopped) return;
+        // A reconnect/freshness request arrived during the in-flight refresh:
+        // run exactly one follow-up for the current generation.
+        if (rerunRequired) {
+          rerunRequired = false;
+          startRefresh();
+        }
       });
+  };
+
+  /** Start a refresh, or coalesce into a single follow-up if one is in flight. */
+  const requestRefresh = (): void => {
+    if (inFlight) {
+      rerunRequired = true;
+      return;
+    }
+    startRefresh();
   };
 
   const onOffline = (): void => {
     if (stopped) return;
+    generation += 1; // invalidate any in-flight refresh
     deps.dispatch({ type: "BROWSER_OFFLINE" });
   };
   const onOnline = (): void => {
     if (stopped) return;
+    generation += 1; // new recovery generation
     deps.dispatch({ type: "BROWSER_ONLINE" });
-    runRefresh();
+    requestRefresh();
   };
   const onFocus = (): void => {
     if (stopped) return;
-    if (env.isOnline()) runRefresh();
+    if (env.isOnline()) requestRefresh();
   };
   const onVisibility = (): void => {
     if (stopped) return;
-    if (env.isVisible() && env.isOnline()) runRefresh();
+    if (env.isVisible() && env.isOnline()) requestRefresh();
   };
 
   return {
@@ -228,18 +271,22 @@ export function createDriverConnectionController(
       if (stopped) return;
       const online = env.isOnline();
       deps.dispatch({ type: "HYDRATED", online });
-      if (online) runRefresh();
+      if (online) {
+        generation += 1;
+        requestRefresh();
+      }
     },
     retry() {
       if (stopped) return;
       // Fail-closed: a retry while offline cannot reach ONLINE — reflect OFFLINE
-      // and do not start a refresh.
+      // and start no refresh.
       if (!env.isOnline()) {
         deps.dispatch({ type: "BROWSER_OFFLINE" });
         return;
       }
+      generation += 1; // fresh recovery attempt
       deps.dispatch({ type: "RETRY" });
-      runRefresh();
+      requestRefresh();
     },
   };
 }

@@ -183,7 +183,9 @@ test("9-10: online event dispatches RECOVERING then ONLINE only after refresh", 
   env.fire("online");
   assert.deepEqual(events[0], { type: "BROWSER_ONLINE" });
   assert.equal(ref.callCount, 1);
-  assert.equal(events.length, 1); // no SUCCEEDED yet
+  // A refresh start blocks mutations (REFRESH_STARTED) but does not yet confirm.
+  assert.ok(events.some((e) => e.type === "REFRESH_STARTED"));
+  assert.ok(!events.some((e) => e.type === "REFRESH_SUCCEEDED"));
   ref.resolveNext({ ok: true, revision: 4, updatedAt: "2026-07-31T10:05:00.000Z", changed: true });
   await Promise.resolve();
   await Promise.resolve();
@@ -209,7 +211,7 @@ test("11-12: failed reconnect dispatches REFRESH_FAILED; retry refreshes again",
   await flush();
   assert.deepEqual(events.at(-1), { type: "REFRESH_FAILED" });
   c.retry();
-  assert.deepEqual(events.at(-1), { type: "RETRY" });
+  assert.ok(events.some((e) => e.type === "RETRY"));
   assert.equal(ref.callCount, 2);
   c.stop();
 });
@@ -397,6 +399,153 @@ test("gate-10: a missed offline event + retry cannot reach ONLINE", () => {
   assert.equal(ref.callCount, 0);
   assert.equal(reduce(events).status, "OFFLINE");
   c.stop();
+});
+
+// --- serialized reconnect (generation token + coalescing) ----------------------
+
+test("gen-1/2/11: focus/visibility while ONLINE blocks mutations until success", async () => {
+  for (const trigger of ["focus", "visibilitychange"] as const) {
+    const env = new FakeEnv();
+    const events: DriverConnectionEvent[] = [];
+    const ref = deferredRefresh();
+    const c = createDriverConnectionController(env, {
+      dispatch: (e) => events.push(e),
+      refresh: ref.refresh,
+    });
+    c.start();
+    // Establish ONLINE first.
+    env.fire("online");
+    ref.resolveNext(OK);
+    await flush();
+    assert.equal(reduce(events).status, "ONLINE");
+    // A freshness refresh immediately blocks (RECOVERING, canMutate:false)…
+    env.fire(trigger);
+    const midReduced = reduce(events);
+    assert.equal(midReduced.status, "RECOVERING");
+    assert.equal(getDriverConnectionView(midReduced).canMutate, false);
+    // …and only a successful refresh returns to ONLINE.
+    ref.resolveNext({ ok: true, revision: 2, updatedAt: "2026-08-01T10:00:00.000Z" });
+    await flush();
+    assert.equal(reduce(events).status, "ONLINE");
+    c.stop();
+  }
+});
+
+test("gen-3/4: refresh start → offline → online — stale completion ignored, follow-up runs", async () => {
+  const env = new FakeEnv();
+  const events: DriverConnectionEvent[] = [];
+  const ref = deferredRefresh();
+  const c = createDriverConnectionController(env, {
+    dispatch: (e) => events.push(e),
+    refresh: ref.refresh,
+  });
+  c.start();
+  env.online = true;
+  env.fire("focus"); // refresh #1 starts (old generation)
+  assert.equal(ref.callCount, 1);
+  env.online = false;
+  env.fire("offline"); // invalidates the in-flight refresh
+  env.online = true;
+  env.fire("online"); // new generation; coalesced follow-up requested
+  // The old refresh completes — it must NOT confirm ONLINE for the new generation.
+  ref.resolveNext({ ok: true, revision: 9, updatedAt: "2026-08-01T11:00:00.000Z" });
+  await flush();
+  assert.ok(!events.some((e) => e.type === "REFRESH_SUCCEEDED"));
+  // A fresh refresh (#2) was started for the current generation.
+  assert.equal(ref.callCount, 2);
+  // Only that new refresh can reach ONLINE.
+  ref.resolveNext({ ok: true, revision: 10, updatedAt: "2026-08-01T11:01:00.000Z" });
+  await flush();
+  assert.equal(reduce(events).status, "ONLINE");
+  c.stop();
+});
+
+test("gen-5: an old refresh FAILURE after reconnect does not DEGRADE the new generation", async () => {
+  const env = new FakeEnv();
+  const events: DriverConnectionEvent[] = [];
+  const ref = deferredRefresh();
+  const c = createDriverConnectionController(env, {
+    dispatch: (e) => events.push(e),
+    refresh: ref.refresh,
+  });
+  c.start();
+  env.online = true;
+  env.fire("focus"); // refresh #1 (old gen)
+  env.fire("offline");
+  env.online = false;
+  env.online = true;
+  env.fire("online"); // new gen; follow-up coalesced
+  ref.resolveNext(FAIL); // old refresh fails → must be ignored
+  await flush();
+  assert.ok(!events.some((e) => e.type === "REFRESH_FAILED"));
+  // Follow-up runs and can still succeed → ONLINE.
+  assert.equal(ref.callCount, 2);
+  ref.resolveNext(OK);
+  await flush();
+  assert.equal(reduce(events).status, "ONLINE");
+  c.stop();
+});
+
+test("gen-6: many focus/visibility during one refresh → at most one coalesced follow-up", async () => {
+  const env = new FakeEnv();
+  const ref = deferredRefresh();
+  const c = createDriverConnectionController(env, {
+    dispatch: () => {},
+    refresh: ref.refresh,
+  });
+  c.start();
+  env.online = true;
+  env.visible = true;
+  env.fire("focus"); // #1 starts
+  env.fire("focus");
+  env.fire("visibilitychange");
+  env.fire("focus"); // all coalesced into one follow-up
+  assert.equal(ref.callCount, 1);
+  ref.resolveNext(OK);
+  await flush();
+  assert.equal(ref.callCount, 2); // exactly one follow-up
+  ref.resolveNext(OK);
+  await flush();
+  assert.equal(ref.callCount, 2); // no further parallel refreshes
+  c.stop();
+});
+
+test("gen-7: offline invalidates an in-flight refresh (no ONLINE on its completion)", async () => {
+  const env = new FakeEnv();
+  const events: DriverConnectionEvent[] = [];
+  const ref = deferredRefresh();
+  const c = createDriverConnectionController(env, {
+    dispatch: (e) => events.push(e),
+    refresh: ref.refresh,
+  });
+  c.start();
+  env.online = true;
+  env.fire("focus"); // refresh #1
+  env.online = false;
+  env.fire("offline"); // bumps generation → completion is stale
+  ref.resolveNext(OK);
+  await flush();
+  assert.ok(!events.some((e) => e.type === "REFRESH_SUCCEEDED"));
+  assert.equal(reduce(events).status, "OFFLINE");
+  c.stop();
+});
+
+test("gen-10: stop() ignores completions and suppresses the coalesced follow-up", async () => {
+  const env = new FakeEnv();
+  const events: DriverConnectionEvent[] = [];
+  const ref = deferredRefresh();
+  const c = createDriverConnectionController(env, {
+    dispatch: (e) => events.push(e),
+    refresh: ref.refresh,
+  });
+  c.start();
+  env.fire("online"); // refresh #1
+  env.fire("online"); // coalesced follow-up requested
+  c.stop();
+  ref.resolveNext(OK); // #1 completes after stop
+  await flush();
+  assert.ok(!events.some((e) => e.type === "REFRESH_SUCCEEDED"));
+  assert.equal(ref.callCount, 1); // no follow-up ran after stop
 });
 
 test("view message differs per status (not colour-only signalling)", () => {
