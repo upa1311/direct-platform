@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { createDefaultState } from "./default-state.ts";
@@ -553,4 +554,186 @@ test("view message differs per status (not colour-only signalling)", () => {
   const messages = statuses.map((status) => getDriverConnectionView({ ...R, status }).message);
   assert.equal(new Set(messages).size, statuses.length);
   for (const m of messages) assert.ok(m.length > 0);
+});
+
+// --- missed-event reconciliation (corrective commit) ---------------------------
+
+/** Controller with a live reduced state for assertions. */
+function makeController(env: FakeEnv, refresh: () => Promise<PrototypeRefreshResult>) {
+  const events: DriverConnectionEvent[] = [];
+  let state = R;
+  const c = createDriverConnectionController(env, {
+    dispatch: (e) => {
+      events.push(e);
+      state = driverConnectionReducer(state, e);
+    },
+    refresh,
+  });
+  return { c, events, view: () => getDriverConnectionView(state) };
+}
+
+async function driveOnline(env: FakeEnv, ref: ReturnType<typeof deferredRefresh>) {
+  const h = makeController(env, ref.refresh);
+  h.c.start();
+  h.c.hydrate(); // RECOVERING + refresh #1 in-flight
+  ref.resolveNext(OK);
+  await flush(); // → ONLINE
+  return h;
+}
+
+test("missed-1: ONLINE + focus while actually offline → OFFLINE, no refresh, gate closed", async () => {
+  const env = new FakeEnv();
+  const ref = deferredRefresh();
+  const h = await driveOnline(env, ref);
+  assert.equal(h.view().status, "ONLINE");
+  const before = ref.callCount;
+  env.online = false;
+  env.fire("focus");
+  assert.equal(h.view().status, "OFFLINE");
+  assert.equal(h.view().canMutate, false);
+  assert.equal(ref.callCount, before, "no refresh started while offline");
+  h.c.stop();
+});
+
+test("missed-2: ONLINE + visibilitychange(visible) while offline → OFFLINE, no refresh", async () => {
+  const env = new FakeEnv();
+  const ref = deferredRefresh();
+  const h = await driveOnline(env, ref);
+  const before = ref.callCount;
+  env.online = false;
+  env.visible = true;
+  env.fire("visibilitychange");
+  assert.equal(h.view().status, "OFFLINE");
+  assert.equal(ref.callCount, before);
+  h.c.stop();
+});
+
+test("missed-3: OFFLINE + focus while actually online → RECOVERING → ONLINE", async () => {
+  const env = new FakeEnv();
+  env.online = false;
+  const ref = deferredRefresh();
+  const h = makeController(env, ref.refresh);
+  h.c.start();
+  h.c.hydrate(); // OFFLINE, no refresh
+  assert.equal(h.view().status, "OFFLINE");
+  env.online = true;
+  env.fire("focus");
+  assert.equal(h.view().status, "RECOVERING");
+  assert.equal(ref.callCount, 1, "focus recovers a missed online event with a refresh");
+  ref.resolveNext(OK);
+  await flush();
+  assert.equal(h.view().status, "ONLINE");
+  assert.equal(h.view().canMutate, true);
+  h.c.stop();
+});
+
+test("missed-4: OFFLINE + visibilitychange(visible) while online → RECOVERING → ONLINE", async () => {
+  const env = new FakeEnv();
+  env.online = false;
+  const ref = deferredRefresh();
+  const h = makeController(env, ref.refresh);
+  h.c.start();
+  h.c.hydrate();
+  env.online = true;
+  env.visible = true;
+  env.fire("visibilitychange");
+  assert.equal(h.view().status, "RECOVERING");
+  ref.resolveNext(OK);
+  await flush();
+  assert.equal(h.view().status, "ONLINE");
+  h.c.stop();
+});
+
+test("missed-5: retry while offline invalidates an in-flight refresh (no stale ONLINE)", async () => {
+  const env = new FakeEnv();
+  const ref = deferredRefresh();
+  const h = makeController(env, ref.refresh);
+  h.c.start();
+  h.c.hydrate(); // refresh #1 in-flight (gen G)
+  env.online = false;
+  h.c.retry(); // markOffline: gen bumped, OFFLINE
+  assert.equal(h.view().status, "OFFLINE");
+  ref.resolveNext(OK); // stale completion (captured gen != current)
+  await flush();
+  assert.equal(h.view().status, "OFFLINE", "stale refresh must not confirm ONLINE");
+  h.c.stop();
+});
+
+test("missed-8: offline detection clears a coalesced stale follow-up", async () => {
+  const env = new FakeEnv();
+  const ref = deferredRefresh();
+  const h = makeController(env, ref.refresh);
+  h.c.start();
+  h.c.hydrate(); // refresh #1 in-flight
+  env.fire("focus"); // coalesced follow-up requested (rerunRequired=true)
+  env.online = false;
+  env.fire("offline"); // markOffline clears rerunRequired
+  ref.resolveNext(OK);
+  await flush();
+  assert.equal(h.view().status, "OFFLINE");
+  assert.equal(ref.callCount, 1, "no follow-up refresh runs after offline");
+  h.c.stop();
+});
+
+test("missed-9: several focus/visibility during in-flight yield at most one follow-up", async () => {
+  const env = new FakeEnv();
+  const ref = deferredRefresh();
+  const h = makeController(env, ref.refresh);
+  h.c.start();
+  h.c.hydrate(); // refresh #1 in-flight
+  env.fire("focus");
+  env.fire("focus");
+  env.fire("visibilitychange");
+  ref.resolveNext(OK); // #1 settles (stale) → exactly one follow-up
+  await flush();
+  assert.equal(ref.callCount, 2, "exactly one coalesced follow-up");
+  ref.resolveNext(OK);
+  await flush();
+  assert.equal(h.view().status, "ONLINE");
+  assert.equal(ref.callCount, 2, "no further refresh");
+  h.c.stop();
+});
+
+test("missed-10: refresh started before an online reconnect cannot confirm ONLINE", async () => {
+  const env = new FakeEnv();
+  const ref = deferredRefresh();
+  const h = makeController(env, ref.refresh);
+  h.c.start();
+  h.c.hydrate(); // refresh #1 in-flight (gen G)
+  env.fire("online"); // gen bumped, follow-up coalesced
+  ref.resolveNext(OK); // #1 stale → ignored; follow-up #2 starts
+  await flush();
+  assert.notEqual(h.view().status, "ONLINE");
+  ref.resolveNext(OK); // #2 current → ONLINE
+  await flush();
+  assert.equal(h.view().status, "ONLINE");
+  h.c.stop();
+});
+
+test("missed-11: stop() suppresses a late completion and its follow-up", async () => {
+  const env = new FakeEnv();
+  const ref = deferredRefresh();
+  const h = makeController(env, ref.refresh);
+  h.c.start();
+  h.c.hydrate(); // refresh #1 in-flight
+  env.fire("focus"); // follow-up requested
+  h.c.stop();
+  ref.resolveNext(OK);
+  await flush();
+  assert.notEqual(h.view().status, "ONLINE");
+  assert.equal(ref.callCount, 1, "no follow-up after stop");
+});
+
+test("missed-12: no polling/queue/replay — idle controller never refreshes on its own", async () => {
+  const env = new FakeEnv();
+  const ref = deferredRefresh();
+  const h = makeController(env, ref.refresh);
+  h.c.start();
+  await flush();
+  await flush();
+  assert.equal(ref.callCount, 0, "no self-initiated refresh without an event");
+  h.c.stop();
+  const src = readFileSync("src/prototype/driver-connection.ts", "utf8");
+  assert.ok(!src.includes("setInterval"), "no polling timer");
+  assert.ok(!/\bqueue\b/i.test(src) && !/\breplay\b/i.test(src), "no action queue/replay");
 });

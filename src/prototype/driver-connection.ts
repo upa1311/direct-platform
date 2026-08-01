@@ -171,12 +171,25 @@ export function createDriverConnectionController(
   let inFlight = false;
   let rerunRequired = false;
 
+  /**
+   * The single offline transition. Every place the controller observes
+   * `env.isOnline() === false` funnels through here: it bumps the generation (so
+   * any in-flight or coalesced refresh is invalidated and a stale completion can
+   * never confirm ONLINE/DEGRADED), clears the coalesced follow-up flag, and
+   * closes the mutation gate via BROWSER_OFFLINE.
+   */
+  const markOffline = (): void => {
+    generation += 1;
+    rerunRequired = false;
+    deps.dispatch({ type: "BROWSER_OFFLINE" });
+  };
+
   const startRefresh = (): void => {
     if (stopped || inFlight) return;
     // Fail-closed: never refresh (or reach ONLINE) while the browser is offline.
     // A successful persisted-state read is NOT proof of network connectivity.
     if (!env.isOnline()) {
-      deps.dispatch({ type: "BROWSER_OFFLINE" });
+      markOffline();
       return;
     }
     inFlight = true;
@@ -193,7 +206,7 @@ export function createDriverConnectionController(
         // The network dropped mid-refresh (same generation): reflect OFFLINE, do
         // not claim ONLINE.
         if (!env.isOnline()) {
-          deps.dispatch({ type: "BROWSER_OFFLINE" });
+          markOffline();
           return;
         }
         deps.dispatch(
@@ -208,9 +221,11 @@ export function createDriverConnectionController(
       })
       .catch(() => {
         if (stopped || capturedGeneration !== generation) return;
-        deps.dispatch(
-          env.isOnline() ? { type: "REFRESH_FAILED" } : { type: "BROWSER_OFFLINE" },
-        );
+        if (!env.isOnline()) {
+          markOffline();
+          return;
+        }
+        deps.dispatch({ type: "REFRESH_FAILED" });
       })
       .finally(() => {
         inFlight = false;
@@ -233,24 +248,50 @@ export function createDriverConnectionController(
     startRefresh();
   };
 
-  const onOffline = (): void => {
-    if (stopped) return;
-    generation += 1; // invalidate any in-flight refresh
-    deps.dispatch({ type: "BROWSER_OFFLINE" });
-  };
-  const onOnline = (): void => {
-    if (stopped) return;
-    generation += 1; // new recovery generation
+  /**
+   * Confirmed-online recovery. The controller has just observed
+   * `env.isOnline() === true`, so it dispatches BROWSER_ONLINE — which the reducer
+   * allows FROM OFFLINE → RECOVERING (Variant A), fixing a missed `online` event —
+   * bumps the generation, and requests a (coalesced) refresh. A stale in-flight
+   * refresh from before the bump can no longer confirm; multiple calls while a
+   * refresh is in flight collapse to a single follow-up.
+   */
+  const recoverFreshness = (): void => {
+    generation += 1;
     deps.dispatch({ type: "BROWSER_ONLINE" });
     requestRefresh();
   };
+
+  const onOffline = (): void => {
+    if (stopped) return;
+    markOffline();
+  };
+  const onOnline = (): void => {
+    if (stopped) return;
+    // A raw `online` signal is not proof of connectivity; verify before recovering.
+    if (!env.isOnline()) {
+      markOffline();
+      return;
+    }
+    recoverFreshness();
+  };
   const onFocus = (): void => {
     if (stopped) return;
-    if (env.isOnline()) requestRefresh();
+    // Missed-event reconciliation: trust the current browser signal, not stale state.
+    if (!env.isOnline()) {
+      markOffline();
+      return;
+    }
+    recoverFreshness();
   };
   const onVisibility = (): void => {
     if (stopped) return;
-    if (env.isVisible() && env.isOnline()) requestRefresh();
+    if (!env.isVisible()) return;
+    if (!env.isOnline()) {
+      markOffline();
+      return;
+    }
+    recoverFreshness();
   };
 
   return {
@@ -278,10 +319,10 @@ export function createDriverConnectionController(
     },
     retry() {
       if (stopped) return;
-      // Fail-closed: a retry while offline cannot reach ONLINE — reflect OFFLINE
-      // and start no refresh.
+      // Fail-closed: a retry while offline cannot reach ONLINE — invalidate any
+      // in-flight refresh, close the gate and start no refresh.
       if (!env.isOnline()) {
-        deps.dispatch({ type: "BROWSER_OFFLINE" });
+        markOffline();
         return;
       }
       generation += 1; // fresh recovery attempt
