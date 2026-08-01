@@ -2,15 +2,15 @@
 
 ## 1. Executive Verdict
 
-- **SHIP-OK: YES**
+- **SHIP-OK: NO**
 - **Scope:** browser / localStorage prototype (single authoritative client-side state; no backend). This is NOT a production-readiness audit — missing backend transport, remote Web Push, GPS, WebSocket and real payment settlement are honestly-declared V1 limitations, not findings.
 - **Audited SHA:** `537dfc308d259c20d7d5616dc93a3abc0121aa41` (branch `main`)
 - **Audit branch:** `audit/driver-v1-final` (only this file added)
 - **Date:** 2026-08-01
-- **Checks:** `npm test` → 2742 pass / 0 fail; `npm run lint` → 0 problems; `npx tsc --noEmit` → clean; `npm run build` → compiled, 38/38 static pages; `git diff --check` → clean; `verify:zones` → OK (bender-zones-v1.1, 9216 verified addresses). GitHub Actions **Quality** on `main` head `537dfc3` → `completed / success` (verified via API; `gh` CLI is not installed in this environment).
-- **Findings:** P0 = 0, P1 = 0, P2 = 0, P3 = 4 (non-blocking).
+- **Checks:** `npm test` → 2742 pass / 0 fail; `npm run lint` → 0 problems; `npx tsc --noEmit` → clean; `npm run build` → compiled, 38/38 static pages; `git diff --check` → clean; `verify:zones` → OK (bender-zones-v1.1, 9216 verified addresses). GitHub Actions **Quality** run id `30685775622` on `main` head `537dfc308d259c20d7d5616dc93a3abc0121aa41` → `status: completed`, `conclusion: success` (https://github.com/upa1311/direct-platform/actions/runs/30685775622). `gh` CLI is not installed in this environment; this was read via the unauthenticated GitHub REST API — independent CI confirmation is limited to that API response.
+- **Findings:** P0 = 0, P1 = 0, **P2 = 1**, P3 = 4.
 
-Driver V1 is internally consistent, fail-closed, and financially rigorous as a browser/localStorage prototype. Core scenarios are proven by runtime code and real behavioral/domain tests. Prototype limitations are documented honestly in code and docs.
+Driver V1 is internally consistent, fail-closed, and financially rigorous at the money-movement layer, and most of the driver path is proven by runtime code and real behavioral/domain tests. **However, one P2 blocks sign-off:** the CASH offer card does not present the full pre-accept information the current `docs/driver-experience.md §5` contract requires (customer collection total and change/tender requirement), so a driver accepts a cash order without seeing how much to collect or whether change is needed (F-5). Automated checks all pass, but the automated suite does not assert this contract, so it did not catch the gap. Until F-5 is resolved (implement the missing pre-accept CASH disclosure, or formally remove the requirement from the Driver V1 contract), Driver V1 is not SHIP-OK.
 
 ## 2. Audit Method
 
@@ -34,10 +34,11 @@ Driver V1 is internally consistent, fail-closed, and financially rigorous as a b
 | Login by name+phone, no profile picker, no field-specific error | `driver-auth.ts:authenticateDriver` (both fields required; `matches.length === 1` else null) | `driver-auth.test.ts`; `driver-workspace.test.ts` | PASS |
 | Session integrity / invalid session | `driver-session.ts` (`readAuthenticatedDriverId`), workspace clears removed driver | `driver-workspace.test.ts` (tests 13–21) | PASS |
 | Operational status + zones (explicit, no geolocation) | `driver-offers.ts` go-online/pause/resume; `finalizeMutation` operational events | `driver-workspace.test.ts`, operational-event coverage in store | PASS |
-| Offer selector + eligibility + waves + accept/decline | `driver-offers.ts:getOpenDriverOffersForDriver`, accept (`assignedDriverId !== null` first-wins), waves | `driver-offers.test.ts` (behavioral) | PASS |
+| Offer selector + eligibility + waves + accept/decline | `driver-offers.ts:getOpenDriverOffersForDriver`, accept (`assignedDriverId !== null` first-wins), waves | `driver-offers.test.ts` (behavioral) | PASS (domain); pre-accept CASH offer display incomplete — see CASH row + F-5 |
+| CASH offer pre-accept disclosure (handoff, customer collection, change) | `driver-offer-card.tsx:DriverOfferCard` shows only "Нужно иметь при себе" from `cashHandoffCents`; `driver-workspace.tsx:NewOffersSection` passes only `restaurantHandoffCents`; `models.ts:PlatformDriverCashSnapshot` has no change/tender field | no test asserts the `docs/driver-experience.md §5` pre-accept CASH contract | **FAIL (F-5, P2)** |
 | Active delivery lifecycle (arrive→pickup→arriving→delivered) | `driver-delivery.ts` (stage resolver, transition guards, identity, single active order) | `driver-delivery.test.ts` (behavioral) | PASS |
 | Restaurant waiting (ONLINE+CASH) | `restaurant-waiting-analytics.ts`; workspace `RestaurantWaitingSummary` | `restaurant-waiting-analytics.test.ts`, `restaurant-waiting-cash.test.ts` | PASS |
-| CASH lifecycle (handoff/receipt/collection) | `platform-driver-cash-handoff.ts`, `platform-driver-cash-collection.ts`, `money-movement-snapshot.ts` | `platform-driver-cash-handoff.test.ts`, `platform-driver-cash-collection.test.ts` | PASS |
+| CASH lifecycle (handoff/receipt/collection) money integrity | `platform-driver-cash-handoff.ts`, `platform-driver-cash-collection.ts`, `money-movement-snapshot.ts` | `platform-driver-cash-handoff.test.ts`, `platform-driver-cash-collection.test.ts` | PASS (money movement); **FAIL overall for CASH capability** due to pre-accept disclosure gap (F-5) |
 | Earnings (one per order, immutable amount) | `driver-earnings.ts` (`driverEarningEntryId`, snapshot amount, fail-closed proof) | `driver-earnings.test.ts`, `driver-earnings-final.test.ts` | PASS |
 | Payouts (one earning→one payout, own-driver receipt) | `driver-payouts.ts` (`alreadyBatched`, overlap conflict, receipt guards) | `driver-payouts.test.ts`, `driver-settlement-period.test.ts` | PASS |
 | Shift analytics (read-only) | `driver-shift-analytics.ts` | `analytics-presentation.test.ts` + shift analytics tests | PASS |
@@ -52,7 +53,7 @@ Driver V1 is internally consistent, fail-closed, and financially rigorous as a b
 | Scenario | Expected | Evidence | Verdict |
 |---|---|---|---|
 | 1 — ONLINE delivery | login→online→offer→accept→arrive→wait→pickup→arriving→complete→earning appears | `driver-delivery.ts` transitions; `driver-earnings.ts:buildPreparedDriverEarningEntry` (ONLINE branch requires exact pickup/arriving events + chronology); `driver-delivery.test.ts` | PASS |
-| 2 — CASH delivery | reserved offer→accept→arrive→hand cash→restaurant confirms→pickup→collect→complete→consistent earning/accounting | `platform-driver-cash-handoff.ts` (report→confirm), `driver-delivery.ts:334` pickup blocked until `hasRestaurantConfirmedDriverCashHandoff`, `driver-earnings.ts` CASH branch verifies `CASH_TO_PLATFORM_DRIVER` movement | PASS |
+| 2 — CASH delivery | reserved offer→accept→arrive→hand cash→restaurant confirms→pickup→collect→complete→consistent earning/accounting; **and the pre-accept offer discloses collection total + change requirement (`docs/driver-experience.md §5`)** | Money movement is correct: `platform-driver-cash-handoff.ts` (report→confirm), `driver-delivery.ts:334` pickup blocked until `hasRestaurantConfirmedDriverCashHandoff`, `driver-earnings.ts` CASH branch verifies `CASH_TO_PLATFORM_DRIVER`. BUT pre-accept the driver sees only restaurant-handoff — `driver-offer-card.tsx` / `NewOffersSection` never surface `customerCollectionCents` and no change/tender field exists (F-5). | **FAIL** |
 | 3 — Competing tabs | one authoritative outcome, no duplicate event/earning/payment | `executeSerializedPrototypeMutation` (rebase on freshest + persist-before-accept); offer accept `assignedDriverId !== null → false`; earning/payout deterministic ids + dedup; `concurrency-serialization.test.ts` | PASS |
 | 4 — Connection loss | active order visible, actions blocked, no replay, reconnect re-reads persisted, stale rejected | `driver-connection.ts` (`canMutate` only ONLINE, generation token), `useAction` gate, `refreshFromPersistedState` read-only; `driver-connection.test.ts`, `driver-connection-integration.test.ts` | PASS |
 | 5 — Incident | lifecycle not silently changed, admin resolves, history preserved | `driver-order-incidents.ts` (append-only, no auto-transition, no financial effect) | PASS |
@@ -101,7 +102,7 @@ Driver V1 is internally consistent, fail-closed, and financially rigorous as a b
 ## 9. Privacy and Security Boundaries
 
 - Driver auth is a prototype boundary (documented), not production auth. Session `driverId` cannot drive another driver's mutation — every driver action re-verifies identity on fresh state.
-- Offer privacy pre-accept: `driver-offer-card.tsx` renders only `order.address?.street` (no house/phone/name/comment); grep confirms no `.comment` in the offer card.
+- Offer privacy pre-accept: `driver-offer-card.tsx` renders the customer street WITHOUT the house number (and no phone/name/comment); grep confirms no `.comment` in the offer card. Showing the street without the house number is explicitly permitted by `docs/driver-experience.md §5` and §13, so it is NOT a privacy finding. (Note: F-5 concerns the CASH *money* fields that §5 requires but the card omits — a functional/UX gap, not a privacy leak.)
 - Customer instruction shown only inside `ActiveOrderCard` (assigned active order) via `getDriverCustomerInstructionView`.
 - Notification routes limited to approved same-origin relative routes; no external URL accepted by the worker contract.
 - No localStorage data is described as secure server storage; docs state prototype limitations.
@@ -113,7 +114,8 @@ Driver V1 is internally consistent, fail-closed, and financially rigorous as a b
 - Buttons expose `disabled` on `pending`/`blocked`; primary lifecycle buttons (`MainButton`) and offer/cash/note/incident controls disable under the connection gate.
 - Sheets (`DriverControlSheet`) support Escape/outside-click/focus-return; login form has labels, `autoComplete`, `inputMode`, `role="alert"`.
 - Long customer instruction / address / CASH values wrap (`white-space: pre-wrap`, `overflow-wrap: anywhere`), no forced ellipsis on meaningful text.
-- Verdict: PASS — no usability/accessibility blocker found. (Pixel-perfect visual review out of scope.)
+- **Usability gap (F-5, P2):** the CASH offer card is operationally incomplete pre-accept. It shows only "Нужно иметь при себе" (restaurant handoff) and does not show the customer collection total or whether change is needed / the tender amount change is expected from. A cash-enabled driver therefore accepts a cash order without the full "how much to collect / change" picture the `docs/driver-experience.md §5` contract requires. This is a decision/operational usability blocker (not a layout blocker).
+- Verdict: FAIL — one operational usability blocker (F-5). No layout/rendering/accessibility-semantics blocker found; pixel-perfect visual review out of scope.
 
 ## 11. Test Quality Review
 
@@ -129,12 +131,13 @@ Overall: strong behavioral/domain coverage on the highest-risk areas; source-con
 
 | ID | Severity | Area | Finding | Evidence | Reproduction | Required resolution |
 |---|---|---|---|---|---|---|
+| F-5 | **P2** | CASH offer UX / domain contract | The current `docs/driver-experience.md §5` contract requires a CASH offer to show, before acceptance, how much to hand the restaurant, how much to collect from the customer, and whether change is needed (and from what tender amount). Runtime shows only the restaurant-handoff amount: `DriverOfferCard` accepts only `cashHandoffCents` and renders only "Нужно иметь при себе"; `NewOffersSection` passes only `snapshot.restaurantHandoffCents`; `snapshot.customerCollectionCents` is never surfaced pre-accept; and `PlatformDriverCashSnapshot` has no change/tender field at all. A cash-enabled driver accepts a cash order without seeing the full collection total or change requirement — a material operational gap. | `docs/driver-experience.md` §5 ("Карточка предложения до принятия"); `src/components/driver/driver-offer-card.tsx` `DriverOfferCard` (`cashHandoffCents` prop; "Нужно иметь при себе"); `src/components/driver/driver-workspace.tsx` `NewOffersSection` (passes `cashSnapshot.restaurantHandoffCents` only); `src/prototype/models.ts` `PlatformDriverCashSnapshot` (has `customerCollectionCents`, no change/tender field) | 1. Open a CASH offer for an eligible cash-enabled driver. 2. Before accepting, the card shows the restaurant-handoff amount. 3. The customer collection total and the change requirement are absent. | Either (a) add an immutable change/tender snapshot and show pre-accept: customer collection total, whether change is needed, and the tender amount change is expected from; **or** (b) by an explicit product decision, formally remove this requirement from the current Driver V1 contract in `docs/driver-experience.md`. Until one of these lands, Driver V1 is not SHIP-OK. (No product-code change made by this audit.) |
 | F-1 | P3 | Test quality | Driver-workspace mutation-gate wiring (note/logout/offer/cash button `disabled` and early-returns) is verified by source-string/slice assertions, not by rendering the component. Core gate logic is behaviorally tested, but a future refactor could silently detach a button from `blocked` without failing a test. | `driver-connection-integration.test.ts` (source slices), `driver-workspace.test.ts` (source `.includes`) vs behavioral `driver-connection.test.ts` | Rewire a button to ignore `blocked`; source tests may still pass. | Add a lightweight render/interaction test harness for the gate (future); not required for V1 sign-off. |
 | F-2 | P3 | Test quality | `finalizeMutation` default timestamp is `new Date().toISOString()` (`prototype-store.ts:159`); provider always passes an explicit `nowIso`, so this default is only a fallback. Not a correctness defect, but a non-deterministic default in an otherwise time-injected codebase. | `prototype-store.ts:156-160` | N/A (provider passes timestamp) | Consider making the timestamp required (future hardening). |
 | F-3 | P3 | Docs | Multiple corrective decisions (DEC-138…DEC-143) describe the notification/connection evolution; a reader must follow the chain to derive the final contract. No contradiction found, but the final consolidated contract lives across several entries. | `docs/decision-log.md`, `docs/notifications.md` | N/A | Optional: a single consolidated "current contract" note (future). |
 | F-4 | P3 | Prototype limitation (honestly declared) | Connection "ONLINE" and notification delivery depend on `navigator.onLine` + an open Direct client; there is no backend health signal. This is declared in code/UI/docs and is correct for V1 — recorded here for completeness, not as a defect. | `driver-connection.ts` header; UI "Работают, пока Direct открыт в браузере." | N/A | None for V1. |
 
-No P0, P1 or P2 findings.
+One P2 finding (F-5). No P0 or P1 findings.
 
 ## 13. Honest Prototype Limitations
 
@@ -150,7 +153,7 @@ These are consistent with the declared V1 scope and are not counted as findings.
 
 - **P0 count:** 0
 - **P1 count:** 0
-- **P2 count:** 0
+- **P2 count:** 1 (F-5)
 - **P3 count:** 4 (non-blocking)
-- **SHIP-OK: YES**
-- **Reason:** No P0/P1/P2 findings. All mandatory checks pass (test 2742/0, lint, tsc, build, diff-check, verify:zones) and GitHub Actions on `main` is green. Core Driver V1 scenarios (ONLINE + CASH delivery, competing tabs, connection loss/recovery, incident, payout, corruption boundaries) are proven by runtime code and real behavioral/domain tests. Financial invariants (single earning per delivery, one earning per payout, immutable CASH snapshot, fresh-state serialized mutation, no false success) hold. Prototype limitations are declared honestly. The four P3 items are test-quality/documentation debt and a declared limitation — none blocks considering Driver V1 complete as a browser/localStorage prototype.
+- **SHIP-OK: NO**
+- **Reason:** One P2 finding (F-5) blocks sign-off: the CASH offer card omits the pre-accept customer-collection total and change/tender requirement mandated by the current `docs/driver-experience.md §5` contract, so a driver accepts a cash order without the full collection picture. The automated suite passes (test 2742/0, lint, tsc, build, diff-check, verify:zones) and GitHub Actions run `30685775622` on `main` is `success`, but the suite does not assert this contract, so green checks do not clear F-5. All financial money-movement invariants and the ONLINE, competing-tabs, connection-recovery, incident, payout and corruption-boundary scenarios are proven by code and real behavioral/domain tests. Driver V1 becomes SHIP-OK once F-5 is resolved — either by implementing the missing pre-accept CASH disclosure (customer collection total + change requirement + tender amount) or by an explicit product decision removing that requirement from the Driver V1 contract. The four P3 items are test-quality/documentation debt and a declared limitation and remain non-blocking. This audit changed no product code.
