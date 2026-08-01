@@ -87,7 +87,7 @@ Driver V1 is internally consistent, fail-closed, and financially rigorous at the
 
 ## 7. Persistence and Cross-Tab Integrity
 
-- Schema `PROTOTYPE_SCHEMA_VERSION = 30` (`models.ts:10`); storage key `direct-prototype-state-v7`.
+- Schema `PROTOTYPE_SCHEMA_VERSION = 31` (`models.ts`); storage key `direct-prototype-state-v7` не изменён. Migration v30 → v31 сохраняет существующую историю и нормализует отсутствующий legacy `platformDriverCashTender` в `null` без предположения `EXACT` и без пересчёта CASH accounting, earnings или payouts.
 - Bootstrap (`resolveBootstrapState`) re-reads v7 under the lock; existing v7 authoritative; legacy migrated only when no v7; never overwrites newer state.
 - Mutations: base = `selectLatestPrototypeState(local, stored)` (rebase on freshest); **persist before local acceptance/broadcast**; a persist throw aborts with no false success; broadcast failure after persist is non-fatal (storage event catches up).
 - Cross-tab: `storage` event + `BroadcastChannel` both funnel through `isNewerState` (revision, then updatedAt) — no last-writer-wins silent loss. Missing Web Locks → critical mutations fail closed (`SAFE_TAB_SYNC_UNAVAILABLE_ERROR`), no spin-lock.
