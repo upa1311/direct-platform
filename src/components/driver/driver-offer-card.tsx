@@ -1,6 +1,7 @@
 "use client";
 
 import { formatMoney } from "@/prototype/selectors";
+import type { DriverCashOfferDisclosureView } from "@/prototype/selectors";
 import type { Order, PrototypeState, ZoneId } from "@/prototype/models";
 import { driverOrderZoneView } from "@/lib/zones/driver-zone-view";
 import styles from "@/app/driver/driver.module.css";
@@ -9,6 +10,11 @@ import styles from "@/app/driver/driver.module.css";
  * Карточка нового предложения (до принятия). Приватность: показывается только
  * улица и зона клиента; дом, квартира, подъезд, этаж, имя, телефон и комментарий
  * скрыты. Выплата берётся строго из неизменяемого снимка заказа.
+ *
+ * Наличное раскрытие (v31, F-5): полная сумма к получению от клиента, сумма к
+ * передаче ресторану и требование сдачи берутся ТОЛЬКО из валидных неизменяемых
+ * снимков заказа через getDriverCashOfferDisclosureView. UI ничего не
+ * пересчитывает.
  */
 export function DriverOfferCard({
   order,
@@ -16,7 +22,7 @@ export function DriverOfferCard({
   zoneName,
   restaurantTimeZone,
   disabled,
-  cashHandoffCents,
+  cashDisclosure,
   onAccept,
   onDecline,
 }: {
@@ -25,12 +31,12 @@ export function DriverOfferCard({
   zoneName: (zoneId: ZoneId | null) => string;
   restaurantTimeZone: string;
   disabled: boolean;
-  /** Сумма к передаче ресторану из cash snapshot, либо null для онлайн-заказа. */
-  cashHandoffCents: number | null;
+  /** Наличное раскрытие заказа (NOT_APPLICABLE для онлайн-заказа). */
+  cashDisclosure: DriverCashOfferDisclosureView;
   onAccept: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onDecline: () => void;
 }) {
-  const isCash = cashHandoffCents !== null;
+  const isCash = cashDisclosure.status !== "NOT_APPLICABLE";
   // Версионные зоны Bender (bender-zones-v1.1): зона забора и зона доставки,
   // признак Северного и транзита через Варницу. Без GIS-внутренностей (OSM id,
   // полигоны) и без влияния на выплату.
@@ -55,14 +61,52 @@ export function DriverOfferCard({
         </span>
       </div>
 
-      {/* Наличный заказ: заметный признак и точная сумма к передаче ресторану
-          (из валидного cash snapshot заказа). */}
-      {isCash ? (
+      {/* Наличный заказ (v31, F-5): полное раскрытие до принятия — сколько
+          получить от клиента, сколько передать ресторану и требование сдачи.
+          Все суммы — только из валидных неизменяемых снимков заказа. */}
+      {cashDisclosure.status === "READY" ? (
         <div className={styles.cashOfferBadge}>
           <span className={styles.cashOfferTag}>Наличные</span>
           <span className={styles.cashOfferAmount}>
-            Нужно иметь при себе:{" "}
-            {formatMoney(cashHandoffCents, order.financials.currencyCode)}
+            Получить от клиента:{" "}
+            {formatMoney(
+              cashDisclosure.customerCollectionCents,
+              cashDisclosure.currencyCode,
+            )}
+          </span>
+          <span className={styles.cashOfferAmount}>
+            Передать ресторану:{" "}
+            {formatMoney(
+              cashDisclosure.restaurantHandoffCents,
+              cashDisclosure.currencyCode,
+            )}
+          </span>
+          {cashDisclosure.changeRequired ? (
+            <>
+              <span className={styles.cashOfferAmount}>
+                Клиент заплатит:{" "}
+                {formatMoney(
+                  cashDisclosure.tenderCents,
+                  cashDisclosure.currencyCode,
+                )}
+              </span>
+              <span className={styles.cashOfferAmount}>
+                Подготовить сдачу:{" "}
+                {formatMoney(
+                  cashDisclosure.changeDueCents,
+                  cashDisclosure.currencyCode,
+                )}
+              </span>
+            </>
+          ) : (
+            <span className={styles.cashOfferAmount}>Сдача не нужна</span>
+          )}
+        </div>
+      ) : cashDisclosure.status === "REVIEW_REQUIRED" ? (
+        <div className={styles.cashOfferBadge}>
+          <span className={styles.cashOfferTag}>Наличные</span>
+          <span className={styles.cashOfferAmount}>
+            Данные о сдаче требуют проверки Direct.
           </span>
         </div>
       ) : null}

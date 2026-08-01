@@ -39,6 +39,13 @@ export interface MoneyMovementSnapshotSums {
 export interface MoneyMovementSnapshotInput extends MoneyMovementSnapshotSums {
   financialRule: FinancialRuleSnapshot;
   financialCollectionMode: RestaurantFinancialCollectionMode;
+  /**
+   * v31: заказ создаётся как наличный PLATFORM_DRIVER. Тогда канал определяется
+   * способом оплаты — CASH_TO_PLATFORM_DRIVER (тот же, что recovery выбирает при
+   * нормализации), а не выводится из режима сбора платежей. Формула движения не
+   * меняется: канал уже существует и обрабатывается computeOrderMoneyMovement.
+   */
+  platformDriverCash?: boolean;
 }
 
 /** Известен ли финансовый режим (fallback и подстановки запрещены). */
@@ -195,10 +202,13 @@ export function buildCreationMoneyMovement(
   if (!isKnownCollectionMode(input.financialCollectionMode)) {
     return { ok: false, error: "Неизвестный финансовый режим ресторана." };
   }
-  const channel = knownChannelForMode(
-    input.deliveryMode,
-    input.financialCollectionMode,
-  );
+  // Наличный заказ водителя Direct: канал определяется способом оплаты, тем же
+  // CASH_TO_PLATFORM_DRIVER, что и recovery при нормализации; иначе — канал по
+  // режиму (для PICKUP он ещё неизвестен → PENDING).
+  const channel =
+    input.deliveryMode === "PLATFORM_DRIVER" && input.platformDriverCash
+      ? "CASH_TO_PLATFORM_DRIVER"
+      : knownChannelForMode(input.deliveryMode, input.financialCollectionMode);
   if (channel === null) {
     return { ok: true, moneyMovementStatus: "PENDING_PAYMENT_CHANNEL" };
   }

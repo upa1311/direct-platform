@@ -145,7 +145,7 @@ const offerFor = (state: PrototypeState, orderId: string, driverId: string) =>
 // --- 1–9: schema и нормализация ------------------------------------------------
 
 test("1: схема прототипа равна 30", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 31);
 });
 
 test("2: нормализатор принимает схемы 7–18", () => {
@@ -155,10 +155,10 @@ test("2: нормализатор принимает схемы 7–18", () => {
       JSON.stringify({ ...base, schemaVersion: version }),
     );
     assert.ok(parsed, `схема ${version}`);
-    assert.equal(parsed.schemaVersion, 30);
+    assert.equal(parsed.schemaVersion, 31);
   }
   assert.equal(
-    parseStoredState(JSON.stringify({ ...base, schemaVersion: 31 })),
+    parseStoredState(JSON.stringify({ ...base, schemaVersion: 32 })),
     null,
   );
 });
@@ -1016,6 +1016,13 @@ const CASH_SNAPSHOT = {
   restaurantOwesDirectCents: 100,
 };
 
+// v31: валидный снимок сдачи (без сдачи) — теперь обязателен для наличного offer.
+const CASH_TENDER = {
+  mode: "EXACT" as const,
+  tenderCents: 1000,
+  changeDueCents: 0,
+};
+
 const cashFinancials = (over: Record<string, unknown> = {}) => ({
   customerZoneId: "zone-1",
   customerTotalCents: 1000,
@@ -1023,6 +1030,7 @@ const cashFinancials = (over: Record<string, unknown> = {}) => ({
   driverPayoutCents: 300,
   platformGrossRevenueCents: 100,
   platformDriverCash: CASH_SNAPSHOT,
+  platformDriverCashTender: CASH_TENDER,
   ...over,
 });
 
@@ -1074,6 +1082,7 @@ function cashEnabledState(opts: { d2Cash?: boolean } = {}): {
               driverPayoutCents: 300,
               platformGrossRevenueCents: 100,
               platformDriverCash: CASH_SNAPSHOT,
+              platformDriverCashTender: CASH_TENDER,
             },
           }
         : o,
@@ -1440,7 +1449,7 @@ function parseWith(
 const parsedOffer = (state: PrototypeState) => state.driverOffers[0];
 
 test("cash-31: схема поднята до 30", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 31);
 });
 
 test("cash-32: schema 19 offer получает cashReserveConfirmedAt null", () => {
@@ -1514,19 +1523,22 @@ test("cash-ui-39: карточка показывает признак «Нал�
   assert.ok(OFFER_CARD.includes("cashOfferTag"));
 });
 
-test("cash-ui-40: карточка показывает точную сумму restaurantHandoff", () => {
-  assert.ok(OFFER_CARD.includes("Нужно иметь при себе"));
-  assert.ok(OFFER_CARD.includes("cashHandoffCents"));
+test("cash-ui-40: карточка раскрывает получение, передачу и сдачу (F-5)", () => {
+  assert.ok(OFFER_CARD.includes("Получить от клиента"));
+  assert.ok(OFFER_CARD.includes("Передать ресторану"));
+  assert.ok(OFFER_CARD.includes("Подготовить сдачу"));
+  assert.ok(OFFER_CARD.includes("Сдача не нужна"));
+  assert.ok(OFFER_CARD.includes("cashDisclosure"));
 });
 
 test("cash-ui-41-42: «Принять заказ» наличного открывает лист, а не назначает сразу", () => {
-  // Наличное принятие ветвится по cashHandoffCents: сначала setCashConfirm.
+  // Наличное принятие ветвится по наличному раскрытию: сначала setCashConfirm.
   assert.ok(WORKSPACE.includes("setCashConfirm"));
-  assert.ok(WORKSPACE.includes("cashHandoffCents !== null"));
+  assert.ok(WORKSPACE.includes('disclosure.status !== "NOT_APPLICABLE"'));
 });
 
-test("cash-ui-43: есть кнопка «У меня есть эта сумма»", () => {
-  assert.ok(WORKSPACE.includes("У меня есть эта сумма"));
+test("cash-ui-43: есть кнопка «У меня есть необходимую сумму»", () => {
+  assert.ok(WORKSPACE.includes("У меня есть необходимая сумма"));
 });
 
 test("cash-ui-44: главная кнопка передаёт cashReserveConfirmed: true", () => {

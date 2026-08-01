@@ -426,7 +426,7 @@ test("64: период считается по переданному timeZone, 
 // --- §30 regression -----------------------------------------------------------
 
 test("65/74: schema 27, наличные выключены", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 31);
   assert.equal(createDefaultState().platformSettings.platformDriverCashEnabled, false);
 });
 

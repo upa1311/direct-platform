@@ -68,6 +68,7 @@ import {
   resetPrototypeState,
   restoreDefaultTariffs,
   saveTariffs,
+  setCartCashTenderIntent,
   setCartFulfillmentChoice,
   setCartItemComment,
   setCartItemQuantity,
@@ -156,6 +157,7 @@ import {
 import { createDefaultState } from "./default-state";
 import type {
   DeliveryAddress,
+  CashTenderIntent,
   DriverOrderIncidentReason,
   DriverOrderIncidentResolutionOutcome,
   FulfillmentChoice,
@@ -230,6 +232,7 @@ export interface PrototypeContextValue {
     patch: Partial<Pick<PrototypeState["customer"], "name" | "phone">>,
   ) => MutationAckPromise;
   setPaymentMethod: (paymentMethod: PaymentMethod) => MutationAckPromise;
+  setCashTenderIntent: (intent: CashTenderIntent) => MutationAckPromise;
   setFulfillmentChoice: (fulfillmentChoice: FulfillmentChoice) => MutationAckPromise;
   createOrder: () => Promise<CreateOrderResult>;
   repeatOrder: (orderId: string) => Promise<RepeatOrderResult>;
@@ -995,6 +998,14 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
     (paymentMethod: PaymentMethod) =>
       runSerializedStateMutation({
         mutation: (baseState) => setCartPaymentMethod(baseState, paymentMethod),
+      }),
+    [runSerializedStateMutation],
+  );
+
+  const setCashTenderIntent = useCallback(
+    (intent: CashTenderIntent) =>
+      runSerializedStateMutation({
+        mutation: (baseState) => setCartCashTenderIntent(baseState, intent),
       }),
     [runSerializedStateMutation],
   );
@@ -2154,6 +2165,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       updateAddress,
       updateCustomer,
       setPaymentMethod,
+      setCashTenderIntent,
       setFulfillmentChoice,
       createOrder,
       repeatOrder,
@@ -2237,6 +2249,7 @@ export function PrototypeProvider({ children }: { children: ReactNode }) {
       updateAddress,
       updateCustomer,
       setPaymentMethod,
+      setCashTenderIntent,
       setFulfillmentChoice,
       createOrder,
       repeatOrder,

@@ -7,7 +7,7 @@ import type { OrderMoneyMovement } from "./order-money-movement";
 import type { FinancialRuleSnapshot } from "./financial-rule";
 import type { OrderZoneSnapshot } from "@/lib/zones/types";
 
-export const PROTOTYPE_SCHEMA_VERSION = 30 as const;
+export const PROTOTYPE_SCHEMA_VERSION = 31 as const;
 
 /**
  * Кто получает платежи клиентов ресторана (v13). Отдельное доменное понятие:
@@ -705,6 +705,13 @@ export interface Cart {
   fulfillmentChoice: FulfillmentChoice;
   paymentMethod: PaymentMethod;
   address: DeliveryAddress;
+  /**
+   * Наличное намерение клиента по сдаче (v31). Актуально только при
+   * paymentMethod === "CASH"; при любом другом способе оплаты сбрасывается в
+   * null. При выборе CASH клиент обязан явно выбрать EXACT или CHANGE_FROM,
+   * иначе заказ не создаётся.
+   */
+  cashTenderIntent: CashTenderIntent;
 }
 
 export interface OrderItemSnapshot {
@@ -806,6 +813,47 @@ export interface PlatformDriverCashSnapshot {
    */
   restaurantOwesDirectCents: number;
 }
+
+/**
+ * Режим оплаты клиента наличными для наличного заказа PLATFORM_DRIVER (v31).
+ * EXACT — клиент платит ровно сумму заказа, сдача не нужна.
+ * CHANGE_FROM — клиент платит купюрой крупнее суммы заказа и ждёт сдачу.
+ */
+export type PlatformDriverCashTenderMode = "EXACT" | "CHANGE_FROM";
+
+/**
+ * Неизменяемый операционный снимок наличного намерения клиента (v31): чем именно
+ * клиент заплатит и нужна ли сдача. Отдельный canonical snapshot рядом с
+ * platformDriverCash; НЕ новое движение денег и НЕ меняет экономику заказа —
+ * только раскрывает водителю до принятия полную сумму к получению и требование
+ * сдачи, чего требует docs/driver-experience.md §5.
+ *
+ * Инварианты (проверяет builder fail-closed относительно customerCollectionCents
+ * из валидного platformDriverCash):
+ *   EXACT:       tenderCents === customerCollectionCents, changeDueCents === 0
+ *   CHANGE_FROM: tenderCents  >  customerCollectionCents,
+ *                changeDueCents === tenderCents - customerCollectionCents > 0
+ * changeDueCents вычисляет только builder; UI его не передаёт и не пересчитывает.
+ */
+export interface PlatformDriverCashTenderSnapshot {
+  mode: PlatformDriverCashTenderMode;
+  /** Сумма, которой клиент фактически платит (для EXACT равна сумме заказа). */
+  tenderCents: number;
+  /** Сдача, которую водитель обязан подготовить; для EXACT строго 0. */
+  changeDueCents: number;
+}
+
+/**
+ * Изменяемое намерение клиента по наличной сдаче в корзине ДО создания заказа
+ * (v31). Ещё НЕ authoritative snapshot: authoritative changeDueCents появляется
+ * только у order.financials.platformDriverCashTender после сборки builder'ом.
+ * Для EXACT сумма не хранится (равна итоговой сумме заказа); для CHANGE_FROM
+ * клиент задаёт tenderCents. null — выбор ещё не сделан (обязателен для CASH).
+ */
+export type CashTenderIntent =
+  | { mode: "EXACT" }
+  | { mode: "CHANGE_FROM"; tenderCents: number }
+  | null;
 
 /**
  * Тип append-only события физической передачи наличных ресторану (v21).
@@ -1012,6 +1060,14 @@ export interface FinancialSnapshot {
    * legacy-состояний: старый CASH-заказ задним числом снимок не получает.
    */
   platformDriverCash?: PlatformDriverCashSnapshot | null;
+  /**
+   * Снимок наличного намерения клиента (сдача/оплата, v31). Заполняется только
+   * для PLATFORM_DRIVER + CASH и только если валиден относительно
+   * customerCollectionCents из platformDriverCash; иначе null. Optional только
+   * для чтения legacy-состояний: старый CASH-заказ задним числом снимок не
+   * получает и «без сдачи» не выдумывается.
+   */
+  platformDriverCashTender?: PlatformDriverCashTenderSnapshot | null;
 }
 
 export interface OrderHistoryEvent {

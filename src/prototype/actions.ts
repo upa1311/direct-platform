@@ -9,6 +9,7 @@ import type {
   AppliedPromotionSnapshot,
   CancellationRequest,
   CartItem,
+  CashTenderIntent,
   DeliveryAddress,
   DeliveryMode,
   DriverProfile,
@@ -33,6 +34,8 @@ import type {
   PaymentMethod,
   PaymentStatus,
   PickupPaymentMethod,
+  PlatformDriverCashSnapshot,
+  PlatformDriverCashTenderSnapshot,
   Promotion,
   PrototypeState,
   Restaurant,
@@ -105,6 +108,10 @@ import {
 } from "./menu-catalog";
 import { computeCompletedOrderAccounting } from "./restaurant-accounting";
 import { buildPreparedDriverEarningEntry } from "./driver-earnings";
+import {
+  buildPlatformDriverCashSnapshot,
+  buildPlatformDriverCashTenderSnapshot,
+} from "./platform-driver-cash";
 
 export interface ActionResult<T> {
   state: PrototypeState;
@@ -287,12 +294,40 @@ export function setCartPaymentMethod(
   state: PrototypeState,
   paymentMethod: PaymentMethod,
 ): PrototypeState {
-  if (paymentMethod === "CASH") {
+  // Наличные доступны только за флагом (DEC-094/097/114: при выключенном флаге
+  // CASH заблокирован в логике). При выключенном флаге выбор CASH игнорируется —
+  // прежнее поведение сохраняется.
+  if (paymentMethod === "CASH" && !state.platformSettings.platformDriverCashEnabled) {
     return state;
   }
   return finalizeMutation(state, {
     ...state,
-    cart: { ...state.cart, paymentMethod },
+    cart: {
+      ...state.cart,
+      paymentMethod,
+      // Любая смена способа оплаты сбрасывает наличное намерение: при выборе CASH
+      // клиент выбирает сдачу заново, при уходе с CASH намерение неактуально.
+      cashTenderIntent: null,
+    },
+  });
+}
+
+/**
+ * Наличное намерение клиента (сдача) в корзине (v31). Действует только пока
+ * выбран CASH; при любом другом способе оплаты попытка игнорируется, чтобы
+ * намерение не «прилипало» к не-наличному заказу. changeDueCents здесь НЕ
+ * задаётся — его вычислит domain builder при создании заказа.
+ */
+export function setCartCashTenderIntent(
+  state: PrototypeState,
+  intent: CashTenderIntent,
+): PrototypeState {
+  if (state.cart.paymentMethod !== "CASH") {
+    return state;
+  }
+  return finalizeMutation(state, {
+    ...state,
+    cart: { ...state.cart, cashTenderIntent: intent },
   });
 }
 
@@ -309,6 +344,7 @@ export function setCartFulfillmentChoice(
       ...state.cart,
       fulfillmentChoice,
       paymentMethod: "ONLINE",
+      cashTenderIntent: null,
     },
   });
 }
@@ -382,8 +418,27 @@ export function createOrderFromCart(
   if (!restaurant.deliveryModes.includes(deliveryMode)) {
     return fail("Этот способ получения недоступен для ресторана.");
   }
-  if (state.cart.paymentMethod !== "ONLINE") {
+  // Наличные PLATFORM_DRIVER (v31) доступны только за флагом (DEC-094/097/114),
+  // только для доставки водителем Direct и только зарегистрированному клиенту с
+  // подтверждённым телефоном (DEC-019/039). Явный выбор сдачи обязателен. Все
+  // остальные заказы остаются строго ONLINE.
+  const isCashOrder = state.cart.paymentMethod === "CASH";
+  if (!isCashOrder && state.cart.paymentMethod !== "ONLINE") {
     return fail("Выберите оплату онлайн.");
+  }
+  if (isCashOrder) {
+    if (!state.platformSettings.platformDriverCashEnabled) {
+      return fail("Оплата наличными сейчас недоступна.");
+    }
+    if (deliveryMode !== "PLATFORM_DRIVER") {
+      return fail("Оплата наличными доступна только для доставки Direct.");
+    }
+    if (!state.customer.phoneVerified) {
+      return fail("Для оплаты наличными подтвердите номер телефона.");
+    }
+    if (state.cart.cashTenderIntent === null) {
+      return fail("Укажите, нужна ли сдача.");
+    }
   }
 
   // §15: каждая позиция перепроверяется на операционную доступность.
@@ -481,6 +536,15 @@ export function createOrderFromCart(
     return fail("Не удалось рассчитать заказ.");
   }
 
+  // Наличный порог (DEC-039/040): учитывается только стоимость еды после скидок.
+  if (
+    isCashOrder &&
+    pricing.foodSubtotalCents <
+      state.platformSettings.cashMinimumFoodSubtotalCents
+  ) {
+    return fail("Сумма еды меньше минимальной для оплаты наличными.");
+  }
+
   const settings = restaurant.restaurantDeliverySettings;
   const restaurantDeliverySnapshot: RestaurantDeliverySnapshot | null =
     deliveryMode === "RESTAURANT_DELIVERY" && settings
@@ -516,12 +580,16 @@ export function createOrderFromCart(
     ? "PAY_AT_RESTAURANT"
     : isRestaurantDelivery
       ? "CASH_TO_RESTAURANT_COURIER"
-      : "ONLINE";
+      : isCashOrder
+        ? "CASH"
+        : "ONLINE";
   const paymentStatus: PaymentStatus = isPickup
     ? "DUE_AT_PICKUP"
     : isRestaurantDelivery
       ? "DUE_TO_RESTAURANT_COURIER"
-      : "NOT_STARTED";
+      : isCashOrder
+        ? "CASH_ON_DELIVERY"
+        : "NOT_STARTED";
   // Самовывоз не оплачен заранее: клиент платит на месте, и подтверждением
   // служит сама оплата сотруднику. Четырёхзначный код больше не выдаётся;
   // pickupCode/pickupCodeUsed остаются legacy-полями старых заказов.
@@ -602,6 +670,8 @@ export function createOrderFromCart(
     restaurantCommissionCents,
     financialRule,
     financialCollectionMode,
+    // Наличный заказ водителя Direct → канал CASH_TO_PLATFORM_DRIVER.
+    platformDriverCash: isCashOrder,
   });
   if (!creationMovement.ok) {
     return fail(creationMovement.error);
@@ -633,6 +703,43 @@ export function createOrderFromCart(
     platformCommissionReceivableCents,
     restaurantNetAfterPlatformCommissionCents,
   } = compatibility;
+
+  // v31: неизменяемые снимки наличного заказа PLATFORM_DRIVER. Оба строятся из
+  // УЖЕ рассчитанных канонических сумм (существующий механизм) — экономика заказа
+  // не меняется. Снимок сдачи собирается из явного намерения клиента
+  // относительно customerCollectionCents из cash-снимка; changeDueCents создаёт
+  // только builder. Любая невалидность — fail-closed, заказ не создаётся.
+  let platformDriverCash: PlatformDriverCashSnapshot | null = null;
+  let platformDriverCashTender: PlatformDriverCashTenderSnapshot | null = null;
+  if (isCashOrder) {
+    const cashResult = buildPlatformDriverCashSnapshot({
+      customerTotalCents,
+      restaurantPayoutBeforeBankFeeCents,
+      driverPayoutCents,
+      platformGrossRevenueCents,
+    });
+    if (!cashResult.ok) {
+      return fail(cashResult.error);
+    }
+    platformDriverCash = cashResult.snapshot;
+    const intent = state.cart.cashTenderIntent;
+    if (intent === null) {
+      return fail("Укажите, нужна ли сдача.");
+    }
+    const tenderCents =
+      intent.mode === "EXACT"
+        ? platformDriverCash.customerCollectionCents
+        : intent.tenderCents;
+    const tenderResult = buildPlatformDriverCashTenderSnapshot({
+      mode: intent.mode,
+      tenderCents,
+      customerCollectionCents: platformDriverCash.customerCollectionCents,
+    });
+    if (!tenderResult.ok) {
+      return fail(tenderResult.error);
+    }
+    platformDriverCashTender = tenderResult.snapshot;
+  }
 
   const now = new Date().toISOString();
   const orderId = `order-${state.nextOrderNumber}`;
@@ -712,10 +819,10 @@ export function createOrderFromCart(
         : {}),
       financialRule,
       financialCollectionMode,
-      // v19: обычное оформление создаёт только существующие способы оплаты,
-      // поэтому наличный снимок водителя Direct у новых заказов всегда null.
-      // Валидный объект появится только у будущих PLATFORM_DRIVER + CASH.
-      platformDriverCash: null,
+      // v19/v31: наличные снимки водителя Direct. Для не-наличных заказов оба
+      // null; для CASH PLATFORM_DRIVER — валидные снимки потока и сдачи.
+      platformDriverCash,
+      platformDriverCashTender,
     },
     history: [
       {

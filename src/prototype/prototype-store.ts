@@ -24,6 +24,7 @@ import {
   type Order,
   type OrderItemSnapshot,
   type PaymentMethod,
+  type CashTenderIntent,
   type DriverEarningEntry,
   type PlatformDriverCashEvent,
   type PrototypeState,
@@ -58,7 +59,10 @@ import {
 } from "./money-movement-snapshot";
 import { validateRestaurantSettlementRecord } from "./restaurant-settlement-integrity";
 import { validateFinancialRuleSnapshot } from "./financial-rule";
-import { resolvePlatformDriverCashSnapshot } from "./platform-driver-cash";
+import {
+  resolvePlatformDriverCashSnapshot,
+  resolvePlatformDriverCashTenderSnapshot,
+} from "./platform-driver-cash";
 import { isSafeCents } from "./bank-fee";
 import {
   buildCompletedDriverEarningEntry,
@@ -223,7 +227,7 @@ function hasPrototypeStateShape(value: unknown): boolean {
  */
 const PARSEABLE_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([
   7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-  27, 28, 29, 30,
+  27, 28, 29, 30, 31,
 ]);
 
 export function isPrototypeState(value: unknown): value is PrototypeState {
@@ -431,6 +435,22 @@ function normalizeFinancials(
             ? raw.platformDriverCash
             : null,
         });
+  // v31: снимок наличной сдачи. Имеет смысл только при валидном platformDriverCash
+  // (сдача считается от customerCollectionCents). Состояния схем ≤ 30 снимка сдачи
+  // не имеют — задним числом «без сдачи» не выдумывается, tender остаётся null
+  // (водитель увидит REVIEW_REQUIRED). При любом расхождении сохранённого снимка
+  // с канонической проекцией — тоже null.
+  const platformDriverCashTender =
+    platformDriverCash === null || sourceSchemaVersion <= 30
+      ? null
+      : resolvePlatformDriverCashTenderSnapshot({
+          deliveryMode,
+          paymentMethod,
+          customerCollectionCents: platformDriverCash.customerCollectionCents,
+          candidate: isRecord(raw.platformDriverCashTender)
+            ? raw.platformDriverCashTender
+            : null,
+        });
   return {
     ...base,
     moneyMovementStatus: recovered.moneyMovementStatus,
@@ -442,6 +462,7 @@ function normalizeFinancials(
       ? { financialCollectionMode: storedCollectionMode }
       : {}),
     platformDriverCash,
+    platformDriverCashTender,
   };
 }
 
@@ -665,7 +686,30 @@ function normalizeOrder(
   };
 }
 
-function normalizeCart(value: unknown, fallback: Cart): Cart {
+/**
+ * Наличное намерение клиента в корзине (v31). Принимает только строгие формы
+ * { mode:"EXACT" } или { mode:"CHANGE_FROM", tenderCents:<целые безопасные центы> };
+ * всё прочее — null. Ничего не «чинит» и не выдумывает.
+ */
+function normalizeCashTenderIntent(value: unknown): CashTenderIntent {
+  if (!isRecord(value)) return null;
+  if (value.mode === "EXACT") return { mode: "EXACT" };
+  if (
+    value.mode === "CHANGE_FROM" &&
+    typeof value.tenderCents === "number" &&
+    isSafeCents(value.tenderCents) &&
+    value.tenderCents > 0
+  ) {
+    return { mode: "CHANGE_FROM", tenderCents: value.tenderCents };
+  }
+  return null;
+}
+
+function normalizeCart(
+  value: unknown,
+  fallback: Cart,
+  cashEnabled: boolean,
+): Cart {
   const raw = isRecord(value) ? value : {};
   const address = isRecord(raw.address)
     ? (raw.address as unknown as Cart["address"])
@@ -686,6 +730,14 @@ function normalizeCart(value: unknown, fallback: Cart): Cart {
         ];
       })
     : [];
+  // CASH сохраняется в корзине ТОЛЬКО пока наличные включены флагом (DEC-094/114:
+  // при выключенном флаге наличные заблокированы в логике). Иначе способ оплаты
+  // и наличное намерение сбрасываются — «протёкший» CASH из повреждённого
+  // состояния не оживает.
+  const paymentMethod: PaymentMethod =
+    cashEnabled && raw.paymentMethod === "CASH" ? "CASH" : "ONLINE";
+  const cashTenderIntent: CashTenderIntent =
+    paymentMethod === "CASH" ? normalizeCashTenderIntent(raw.cashTenderIntent) : null;
   return {
     restaurantId:
       typeof raw.restaurantId === "string" ? raw.restaurantId : null,
@@ -694,8 +746,9 @@ function normalizeCart(value: unknown, fallback: Cart): Cart {
       raw.fulfillmentChoice === "PICKUP" || raw.fulfillmentChoice === "DELIVERY"
         ? raw.fulfillmentChoice
         : migrateFulfillmentChoice(raw.deliveryMode),
-    paymentMethod: "ONLINE",
+    paymentMethod,
     address,
+    cashTenderIntent,
   };
 }
 
@@ -2320,7 +2373,14 @@ export function normalizePrototypeState(
     // Операционный журнал водителей (v28): source ≤ 27 — пусто; source ≥ 28 —
     // только структурно-валидные события (прошлое не синтезируется).
     driverOperationalEvents: normalizedDriverOperationalEvents,
-    cart: normalizeCart(state.cart, defaults.cart),
+    cart: normalizeCart(
+      state.cart,
+      defaults.cart,
+      isRecord(state.platformSettings) &&
+        typeof state.platformSettings.platformDriverCashEnabled === "boolean"
+        ? state.platformSettings.platformDriverCashEnabled
+        : false,
+    ),
     orders: normalizedOrders,
     settlements: normalizedSettlements,
     // Двусторонний журнал: сохраняем валидные записи и идемпотентно мигрируем
@@ -2381,7 +2441,9 @@ export function upgradeToV6(raw: unknown): PrototypeState {
     drivers: Array.isArray(source.drivers)
       ? (source.drivers as PrototypeState["drivers"])
       : defaults.drivers,
-    cart: normalizeCart(source.cart, defaults.cart),
+    // upgradeToV6 обрабатывает только очень старые версии (v2–v6): наличные тогда
+    // отсутствовали, поэтому CASH и наличное намерение здесь всегда сбрасываются.
+    cart: normalizeCart(source.cart, defaults.cart, false),
     // upgradeToV6 обрабатывает только очень старые версии (v2–v6) — все < 19,
     // поэтому их CASH-заказы классифицируются как legacy (коэрцируются в ONLINE).
     orders: Array.isArray(source.orders)

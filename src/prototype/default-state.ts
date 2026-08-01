@@ -489,6 +489,7 @@ export function createEmptyCart(address?: Cart["address"]): Cart {
           comment: "",
           zoneId: null,
         },
+    cashTenderIntent: null,
   };
 }
 

@@ -19,6 +19,7 @@ import type {
   PaymentMethod,
   PickupPaymentMethod,
   PlatformDriverCashSnapshot,
+  PlatformDriverCashTenderSnapshot,
   Promotion,
   PrototypeState,
   PublicationStatus,
@@ -47,7 +48,10 @@ import {
   resolveDeliveryMode,
   shouldApplySmallOrderFee,
 } from "./pricing-engine";
-import { resolvePlatformDriverCashSnapshot } from "./platform-driver-cash";
+import {
+  resolvePlatformDriverCashSnapshot,
+  resolvePlatformDriverCashTenderSnapshot,
+} from "./platform-driver-cash";
 import { resolveAddressZone } from "../lib/zones/address-resolver";
 
 export type CatalogSort =
@@ -2797,6 +2801,68 @@ export function getPlatformDriverCashSnapshot(
 /** Есть ли у заказа валидный наличный снимок водителя Direct. */
 export function hasValidPlatformDriverCashSnapshot(order: Order): boolean {
   return getPlatformDriverCashSnapshot(order) !== null;
+}
+
+/**
+ * Строгий снимок наличной сдачи заказа (v31). Чистый селектор: возвращает null,
+ * если нет валидного platformDriverCash (сдача не имеет смысла без суммы к
+ * получению) либо сохранённый tender-снимок не совпадает с канонической
+ * проекцией относительно customerCollectionCents. Ничего не мутирует и не
+ * реконструирует.
+ */
+export function getPlatformDriverCashTenderSnapshot(
+  order: Order,
+): PlatformDriverCashTenderSnapshot | null {
+  const cash = getPlatformDriverCashSnapshot(order);
+  if (cash === null) return null;
+  return resolvePlatformDriverCashTenderSnapshot({
+    deliveryMode: order.deliveryMode,
+    paymentMethod: order.paymentMethod,
+    customerCollectionCents: cash.customerCollectionCents,
+    candidate: order.financials.platformDriverCashTender ?? null,
+  });
+}
+
+/**
+ * Read-model раскрытия наличного предложения водителю (v31, F-5). Единственный
+ * источник значений — валидные неизменяемые снимки заказа; UI не пересчитывает
+ * authoritative сдачу.
+ *
+ * NOT_APPLICABLE — заказ не наличный PLATFORM_DRIVER (снимка cash нет).
+ * REVIEW_REQUIRED — наличный заказ с валидным cash-снимком, но tender-снимок
+ *   отсутствует или повреждён (в т.ч. legacy CASH без сдачи): «без сдачи» не
+ *   выдумывается, водителю показывается честная проверка Direct.
+ * READY — оба снимка валидны и согласованы.
+ */
+export type DriverCashOfferDisclosureView =
+  | { status: "NOT_APPLICABLE" }
+  | {
+      status: "READY";
+      customerCollectionCents: number;
+      restaurantHandoffCents: number;
+      tenderCents: number;
+      changeDueCents: number;
+      changeRequired: boolean;
+      currencyCode: "USD";
+    }
+  | { status: "REVIEW_REQUIRED" };
+
+export function getDriverCashOfferDisclosureView(
+  order: Order,
+): DriverCashOfferDisclosureView {
+  const cash = getPlatformDriverCashSnapshot(order);
+  if (cash === null) return { status: "NOT_APPLICABLE" };
+  const tender = getPlatformDriverCashTenderSnapshot(order);
+  if (tender === null) return { status: "REVIEW_REQUIRED" };
+  return {
+    status: "READY",
+    customerCollectionCents: cash.customerCollectionCents,
+    restaurantHandoffCents: cash.restaurantHandoffCents,
+    tenderCents: tender.tenderCents,
+    changeDueCents: tender.changeDueCents,
+    changeRequired: tender.mode === "CHANGE_FROM",
+    currencyCode: order.financials.currencyCode,
+  };
 }
 
 export { TEST_RESTAURANT_ID };

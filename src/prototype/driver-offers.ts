@@ -9,7 +9,11 @@ import type {
 } from "./models";
 import type { ActionResult } from "./actions";
 import { finalizeMutation } from "./prototype-store";
-import { getDriverActiveOrder, getPlatformDriverCashSnapshot } from "./selectors";
+import {
+  getDriverActiveOrder,
+  getPlatformDriverCashSnapshot,
+  getPlatformDriverCashTenderSnapshot,
+} from "./selectors";
 
 /**
  * Предложения заказов водителям по зоне ресторана (v17, наличные — v20).
@@ -121,6 +125,11 @@ function isCashOrderEligible(state: PrototypeState, order: Order): boolean {
   if (order.paymentStatus !== "CASH_ON_DELIVERY") return false;
   if (!orderShapeEligible(order)) return false;
   if (getPlatformDriverCashSnapshot(order) === null) return false;
+  // v31: наличное предложение требует валидного снимка сдачи. Его отсутствие или
+  // повреждение (в т.ч. legacy CASH без tender) делает заказ неeligible —
+  // водителю нельзя предложить наличный заказ без полного раскрытия сдачи (F-5).
+  // Существующие OPEN-предложения на такой заказ отменит reconciliation.
+  if (getPlatformDriverCashTenderSnapshot(order) === null) return false;
   return true;
 }
 
@@ -654,6 +663,16 @@ export function acceptDriverOffer(
   const isCash = isCashOfferOrder(order);
   if (isCash) {
     if (!driver.cashEnabled) {
+      return fail("Предложение уже недоступно.");
+    }
+    // v31: явная повторная проверка обоих наличных снимков на свежем state.
+    // (isOrderDueForDispatch уже включает их через isCashOrderEligible; здесь —
+    // fail-closed на случай будущих изменений, чтобы принять наличный заказ без
+    // валидной суммы/сдачи было невозможно.)
+    if (
+      getPlatformDriverCashSnapshot(order) === null ||
+      getPlatformDriverCashTenderSnapshot(order) === null
+    ) {
       return fail("Предложение уже недоступно.");
     }
     if (!input.cashReserveConfirmed) {

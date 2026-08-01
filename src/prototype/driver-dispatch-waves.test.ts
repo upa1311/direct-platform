@@ -455,7 +455,7 @@ test("v29 migration preserves offer history as deterministic LEGACY waves", () =
   delete (raw as Partial<PrototypeState>).driverDispatchWaves;
   const migrated = parseStoredState(JSON.stringify(raw));
   assert.ok(migrated);
-  assert.equal(migrated.schemaVersion, 30);
+  assert.equal(migrated.schemaVersion, 31);
   assert.equal(migrated.driverDispatchWaves[0].trigger, "LEGACY");
   assert.equal(migrated.driverOffers[0].status, "DECLINED");
   assert.equal(migrated.driverOffers[0].waveNumber, 1);

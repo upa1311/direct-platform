@@ -231,7 +231,7 @@ test("mobile utility panel uses a safe-area bottom sheet without horizontal over
 });
 
 test("admin utilities remain isolated from prototype persistence and unsafe evaluation", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 31);
   const prototypeHook = ["use", "Prototype"].join("");
   const browserStorage = ["local", "Storage"].join("");
   const htmlMutation = ["inner", "HTML"].join("");

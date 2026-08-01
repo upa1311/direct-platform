@@ -171,7 +171,7 @@ test("46-50: notifications/sound/schema/domain untouched by connection recovery"
   // Sound preference key unchanged.
   assert.ok(KITCHEN_SOUND.includes("KITCHEN_SOUND_KEY"));
   // Schema version unchanged.
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 31);
   // The connection module does not touch domain actions/lifecycle/finance.
   for (const forbidden of [
     "driverGoOnline",

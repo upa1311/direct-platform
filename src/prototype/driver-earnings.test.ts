@@ -332,7 +332,7 @@ function onlineCompleted(): { state: PrototypeState; orderId: string } {
 // --- 1–3: модель и дефолты ----------------------------------------------------
 
 test("1/2/3: схема 24, пустой журнал заработка, наличные выключены", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 31);
   const d = createDefaultState();
   assert.deepEqual(d.driverEarningEntries, []);
   assert.equal(d.platformSettings.platformDriverCashEnabled, false);

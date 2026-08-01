@@ -260,12 +260,12 @@ const accOf = (s: PrototypeState, id: string) =>
 const LEGACY_LEDGER_FIELD = ["driverCash", "LedgerEntries"].join("");
 
 test("1/2/4: схема 25; schema24 мигрирует; старый ledger отсутствует", () => {
-  assert.equal(PROTOTYPE_SCHEMA_VERSION, 30);
+  assert.equal(PROTOTYPE_SCHEMA_VERSION, 31);
   const parsed = parseStoredState(
     JSON.stringify({ ...cashCompleted(), schemaVersion: 24 }),
   );
   assert.ok(parsed);
-  assert.equal(parsed.schemaVersion, 30);
+  assert.equal(parsed.schemaVersion, 31);
   assert.ok(!(LEGACY_LEDGER_FIELD in parsed));
 });
 

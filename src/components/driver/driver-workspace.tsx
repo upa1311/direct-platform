@@ -14,8 +14,9 @@ import {
   formatDateTime,
   formatMoney,
   getDriverActiveOrder,
-  getPlatformDriverCashSnapshot,
+  getDriverCashOfferDisclosureView,
 } from "@/prototype/selectors";
+import type { DriverCashOfferDisclosureView } from "@/prototype/selectors";
 import {
   DRIVER_ORDER_INCIDENT_REASONS,
   DRIVER_ORDER_INCIDENT_REASON_LABELS,
@@ -1121,12 +1122,11 @@ function NewOffersSection({
 
   const offers = nowMs > 0 ? getOpenDriverOffersForDriver(state, driver.id, nowMs) : [];
 
-  // Открытое подтверждение наличных: id предложения + сумма к ресторану из
-  // валидного cash snapshot заказа. Сумма не пересчитывается в UI.
+  // Открытое подтверждение наличных: id предложения + полное наличное раскрытие
+  // заказа (все суммы — только из валидных неизменяемых снимков, UI не считает).
   const [cashConfirm, setCashConfirm] = useState<{
     offerId: string;
-    handoffCents: number;
-    currencyCode: string;
+    disclosure: DriverCashOfferDisclosureView;
   } | null>(null);
   const cashTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -1134,17 +1134,13 @@ function NewOffersSection({
     void run(() => driverDeclineOffer(driver.id, offerId));
 
   // Онлайн — принять сразу (one-tap, без подтверждения). Наличные — первое
-  // нажатие открывает лист подтверждения, а не назначает заказ.
+  // нажатие открывает лист подтверждения с полным раскрытием, а не назначает.
   const handleAccept =
-    (offer: DriverOffer, order: Order, cashHandoffCents: number | null) =>
+    (offer: DriverOffer, disclosure: DriverCashOfferDisclosureView) =>
     (event: React.MouseEvent<HTMLButtonElement>) => {
-      if (cashHandoffCents !== null) {
+      if (disclosure.status !== "NOT_APPLICABLE") {
         cashTriggerRef.current = event.currentTarget;
-        setCashConfirm({
-          offerId: offer.id,
-          handoffCents: cashHandoffCents,
-          currencyCode: order.financials.currencyCode,
-        });
+        setCashConfirm({ offerId: offer.id, disclosure });
       } else {
         void run(() =>
           driverAcceptOffer(driver.id, offer.id, { cashReserveConfirmed: false }),
@@ -1186,11 +1182,8 @@ function NewOffersSection({
         {offers.map((offer) => {
           const order = getOrderForOffer(state, offer);
           if (order === null) return null;
-          // Наличное предложение — только при валидном cash snapshot заказа.
-          const cashSnapshot = getPlatformDriverCashSnapshot(order);
-          const cashHandoffCents = cashSnapshot
-            ? cashSnapshot.restaurantHandoffCents
-            : null;
+          // Наличное раскрытие — только из валидных неизменяемых снимков заказа.
+          const cashDisclosure = getDriverCashOfferDisclosureView(order);
           return (
             <li key={offer.id}>
               <DriverOfferCard
@@ -1199,8 +1192,8 @@ function NewOffersSection({
                 zoneName={zoneName}
                 restaurantTimeZone={restaurantTimeZoneOf(state, order)}
                 disabled={pending || blocked}
-                cashHandoffCents={cashHandoffCents}
-                onAccept={handleAccept(offer, order, cashHandoffCents)}
+                cashDisclosure={cashDisclosure}
+                onAccept={handleAccept(offer, cashDisclosure)}
                 onDecline={() => decline(offer.id)}
               />
             </li>
@@ -1216,13 +1209,43 @@ function NewOffersSection({
         onClose={closeCash}
         triggerRef={cashTriggerRef}
       >
-        {cashConfirm !== null ? (
+        {cashConfirm !== null && cashConfirm.disclosure.status === "READY" ? (
           <>
+            {/* §12: лист повторяет существенные суммы. Все значения — из снимков. */}
             <p className={styles.cashSheetText}>
-              Для получения заказа у вас должно быть при себе{" "}
-              {formatMoney(cashConfirm.handoffCents, cashConfirm.currencyCode)}{" "}
-              наличными. Эту сумму нужно будет передать ресторану.
+              Получить от клиента:{" "}
+              {formatMoney(
+                cashConfirm.disclosure.customerCollectionCents,
+                cashConfirm.disclosure.currencyCode,
+              )}
             </p>
+            <p className={styles.cashSheetText}>
+              Передать ресторану до получения заказа:{" "}
+              {formatMoney(
+                cashConfirm.disclosure.restaurantHandoffCents,
+                cashConfirm.disclosure.currencyCode,
+              )}
+            </p>
+            {cashConfirm.disclosure.changeRequired ? (
+              <>
+                <p className={styles.cashSheetText}>
+                  Клиент заплатит:{" "}
+                  {formatMoney(
+                    cashConfirm.disclosure.tenderCents,
+                    cashConfirm.disclosure.currencyCode,
+                  )}
+                </p>
+                <p className={styles.cashSheetText}>
+                  Подготовить сдачу:{" "}
+                  {formatMoney(
+                    cashConfirm.disclosure.changeDueCents,
+                    cashConfirm.disclosure.currencyCode,
+                  )}
+                </p>
+              </>
+            ) : (
+              <p className={styles.cashSheetText}>Сдача: не нужна</p>
+            )}
             <div className={styles.cashConfirmActions}>
               <button
                 type="button"
@@ -1230,7 +1253,7 @@ function NewOffersSection({
                 disabled={pending}
                 onClick={() => void confirmCash()}
               >
-                У меня есть эта сумма
+                У меня есть необходимая сумма
               </button>
               <button
                 type="button"
@@ -1246,6 +1269,23 @@ function NewOffersSection({
                 {error}
               </p>
             ) : null}
+          </>
+        ) : cashConfirm !== null ? (
+          <>
+            {/* Наличный заказ без валидного снимка сдачи: принять нельзя. */}
+            <p className={styles.cashSheetText}>
+              Данные о сдаче требуют проверки Direct.
+            </p>
+            <div className={styles.cashConfirmActions}>
+              <button
+                type="button"
+                className={`${styles.secondaryButton} ${styles.cashConfirmSecondary}`}
+                disabled={pending}
+                onClick={closeCash}
+              >
+                Закрыть
+              </button>
+            </div>
           </>
         ) : null}
       </DriverControlSheet>
@@ -1856,6 +1896,29 @@ function DriverCashHandoffBlock({
     collectionView.amountCents !== null
       ? formatMoney(collectionView.amountCents, order.financials.currencyCode)
       : "—";
+  // §13/F-5: раскрытие сдачи на клиентском этапе — только из валидных снимков.
+  const disclosure = getDriverCashOfferDisclosureView(order);
+  const changeLine =
+    disclosure.status === "READY" ? (
+      disclosure.changeRequired ? (
+        <>
+          <p className={styles.cashHandoffLine}>
+            Клиент заплатит:{" "}
+            {formatMoney(disclosure.tenderCents, disclosure.currencyCode)}
+          </p>
+          <p className={styles.cashHandoffLine}>
+            Подготовить сдачу:{" "}
+            {formatMoney(disclosure.changeDueCents, disclosure.currencyCode)}
+          </p>
+        </>
+      ) : (
+        <p className={styles.cashHandoffLine}>Сдача не нужна</p>
+      )
+    ) : (
+      <p className={styles.cashHandoffLine}>
+        Данные о сдаче требуют проверки Direct.
+      </p>
+    );
   // Канонический waiting summary — тот же, что и в ONLINE StagePanel. Не заменяет
   // cash handoff card: показывается дополнительным верхним блоком только пока
   // заказ реально готовится (status WAITING); после READY — null.
@@ -2013,10 +2076,11 @@ function DriverCashHandoffBlock({
   } else if (stage === "GO_TO_CUSTOMER") {
     card = (
       <StageCard title="Доставьте заказ клиенту">
-        {/* Справочно: сколько предстоит получить. Действия получения тут нет. */}
+        {/* Справочно: сколько предстоит получить и подготовить сдачу. */}
         <p className={styles.cashHandoffLine}>
           Получить от клиента: {customerAmount}
         </p>
+        {changeLine}
         <MainButton
           label="Я подъезжаю"
           pending={pending}
@@ -2030,6 +2094,7 @@ function DriverCashHandoffBlock({
         title="Получите оплату и передайте заказ"
         hint={`Получите от клиента ${customerAmount} наличными.`}
       >
+        {changeLine}
         <button
           type="button"
           ref={collectTriggerRef}

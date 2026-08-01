@@ -6,12 +6,14 @@ import { useRouter } from "next/navigation";
 import { Gift } from "lucide-react";
 
 import { ClientAddressPicker } from "@/components/client/client-address-picker";
+import { parseMoneyInput } from "@/components/menu/dish-builder-form";
 import { REPEAT_NOTICE_KEY } from "@/components/order-flow/client-order-actions";
 import { RestaurantAvailabilityBadge } from "@/components/order-flow/restaurant-availability-badge";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
 import { useMutationGuard } from "@/components/util/use-mutation-guard";
 import { useNowMs } from "@/components/util/use-now";
 import { usePrototype } from "@/prototype/prototype-provider";
+import type { CashTenderIntent, PaymentMethod } from "@/prototype/models";
 import {
   calculateCartPricing,
   formatMoney,
@@ -37,6 +39,8 @@ export default function ClientCartPage() {
     setFulfillmentChoice: setFulfillmentChoiceAck,
     updateAddress: updateAddressAck,
     updateCustomer: updateCustomerAck,
+    setPaymentMethod: setPaymentMethodAck,
+    setCashTenderIntent: setCashTenderIntentAck,
     createOrder,
   } = usePrototype();
   // Исправление 5.7: общий баннер ошибок мутаций корзины. Значения на странице
@@ -55,6 +59,11 @@ export default function ClientCartPage() {
     runCartMutation(() => updateAddressAck(...args));
   const updateCustomer = (...args: Parameters<typeof updateCustomerAck>) =>
     runCartMutation(() => updateCustomerAck(...args));
+  const setPaymentMethod = (...args: Parameters<typeof setPaymentMethodAck>) =>
+    runCartMutation(() => setPaymentMethodAck(...args));
+  const setCashTenderIntent = (
+    ...args: Parameters<typeof setCashTenderIntentAck>
+  ) => runCartMutation(() => setCashTenderIntentAck(...args));
   const nowMs = useNowMs();
   const [submitError, setSubmitError] = useState("");
   const [addressError, setAddressError] = useState("");
@@ -86,6 +95,13 @@ export default function ClientCartPage() {
   const isDelivery = !isPickup;
   const deliveryMode = pricing.deliveryMode;
   const isRestaurantDelivery = deliveryMode === "RESTAURANT_DELIVERY";
+  // Наличные PLATFORM_DRIVER (v31) доступны в оформлении только при включённом
+  // флаге наличных (DEC-094/097/114 — иначе CASH скрыт из UI и заблокирован).
+  const cashCheckoutAvailable =
+    state.platformSettings.platformDriverCashEnabled &&
+    deliveryMode === "PLATFORM_DRIVER";
+  const isCashSelected =
+    cashCheckoutAvailable && state.cart.paymentMethod === "CASH";
   const providerLabel = deliveryMode
     ? getDeliveryModeProviderLabel(deliveryMode)
     : null;
@@ -110,7 +126,10 @@ export default function ClientCartPage() {
     customerNameIsValid &&
     customerPhoneIsValid &&
     itemViews.length > 0 &&
-    state.cart.paymentMethod === "ONLINE" &&
+    // Оплата: ONLINE всегда; CASH — только когда наличные доступны и клиент явно
+    // выбрал наличное намерение (сдачу). Финальная проверка сумм — в домене.
+    (state.cart.paymentMethod === "ONLINE" ||
+      (isCashSelected && state.cart.cashTenderIntent !== null)) &&
     canAcceptOrders &&
     !hasUnavailableItem &&
     (isPickup ? pricing.customerTotalCents !== null : true);
@@ -473,6 +492,15 @@ export default function ClientCartPage() {
               <p className={flowStyles.compactPayment}>
                 Оплата наличными курьеру ресторана
               </p>
+            ) : cashCheckoutAvailable ? (
+              <CheckoutPaymentChoice
+                selected={state.cart.paymentMethod}
+                onSelect={(method) => void setPaymentMethod(method)}
+                isCashSelected={isCashSelected}
+                intent={state.cart.cashTenderIntent}
+                customerTotalCents={pricing.customerTotalCents}
+                onIntentChange={(intent) => void setCashTenderIntent(intent)}
+              />
             ) : (
               <p className={flowStyles.compactPayment}>Оплата онлайн</p>
             )}
@@ -631,5 +659,145 @@ export default function ClientCartPage() {
         </aside>
       </div>
     </form>
+  );
+}
+
+/**
+ * Выбор способа оплаты и наличного намерения (сдачи) для CASH PLATFORM_DRIVER
+ * (v31, §5). Показывается только когда наличные доступны. Ввод суммы для сдачи
+ * разбирается существующим parseMoneyInput в целые центы (без floating-point для
+ * authoritative расчёта); authoritative changeDueCents создаёт domain builder при
+ * создании заказа. Пока сумма невалидна или не больше итога — наличное намерение
+ * очищается (null), поэтому кнопка отправки остаётся заблокированной.
+ */
+function CheckoutPaymentChoice({
+  selected,
+  onSelect,
+  isCashSelected,
+  intent,
+  customerTotalCents,
+  onIntentChange,
+}: {
+  selected: PaymentMethod;
+  onSelect: (method: PaymentMethod) => void;
+  isCashSelected: boolean;
+  intent: CashTenderIntent;
+  customerTotalCents: number | null;
+  onIntentChange: (intent: CashTenderIntent) => void;
+}) {
+  const [tenderMode, setTenderMode] = useState<"EXACT" | "CHANGE_FROM" | null>(
+    intent?.mode ?? null,
+  );
+  const [changeAmount, setChangeAmount] = useState("");
+  const [tenderError, setTenderError] = useState("");
+
+  const commitChangeFrom = (raw: string) => {
+    setChangeAmount(raw);
+    setTenderMode("CHANGE_FROM");
+    const parsed = parseMoneyInput(raw, {
+      required: true,
+      allowZero: false,
+      label: "сумму",
+    });
+    if (!parsed.ok || parsed.cents === null) {
+      setTenderError(parsed.ok ? "Укажите сумму." : parsed.error);
+      onIntentChange(null);
+      return;
+    }
+    if (customerTotalCents !== null && parsed.cents <= customerTotalCents) {
+      setTenderError("Сумма должна быть больше суммы заказа.");
+      onIntentChange(null);
+      return;
+    }
+    setTenderError("");
+    onIntentChange({ mode: "CHANGE_FROM", tenderCents: parsed.cents });
+  };
+
+  const selectExact = () => {
+    setTenderMode("EXACT");
+    setChangeAmount("");
+    setTenderError("");
+    onIntentChange({ mode: "EXACT" });
+  };
+
+  const changePreviewCents =
+    intent?.mode === "CHANGE_FROM" && customerTotalCents !== null
+      ? intent.tenderCents - customerTotalCents
+      : null;
+
+  return (
+    <div>
+      <fieldset
+        className={flowStyles.fulfillmentOptionsCompact}
+        aria-label="Способ оплаты"
+      >
+        <label className={flowStyles.fulfillmentOptionCompact}>
+          <input
+            type="radio"
+            name="checkout-payment-method"
+            checked={selected === "ONLINE"}
+            onChange={() => onSelect("ONLINE")}
+          />
+          <span>Онлайн</span>
+        </label>
+        <label className={flowStyles.fulfillmentOptionCompact}>
+          <input
+            type="radio"
+            name="checkout-payment-method"
+            checked={selected === "CASH"}
+            onChange={() => onSelect("CASH")}
+          />
+          <span>Наличными</span>
+        </label>
+      </fieldset>
+
+      {isCashSelected ? (
+        <div className={flowStyles.fieldGrid}>
+          <p className={flowStyles.summaryHint}>Как вы оплатите наличными?</p>
+          <label className={flowStyles.fulfillmentOptionCompact}>
+            <input
+              type="radio"
+              name="checkout-cash-tender"
+              checked={tenderMode === "EXACT"}
+              onChange={selectExact}
+            />
+            <span>Без сдачи</span>
+          </label>
+          <label className={flowStyles.fulfillmentOptionCompact}>
+            <input
+              type="radio"
+              name="checkout-cash-tender"
+              checked={tenderMode === "CHANGE_FROM"}
+              onChange={() => commitChangeFrom(changeAmount)}
+            />
+            <span>Нужна сдача с суммы</span>
+          </label>
+          {tenderMode === "CHANGE_FROM" ? (
+            <label className={flowStyles.field}>
+              <span>С какой суммы нужна сдача</span>
+              <input
+                inputMode="decimal"
+                value={changeAmount}
+                onChange={(event) => commitChangeFrom(event.target.value)}
+                placeholder="Например: 20.00"
+              />
+            </label>
+          ) : null}
+          {customerTotalCents !== null ? (
+            <p className={flowStyles.summaryHint}>
+              Сумма заказа: {formatMoney(customerTotalCents)}
+              {changePreviewCents !== null && changePreviewCents > 0
+                ? ` · Сдача: ${formatMoney(changePreviewCents)}`
+                : ""}
+            </p>
+          ) : null}
+          {tenderError ? (
+            <div className={flowStyles.warningNotice} role="alert">
+              {tenderError}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
