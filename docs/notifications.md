@@ -240,18 +240,29 @@ service worker получает сообщение от активного кл�
 - **Приватность.** До принятия водитель видит нейтральный текст без имени,
   телефона, адреса, дома и комментария. Кухня видит только public number, без
   телефона и полного адреса.
-- **Один раз на intent, дедуп между вкладками, fail-closed.** Отдельный от state
-  delivery-ledger (scoped по audience — водитель по `driverId`, кухня по
-  `restaurantId` + workspace role, bounded, детерминированный prune) обновляется
-  строго внутри эксклюзивного Web Lock. Fallback без сериализации запрещён: если
-  Web Lock недоступен или запрос лока завершился ошибкой — критическая секция
-  доставки не выполняется и уведомление не показывается. Delivered key
-  записывается только после подтверждённого `showNotification`; если запись
-  ledger после показа не удалась — показанный tag закрывается, intent помещается
-  в session-quarantine (повторно не показывается) и runtime переходит в
-  `DEGRADED`. Одинаковое уведомление не дублируется из каждой вкладки. Устаревшее
-  уведомление закрывается по tag, когда сущность вышла из очереди (offer
-  принят/отклонён/истёк/отменён; заказ начат/отменён/завершён/вне окна свежести).
+- **Exactly-once между вкладками: durable two-phase ledger.** Delivery-ledger —
+  browser-wide (localStorage + Web Lock), записи `{ key, tag, state }` со
+  значениями `PENDING`/`DELIVERED`; scoped по audience (водитель по `driverId`,
+  кухня по `restaurantId` + workspace role), bounded, детерминированный prune, вне
+  `PrototypeState`. Строго внутри эксклюзивного Web Lock на каждый intent: если
+  запись с таким key уже `PENDING` или `DELIVERED` (в любой вкладке) — не
+  показывать; до показа durably пишется `PENDING` (при неудаче — 0 показов,
+  `DEGRADED`); показ идёт через принятый worker SHOW-ACK; после ACK `PENDING`
+  переводится в `DELIVERED`. `PENDING` существует ДО появления OS-уведомления,
+  поэтому вторая вкладка видит его и не показывает повторно (per-tab quarantine —
+  только дополнительный слой). Fallback без сериализации запрещён (нет лока →
+  показа нет). Старый `string[]`-ledger мигрирует в `DELIVERED`-записи без потери
+  дедупа; повреждённые записи — fail-closed. Устаревшее уведомление закрывается по
+  tag; `DELIVERED`-запись удаляется только после подтверждённого CLOSE-ACK, а
+  `stale PENDING` никогда автоматически не считается показанным и не удаляется без
+  доказанного безопасного восстановления.
+- **Ошибки доставки fail-closed.** Не удалось записать `PENDING` → показа нет,
+  `DEGRADED`, следующие intents не обрабатываются. Показ без ACK → `PENDING`
+  удаляется для повтора; если удаление не удалось — `PENDING` остаётся как
+  fail-closed блок в любой вкладке. Успешный SHOW-ACK, но неудачная запись
+  `DELIVERED` → durable `PENDING` не удаляется, показанный tag закрывается с
+  ожиданием CLOSE-ACK (результат close важен, не `void`), intent остаётся
+  заблокированным во всех вкладках, `DEGRADED`.
 - **Capability учитывает storage/lock readiness.** `ENABLED` возможен только
   когда одновременно готовы Notification API, permission, durable preference,
   service worker, preference storage, ledger storage и cross-tab lock и нет

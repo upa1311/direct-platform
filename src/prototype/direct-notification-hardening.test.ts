@@ -3,21 +3,26 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  normalizeLedgerEntries,
   notificationAudienceScope,
   reconcileNotificationDelivery,
   resolveDirectNotificationCapability,
+  upsertLedgerEntry,
+  NOTIFICATION_LEDGER_MAX,
   type BrowserStorageReadResult,
   type DirectSystemNotificationIntent,
   type NotificationDeliveryPorts,
+  type NotificationLedgerEntry,
   type NotificationLockResult,
 } from "./direct-notifications.ts";
 
 /**
- * Corrective microbatch: harden notification dedupe & capability. These tests
- * drive the pure fail-closed reconciler with controllable fake lock/storage
- * adapters (including concurrent two-tab runs), and the extended capability
- * model. No unsynchronised fallback and no silent storage failure may leak a
- * duplicate or a false ENABLED.
+ * Durable two-phase (PENDING → DELIVERED) delivery ledger, driven through the
+ * pure reconciler with a fake async worker (SHOW/CLOSE ACK booleans), a SHARED
+ * entry ledger and a serializing lock — including concurrent two-tab runs. Order
+ * of operations (write:PENDING → show → ack → write:DELIVERED) and every failure
+ * path are asserted; the ACK protocol itself is tested in
+ * direct-notification-ack.test.ts and is intentionally not re-implemented here.
  */
 
 const DRIVER = "driver-1";
@@ -37,26 +42,29 @@ function intent(id: string): DirectSystemNotificationIntent {
   };
 }
 
-/** Shared fake ledger store simulating one browser profile's localStorage. */
+/** Shared fake entry-ledger simulating one browser profile's localStorage. */
 class FakeLedgerStore {
-  private keys: string[] = [];
+  entries: NotificationLedgerEntry[] = [];
   readMode: "ok" | "unavailable" | "invalid" = "ok";
-  writeOk = true;
+  private writeQueue: boolean[] | null = null;
   writes = 0;
 
-  read(): BrowserStorageReadResult<string[]> {
+  setWriteResults(results: boolean[]): void {
+    this.writeQueue = [...results];
+  }
+  read(): BrowserStorageReadResult<NotificationLedgerEntry[]> {
     if (this.readMode === "unavailable") return { ok: false, error: "UNAVAILABLE" };
     if (this.readMode === "invalid") return { ok: false, error: "INVALID_DATA" };
-    return { ok: true, value: [...this.keys] };
+    return { ok: true, value: this.entries.map((e) => ({ ...e })) };
   }
-  write(keys: string[]): boolean {
+  write(next: NotificationLedgerEntry[]): boolean {
     this.writes += 1;
-    if (!this.writeOk) return false;
-    this.keys = [...keys];
-    return true;
+    const ok = this.writeQueue ? this.writeQueue.shift() ?? true : true;
+    if (ok) this.entries = next.map((e) => ({ ...e }));
+    return ok;
   }
-  snapshot(): string[] {
-    return [...this.keys];
+  states(): string[] {
+    return this.entries.map((e) => `${e.key}:${e.state}`);
   }
 }
 
@@ -64,7 +72,6 @@ class FakeLedgerStore {
 class FakeLock {
   available = true;
   private chain: Promise<void> = Promise.resolve();
-
   async run<T>(fn: () => Promise<T>): Promise<NotificationLockResult<T>> {
     if (!this.available) return { ok: false, reason: "LOCK_UNAVAILABLE" };
     let release = () => {};
@@ -74,41 +81,337 @@ class FakeLock {
     });
     await previous;
     try {
-      const value = await fn();
-      return { ok: true, value };
+      return { ok: true, value: await fn() };
     } finally {
       release();
     }
   }
 }
 
+interface Counters {
+  shown: number;
+  closed: string[];
+  sequence: string[];
+}
+const newCounters = (): Counters => ({ shown: 0, closed: [], sequence: [] });
+
 function ports(
   store: FakeLedgerStore,
   lock: FakeLock,
-  counters: { shown: number; closed: string[] },
-  showResult: (intent: DirectSystemNotificationIntent) => boolean = () => true,
-  closeResult: (tag: string) => boolean = () => true,
+  counters: Counters,
+  showAck: (i: DirectSystemNotificationIntent) => boolean | Promise<boolean> = () => true,
+  closeAck: (tag: string) => boolean = () => true,
 ): NotificationDeliveryPorts {
   return {
     readLedger: () => store.read(),
-    writeLedger: (keys) => store.write(keys),
-    show: async (i) => {
-      const ok = showResult(i);
-      if (ok) counters.shown += 1;
+    writeLedger: (entries) => {
+      const ok = store.write(entries);
+      counters.sequence.push(
+        `write:${entries.map((e) => e.state).join(",") || "empty"}`,
+      );
       return ok;
     },
-    // Confirmed close (ACK) by default; a stale key is dropped only on a true ACK.
+    show: async (i) => {
+      counters.sequence.push("show");
+      const ack = await showAck(i);
+      counters.sequence.push(ack ? "ack" : "nack");
+      if (ack) counters.shown += 1;
+      return ack;
+    },
     close: async (tag) => {
       counters.closed.push(tag);
-      return closeResult(tag);
+      return closeAck(tag);
     },
     runExclusive: (fn) => lock.run(fn),
   };
 }
 
-// --- 1-2: capability degrades on storage failure (never false ENABLED) ---------
+// --- 1-3: migration / empty / corrupt ------------------------------------------
 
-test("1-2: storage/lock readiness gate ENABLED; any gap → DEGRADED", () => {
+test("1: legacy string[] ledger migrates to DELIVERED entries", () => {
+  assert.deepEqual(normalizeLedgerEntries(["driver-offer:a", "driver-offer:b"]), [
+    { key: "driver-offer:a", tag: "driver-offer:a", state: "DELIVERED" },
+    { key: "driver-offer:b", tag: "driver-offer:b", state: "DELIVERED" },
+  ]);
+  // Mixed structured + legacy + junk: keep valid, drop junk, de-dupe by key.
+  assert.deepEqual(
+    normalizeLedgerEntries([
+      "k1",
+      { key: "k2", tag: "t2", state: "PENDING" },
+      { key: "k1", tag: "k1", state: "DELIVERED" },
+      { nope: true },
+      42,
+    ]),
+    [
+      { key: "k1", tag: "k1", state: "DELIVERED" },
+      { key: "k2", tag: "t2", state: "PENDING" },
+    ],
+  );
+});
+
+test("2-3: empty ledger reads as []; corrupt ledger degrades (not empty)", async () => {
+  assert.deepEqual(normalizeLedgerEntries([]), []);
+  for (const mode of ["unavailable", "invalid"] as const) {
+    const store = new FakeLedgerStore();
+    store.readMode = mode;
+    const counters = newCounters();
+    const outcome = await reconcileNotificationDelivery(
+      [intent("a")],
+      new Set(),
+      ports(store, new FakeLock(), counters),
+    );
+    assert.equal(outcome.status, "DEGRADED");
+    assert.equal(counters.shown, 0);
+  }
+});
+
+// --- 4-8: PENDING → SHOW → ACK → DELIVERED ordering -----------------------------
+
+test("4/6/7/8: exact order write:PENDING → show → ack → write:DELIVERED", async () => {
+  const store = new FakeLedgerStore();
+  const counters = newCounters();
+  let statesAtShow: string[] = [];
+  const outcome = await reconcileNotificationDelivery(
+    [intent("a")],
+    new Set(),
+    ports(store, new FakeLock(), counters, () => {
+      statesAtShow = store.states(); // PENDING is durable before show returns
+      return true;
+    }),
+  );
+  assert.equal(outcome.status, "OK");
+  assert.deepEqual(counters.sequence, [
+    "write:PENDING",
+    "show",
+    "ack",
+    "write:DELIVERED",
+  ]);
+  assert.deepEqual(statesAtShow, ["driver-offer:a:PENDING"]);
+  assert.deepEqual(store.states(), ["driver-offer:a:DELIVERED"]);
+});
+
+test("5: a failed PENDING write shows nothing", async () => {
+  const store = new FakeLedgerStore();
+  store.setWriteResults([false]); // PENDING write fails
+  const counters = newCounters();
+  const outcome = await reconcileNotificationDelivery(
+    [intent("a")],
+    new Set(),
+    ports(store, new FakeLock(), counters),
+  );
+  assert.equal(counters.shown, 0);
+  assert.equal(outcome.status, "DEGRADED");
+  assert.deepEqual(store.states(), []);
+  assert.deepEqual(counters.sequence, ["write:PENDING"]); // no show attempted
+});
+
+test("8b: DELIVERED is never written before an ACK", async () => {
+  const store = new FakeLedgerStore();
+  const outcome = await reconcileNotificationDelivery(
+    [intent("a")],
+    new Set(),
+    ports(store, new FakeLock(), newCounters(), () => false),
+  );
+  assert.equal(outcome.status, "DEGRADED");
+  assert.ok(!store.states().includes("driver-offer:a:DELIVERED"));
+});
+
+// --- 9-10: ACK failure removes PENDING; failed cleanup keeps it -----------------
+
+test("9: no ACK with a successful cleanup removes PENDING (retryable)", async () => {
+  const store = new FakeLedgerStore();
+  const outcome = await reconcileNotificationDelivery(
+    [intent("a")],
+    new Set(),
+    ports(store, new FakeLock(), newCounters(), () => false),
+  );
+  assert.equal(outcome.status, "DEGRADED");
+  assert.deepEqual(store.states(), []); // PENDING cleaned up → retryable
+});
+
+test("10: no ACK with a failed cleanup keeps PENDING as a fail-closed block", async () => {
+  const store = new FakeLedgerStore();
+  store.setWriteResults([true, false]); // PENDING ok, cleanup fails
+  const quarantine = new Set<string>();
+  const outcome = await reconcileNotificationDelivery(
+    [intent("a")],
+    quarantine,
+    ports(store, new FakeLock(), newCounters(), () => false),
+  );
+  assert.equal(outcome.status, "DEGRADED");
+  assert.deepEqual(store.states(), ["driver-offer:a:PENDING"]);
+  assert.ok(quarantine.has("driver-offer:a"));
+  // A later run still sees the durable PENDING and does not re-show.
+  const c2 = newCounters();
+  await reconcileNotificationDelivery([intent("a")], new Set(), ports(store, new FakeLock(), c2));
+  assert.equal(c2.shown, 0);
+});
+
+// --- 11-15: failed final write / cross-tab exactly-once ------------------------
+
+test("11-12: failed final write keeps durable PENDING and closes the shown tag", async () => {
+  const store = new FakeLedgerStore();
+  store.setWriteResults([true, false]); // PENDING ok, DELIVERED fails
+  const q = new Set<string>();
+  const counters = newCounters();
+  const outcome = await reconcileNotificationDelivery(
+    [intent("x")],
+    q,
+    ports(store, new FakeLock(), counters),
+  );
+  assert.equal(outcome.status, "DEGRADED");
+  assert.equal(counters.shown, 1);
+  assert.deepEqual(counters.closed, ["driver-offer:x"]); // CLOSE attempted + awaited
+  assert.deepEqual(store.states(), ["driver-offer:x:PENDING"]); // durable PENDING kept
+  assert.ok(q.has("driver-offer:x"));
+});
+
+test("13/15: a second tab / reload sees durable PENDING and does not re-show", async () => {
+  const store = new FakeLedgerStore();
+  store.entries = [{ key: "driver-offer:x", tag: "driver-offer:x", state: "PENDING" }];
+  const counters = newCounters();
+  await reconcileNotificationDelivery(
+    [intent("x")],
+    new Set(),
+    ports(store, new FakeLock(), counters),
+  );
+  assert.equal(counters.shown, 0);
+});
+
+test("14: two tabs with a failed final write show at most once", async () => {
+  const store = new FakeLedgerStore();
+  store.setWriteResults([true, false]); // first tab: PENDING ok, DELIVERED fails
+  const lock = new FakeLock();
+  const c1 = newCounters();
+  const c2 = newCounters();
+  await Promise.all([
+    reconcileNotificationDelivery([intent("x")], new Set(), ports(store, lock, c1)),
+    reconcileNotificationDelivery([intent("x")], new Set(), ports(store, lock, c2)),
+  ]);
+  assert.equal(c1.shown + c2.shown, 1);
+  assert.deepEqual(store.states(), ["driver-offer:x:PENDING"]);
+});
+
+// --- 16, 23: dedupe of DELIVERED and same-role two-tab -------------------------
+
+test("16/23: a DELIVERED key is never re-shown; two same-role tabs show once", async () => {
+  const store = new FakeLedgerStore();
+  const lock = new FakeLock();
+  const c1 = newCounters();
+  const c2 = newCounters();
+  await Promise.all([
+    reconcileNotificationDelivery([intent("x")], new Set(), ports(store, lock, c1)),
+    reconcileNotificationDelivery([intent("x")], new Set(), ports(store, lock, c2)),
+  ]);
+  assert.equal(c1.shown + c2.shown, 1);
+  assert.deepEqual(store.states(), ["driver-offer:x:DELIVERED"]);
+  // A third pass never re-shows the DELIVERED key.
+  const c3 = newCounters();
+  await reconcileNotificationDelivery([intent("x")], new Set(), ports(store, new FakeLock(), c3));
+  assert.equal(c3.shown, 0);
+});
+
+// --- 17-18: stale DELIVERED removed only after a confirmed CLOSE_ACK -----------
+
+test("17: a stale DELIVERED entry is removed only after a confirmed CLOSE_ACK", async () => {
+  const store = new FakeLedgerStore();
+  store.entries = [{ key: "driver-offer:a", tag: "driver-offer:a", state: "DELIVERED" }];
+  const counters = newCounters();
+  const outcome = await reconcileNotificationDelivery(
+    [], // no active intents → stale
+    new Set(),
+    ports(store, new FakeLock(), counters, () => true, () => true),
+  );
+  assert.equal(outcome.status, "OK");
+  assert.deepEqual(counters.closed, ["driver-offer:a"]);
+  assert.deepEqual(store.states(), []); // ACKed → removed
+});
+
+test("18: a failed CLOSE_ACK keeps the DELIVERED entry (retry later)", async () => {
+  const store = new FakeLedgerStore();
+  store.entries = [{ key: "driver-offer:a", tag: "driver-offer:a", state: "DELIVERED" }];
+  const counters = newCounters();
+  const outcome = await reconcileNotificationDelivery(
+    [],
+    new Set(),
+    ports(store, new FakeLock(), counters, () => true, () => false), // close not ACKed
+  );
+  assert.equal(outcome.status, "OK");
+  assert.deepEqual(counters.closed, ["driver-offer:a"]);
+  assert.deepEqual(store.states(), ["driver-offer:a:DELIVERED"]); // retained
+});
+
+// --- 19: bounded + deterministic prune -----------------------------------------
+
+test("19: ledger stays bounded (migration + upsert prune oldest)", () => {
+  const raw = Array.from({ length: NOTIFICATION_LEDGER_MAX + 5 }, (_, i) => `k${i}`);
+  const migrated = normalizeLedgerEntries(raw);
+  assert.equal(migrated.length, NOTIFICATION_LEDGER_MAX);
+  assert.equal(migrated[0].key, "k5");
+  let entries: NotificationLedgerEntry[] = [];
+  for (let i = 0; i < NOTIFICATION_LEDGER_MAX + 3; i += 1) {
+    entries = upsertLedgerEntry(entries, { key: `u${i}`, tag: `u${i}`, state: "DELIVERED" });
+  }
+  assert.equal(entries.length, NOTIFICATION_LEDGER_MAX);
+  assert.equal(entries[0].key, "u3");
+});
+
+// --- 20-22: role-scoped tags + ledger isolation --------------------------------
+
+function kitchenIntent(role: "COMBINED" | "OPERATOR"): DirectSystemNotificationIntent {
+  const tag = `kitchen-actionable:${REST}:${role}:e1`;
+  return {
+    key: tag,
+    tag,
+    audience: { type: "KITCHEN", restaurantId: REST, workspaceRole: role },
+    kind: "KITCHEN_NEW_ACTIONABLE_ORDER",
+    entityKind: "KITCHEN_ORDER",
+    entityId: "o1",
+    title: "Новый заказ для кухни",
+    body: "Заказ R-1 готов к работе.",
+    targetUrl: role === "OPERATOR" ? "/restaurant/operator" : "/restaurant/kitchen",
+  };
+}
+
+test("20-22: COMBINED and OPERATOR use different tags/scopes and independent ledgers", async () => {
+  assert.notEqual(kitchenIntent("COMBINED").tag, kitchenIntent("OPERATOR").tag);
+  assert.notEqual(
+    notificationAudienceScope({ type: "KITCHEN", restaurantId: REST, workspaceRole: "COMBINED" }),
+    notificationAudienceScope({ type: "KITCHEN", restaurantId: REST, workspaceRole: "OPERATOR" }),
+  );
+  const combinedStore = new FakeLedgerStore();
+  const operatorStore = new FakeLedgerStore();
+  const cc = newCounters();
+  const oc = newCounters();
+  await reconcileNotificationDelivery([kitchenIntent("COMBINED")], new Set(), ports(combinedStore, new FakeLock(), cc));
+  // OPERATOR reconciles its own empty ledger with only its own intent active: it
+  // neither absorbs nor closes COMBINED's entry.
+  await reconcileNotificationDelivery([kitchenIntent("OPERATOR")], new Set(), ports(operatorStore, new FakeLock(), oc));
+  assert.deepEqual(combinedStore.states(), [`kitchen-actionable:${REST}:COMBINED:e1:DELIVERED`]);
+  assert.deepEqual(operatorStore.states(), [`kitchen-actionable:${REST}:OPERATOR:e1:DELIVERED`]);
+  assert.deepEqual(cc.closed, []);
+  assert.deepEqual(oc.closed, []);
+});
+
+// --- lock fail-closed (no unsynchronised fallback) -----------------------------
+
+test("lock: missing/failed lock runs no critical section and degrades", async () => {
+  const store = new FakeLedgerStore();
+  for (const reason of ["LOCK_UNAVAILABLE", "LOCK_FAILED"] as const) {
+    const counters = newCounters();
+    const outcome = await reconcileNotificationDelivery([intent("a")], new Set(), {
+      ...ports(store, new FakeLock(), counters),
+      runExclusive: async () => ({ ok: false, reason }),
+    });
+    assert.equal(outcome.status, "DEGRADED");
+    assert.equal(counters.shown, 0);
+  }
+  assert.deepEqual(store.states(), []);
+});
+
+// --- capability still fail-closed ----------------------------------------------
+
+test("capability: ENABLED only when every readiness input holds", () => {
   const base = {
     supported: true,
     permission: "granted" as const,
@@ -120,254 +423,36 @@ test("1-2: storage/lock readiness gate ENABLED; any gap → DEGRADED", () => {
     deliveryFailed: false,
   };
   assert.equal(resolveDirectNotificationCapability(base).status, "ENABLED");
-  assert.equal(
-    resolveDirectNotificationCapability({ ...base, preferenceStorageReady: false }).status,
-    "DEGRADED",
-  );
-  assert.equal(
-    resolveDirectNotificationCapability({ ...base, ledgerStorageReady: false }).status,
-    "DEGRADED",
-  );
-  assert.equal(
-    resolveDirectNotificationCapability({ ...base, lockReady: false }).status,
-    "DEGRADED",
-  );
-  assert.equal(
-    resolveDirectNotificationCapability({ ...base, deliveryFailed: true }).status,
-    "DEGRADED",
-  );
-  // A disabled preference is still DISABLED, not ENABLED.
+  for (const gap of [
+    { ledgerStorageReady: false },
+    { preferenceStorageReady: false },
+    { lockReady: false },
+    { deliveryFailed: true },
+    { workerReady: false },
+  ]) {
+    assert.equal(
+      resolveDirectNotificationCapability({ ...base, ...gap }).status,
+      "DEGRADED",
+      JSON.stringify(gap),
+    );
+  }
   assert.equal(
     resolveDirectNotificationCapability({ ...base, preferenceEnabled: false }).status,
     "DISABLED",
   );
 });
 
-// --- 3: ledger read failure is not an empty ledger -----------------------------
+// --- 24-32 (source): unchanged accepted areas ----------------------------------
 
-test("3: unreadable ledger degrades and shows nothing (not treated as empty)", async () => {
-  const store = new FakeLedgerStore();
-  store.readMode = "unavailable";
-  const lock = new FakeLock();
-  const counters = { shown: 0, closed: [] as string[] };
-  const outcome = await reconcileNotificationDelivery(
-    [intent("a")],
-    new Set(),
-    ports(store, lock, counters),
-  );
-  assert.equal(outcome.status, "DEGRADED");
-  assert.equal(counters.shown, 0);
-  const invalid = new FakeLedgerStore();
-  invalid.readMode = "invalid";
-  const c2 = { shown: 0, closed: [] as string[] };
-  const o2 = await reconcileNotificationDelivery(
-    [intent("a")],
-    new Set(),
-    ports(invalid, new FakeLock(), c2),
-  );
-  assert.equal(o2.status, "DEGRADED");
-  assert.equal(c2.shown, 0);
-});
-
-// --- 4-6: ledger write failure after show → quarantine, stop, no repeat --------
-
-test("4-6: write failure after show quarantines, stops, and never re-shows", async () => {
-  const store = new FakeLedgerStore();
-  store.writeOk = false;
-  const quarantine = new Set<string>();
-  const counters = { shown: 0, closed: [] as string[] };
-  const first = await reconcileNotificationDelivery(
-    [intent("a"), intent("b")],
-    quarantine,
-    ports(store, new FakeLock(), counters),
-  );
-  assert.equal(first.status, "DEGRADED");
-  // Only the first intent was shown; the second was NOT processed after failure.
-  assert.equal(counters.shown, 1);
-  assert.deepEqual(counters.closed, ["driver-offer:a"]); // just-shown tag closed
-  assert.ok(quarantine.has("driver-offer:a"));
-  // Next reconcile (even if storage still failing): the quarantined intent is
-  // never re-shown — no infinite 3s spam.
-  const c2 = { shown: 0, closed: [] as string[] };
-  const second = await reconcileNotificationDelivery(
-    [intent("a")],
-    quarantine,
-    ports(store, new FakeLock(), c2),
-  );
-  assert.equal(c2.shown, 0);
-  assert.equal(second.status, "OK");
-});
-
-// --- 7-9: no lock → no delivery, DEGRADED --------------------------------------
-
-test("7-9: missing or failed lock runs no critical section and degrades", async () => {
-  const store = new FakeLedgerStore();
-  const counters = { shown: 0, closed: [] as string[] };
-  const unavailable = await reconcileNotificationDelivery([intent("a")], new Set(), {
-    ...ports(store, new FakeLock(), counters),
-    runExclusive: async () => ({ ok: false, reason: "LOCK_UNAVAILABLE" }),
-  });
-  assert.equal(unavailable.status, "DEGRADED");
-  assert.equal(counters.shown, 0);
-  const c2 = { shown: 0, closed: [] as string[] };
-  const failed = await reconcileNotificationDelivery([intent("a")], new Set(), {
-    ...ports(store, new FakeLock(), c2),
-    runExclusive: async () => ({ ok: false, reason: "LOCK_FAILED" }),
-  });
-  assert.equal(failed.status, "DEGRADED");
-  assert.equal(c2.shown, 0);
-  assert.deepEqual(store.snapshot(), []); // nothing persisted
-});
-
-// --- 10-11: concurrency — one show with lock, zero without ---------------------
-
-test("10: two concurrent tabs with a working lock show exactly one", async () => {
-  const store = new FakeLedgerStore();
-  const lock = new FakeLock();
-  const c1 = { shown: 0, closed: [] as string[] };
-  const c2 = { shown: 0, closed: [] as string[] };
-  await Promise.all([
-    reconcileNotificationDelivery([intent("x")], new Set(), ports(store, lock, c1)),
-    reconcileNotificationDelivery([intent("x")], new Set(), ports(store, lock, c2)),
-  ]);
-  assert.equal(c1.shown + c2.shown, 1);
-  assert.deepEqual(store.snapshot(), ["driver-offer:x"]);
-});
-
-test("11: two tabs with no lock available show zero (not two)", async () => {
-  const store = new FakeLedgerStore();
-  const lock = new FakeLock();
-  lock.available = false;
-  const c1 = { shown: 0, closed: [] as string[] };
-  const c2 = { shown: 0, closed: [] as string[] };
-  const outcomes = await Promise.all([
-    reconcileNotificationDelivery([intent("x")], new Set(), ports(store, lock, c1)),
-    reconcileNotificationDelivery([intent("x")], new Set(), ports(store, lock, c2)),
-  ]);
-  assert.equal(c1.shown + c2.shown, 0);
-  assert.ok(outcomes.every((o) => o.status === "DEGRADED"));
-});
-
-// --- 12-15: role-scoped ledgers ------------------------------------------------
-
-test("12-15: driver by id; kitchen by restaurant+role; roles never share ledgers", () => {
-  assert.equal(
-    notificationAudienceScope({ type: "DRIVER", driverId: DRIVER }),
-    `driver:${DRIVER}`,
-  );
-  const combined = notificationAudienceScope({
-    type: "KITCHEN",
-    restaurantId: REST,
-    workspaceRole: "COMBINED",
-  });
-  const operator = notificationAudienceScope({
-    type: "KITCHEN",
-    restaurantId: REST,
-    workspaceRole: "OPERATOR",
-  });
-  const kitchen = notificationAudienceScope({
-    type: "KITCHEN",
-    restaurantId: REST,
-    workspaceRole: "KITCHEN",
-  });
-  assert.equal(combined, `kitchen:${REST}:COMBINED`);
-  assert.equal(operator, `kitchen:${REST}:OPERATOR`);
-  // All three roles are distinct scopes → separate ledgers, no cross-absorb.
-  assert.equal(new Set([combined, operator, kitchen]).size, 3);
-});
-
-test("14-15: COMBINED and OPERATOR reconcile on independent ledgers", async () => {
-  // Same restaurant, two roles, two separate stores (distinct scopes).
-  const combinedStore = new FakeLedgerStore();
-  const operatorStore = new FakeLedgerStore();
-  const cc = { shown: 0, closed: [] as string[] };
-  const oc = { shown: 0, closed: [] as string[] };
-  const kInt = (role: string): DirectSystemNotificationIntent => ({
-    key: `kitchen-actionable:${REST}:e1`,
-    tag: `kitchen-actionable:${REST}:e1`,
-    audience: { type: "KITCHEN", restaurantId: REST, workspaceRole: role as "COMBINED" },
-    kind: "KITCHEN_NEW_ACTIONABLE_ORDER",
-    entityKind: "KITCHEN_ORDER",
-    entityId: "o1",
-    title: "Новый заказ для кухни",
-    body: "Заказ R-1 готов к работе.",
-    targetUrl: "/restaurant/kitchen",
-  });
-  // COMBINED delivers; its store records the key.
-  await reconcileNotificationDelivery([kInt("COMBINED")], new Set(), ports(combinedStore, new FakeLock(), cc));
-  // OPERATOR has an EMPTY, independent ledger → it does NOT treat COMBINED's key
-  // as delivered, and does NOT close it as stale on the combined ledger.
-  await reconcileNotificationDelivery([], new Set(), ports(operatorStore, new FakeLock(), oc));
-  assert.deepEqual(combinedStore.snapshot(), [`kitchen-actionable:${REST}:e1`]);
-  assert.deepEqual(operatorStore.snapshot(), []);
-  assert.deepEqual(oc.closed, []); // operator did not close combined's tag
-});
-
-// --- 18: recovery — a new intent is delivered exactly once ---------------------
-
-test("18: after readiness recovers, a new intent is delivered once", async () => {
-  const store = new FakeLedgerStore();
-  const quarantine = new Set<string>();
-  // Failing phase: intent A shown but write fails → quarantined.
-  store.writeOk = false;
-  const c1 = { shown: 0, closed: [] as string[] };
-  await reconcileNotificationDelivery([intent("a")], quarantine, ports(store, new FakeLock(), c1));
-  assert.ok(quarantine.has("driver-offer:a"));
-  // Recovery: storage healthy again; a NEW intent B is delivered exactly once,
-  // and the quarantined A is not re-shown.
-  store.writeOk = true;
-  const c2 = { shown: 0, closed: [] as string[] };
-  const outcome = await reconcileNotificationDelivery(
-    [intent("a"), intent("b")],
-    quarantine,
-    ports(store, new FakeLock(), c2),
-  );
-  assert.equal(outcome.status, "OK");
-  assert.equal(c2.shown, 1);
-  assert.deepEqual(store.snapshot(), ["driver-offer:b"]);
-});
-
-// --- 32-33: delivered key recorded only after a successful show ----------------
-
-test("32-33: a failed show records nothing and is retried; a success records once", async () => {
-  const store = new FakeLedgerStore();
-  const counters = { shown: 0, closed: [] as string[] };
-  // show fails → nothing persisted, retried later.
-  await reconcileNotificationDelivery(
-    [intent("a")],
-    new Set(),
-    ports(store, new FakeLock(), counters, () => false),
-  );
-  assert.equal(counters.shown, 0);
-  assert.deepEqual(store.snapshot(), []);
-  // show succeeds → persisted exactly once; a second run dedupes.
-  const c2 = { shown: 0, closed: [] as string[] };
-  await reconcileNotificationDelivery([intent("a")], new Set(), ports(store, new FakeLock(), c2));
-  const c3 = { shown: 0, closed: [] as string[] };
-  await reconcileNotificationDelivery([intent("a")], new Set(), ports(store, new FakeLock(), c3));
-  assert.equal(c2.shown, 1);
-  assert.equal(c3.shown, 0);
-  assert.deepEqual(store.snapshot(), ["driver-offer:a"]);
-});
-
-// --- 16-17, 19-22: scope/purity source guarantees ------------------------------
-
-const HOOK = readFileSync(
-  "src/components/notifications/use-direct-system-notifications.ts",
-  "utf8",
-);
-const RUNTIME = readFileSync(
-  "src/components/notifications/notification-runtime.ts",
-  "utf8",
-);
+const HOOK = readFileSync("src/components/notifications/use-direct-system-notifications.ts", "utf8");
+const RUNTIME = readFileSync("src/components/notifications/notification-runtime.ts", "utf8");
 const SW = readFileSync("public/direct-notifications-sw.js", "utf8");
+const CORE = readFileSync("src/prototype/direct-notifications.ts", "utf8");
 
-test("1/16/17: enable only turns preference on after a durable write; no sound/state writes", () => {
-  // Preference is set from the durable write result, not unconditionally.
+test("28-30 (source): enable needs a durable write; no sound/state writes; ledger migrates", () => {
   assert.ok(HOOK.includes("writeNotificationPreference(preferenceKey, true)"));
   assert.ok(HOOK.includes("setPreferenceEnabled(durable)"));
-  assert.ok(!HOOK.includes('localStorage.setItem(preferenceKey, "1")'));
-  // Degradation path never writes a sound preference or PrototypeState.
+  assert.ok(RUNTIME.includes("normalizeLedgerEntries"));
   for (const forbidden of [
     "direct-driver-offer-sound-enabled",
     "direct-kitchen-sound-enabled",
@@ -378,19 +463,11 @@ test("1/16/17: enable only turns preference on after a durable write; no sound/s
   }
 });
 
-test("7-8 (source): runtime lock has no unsynchronised fallback", () => {
-  assert.ok(RUNTIME.includes("runWithNotificationLock"));
-  assert.ok(RUNTIME.includes('reason: "LOCK_UNAVAILABLE"'));
-  assert.ok(RUNTIME.includes('reason: "LOCK_FAILED"'));
-  // The old "return fn()" fallback is gone.
-  assert.ok(!RUNTIME.includes("if (!manager) return fn()"));
-  assert.ok(!RUNTIME.includes("catch {\n    return fn();"));
-});
-
-test("20-22: service worker routes unchanged; no push/offline regressions", () => {
-  for (const route of ["/driver", "/restaurant/kitchen", "/restaurant/operator"]) {
-    assert.ok(SW.includes(route), route);
-  }
+test("31-32 (source): ACK protocol kept; no push/VAPID/backend/offline", () => {
+  // The accepted MessageChannel ACK is reused, not replaced.
+  assert.ok(RUNTIME.includes("requestWorkerAck"));
+  assert.ok(SW.includes("event.ports"));
+  assert.ok(CORE.includes("kitchen-actionable:${restaurantId}:${workspaceRole}:${evidenceId}"));
   assert.ok(!SW.includes('addEventListener("fetch"'));
   assert.ok(!SW.includes("caches."));
   for (const source of [HOOK, RUNTIME, SW]) {
@@ -398,34 +475,4 @@ test("20-22: service worker routes unchanged; no push/offline regressions", () =
       assert.ok(!source.includes(forbidden), forbidden);
     }
   }
-});
-
-// --- 23-24: CLOSE key removed only after a confirmed ACK ------------------------
-
-test("23: a stale key is dropped only after its close is ACKed", async () => {
-  const store = new FakeLedgerStore();
-  store.write(["driver-offer:a"]); // previously delivered
-  const counters = { shown: 0, closed: [] as string[] };
-  const outcome = await reconcileNotificationDelivery(
-    [], // no active intents → the delivered key is stale
-    new Set<string>(),
-    ports(store, new FakeLock(), counters, () => true, () => true),
-  );
-  assert.equal(outcome.status, "OK");
-  assert.deepEqual(counters.closed, ["driver-offer:a"]); // close attempted
-  assert.deepEqual(store.snapshot(), []); // ACKed → key removed
-});
-
-test("24: an un-ACKed close keeps the key for a later retry (fail-closed)", async () => {
-  const store = new FakeLedgerStore();
-  store.write(["driver-offer:a"]);
-  const counters = { shown: 0, closed: [] as string[] };
-  const outcome = await reconcileNotificationDelivery(
-    [],
-    new Set<string>(),
-    ports(store, new FakeLock(), counters, () => true, () => false), // close not ACKed
-  );
-  assert.equal(outcome.status, "OK");
-  assert.deepEqual(counters.closed, ["driver-offer:a"]); // close was attempted
-  assert.deepEqual(store.snapshot(), ["driver-offer:a"]); // NOT ACKed → key retained
 });

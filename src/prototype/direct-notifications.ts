@@ -146,9 +146,10 @@ export function driverOfferNotificationTag(offerId: string): string {
 
 export function kitchenOrderNotificationTag(
   restaurantId: string,
+  workspaceRole: RestaurantWorkspaceRole,
   evidenceId: string,
 ): string {
-  return `kitchen-actionable:${restaurantId}:${evidenceId}`;
+  return `kitchen-actionable:${restaurantId}:${workspaceRole}:${evidenceId}`;
 }
 
 /**
@@ -205,6 +206,7 @@ export function buildKitchenNotificationIntents(
   return getAudibleKitchenReviewOrders(state, restaurantId, nowMs).map((order) => {
     const tag = kitchenOrderNotificationTag(
       restaurantId,
+      workspaceRole,
       kitchenActionableEvidenceId(order),
     );
     return {
@@ -329,18 +331,110 @@ export type NotificationDegradeReason =
   | "LEDGER_READ"
   | "LEDGER_WRITE"
   | "LOCK_UNAVAILABLE"
-  | "LOCK_FAILED";
+  | "LOCK_FAILED"
+  | "SHOW_FAILED";
+
+// --- Durable two-phase ledger (browser-wide, not PrototypeState) ---------------
+
+/**
+ * A durable, browser-wide delivery entry shared across tabs (localStorage + Web
+ * Lock). PENDING is written BEFORE the OS notification appears and is promoted to
+ * DELIVERED only after the worker SHOW_ACK. A tab that sees PENDING or DELIVERED
+ * must not show the intent again. The per-tab quarantine Set is only an extra
+ * layer — never the sole guarantee.
+ */
+export type NotificationDeliveryStateName = "PENDING" | "DELIVERED";
+
+export interface NotificationLedgerEntry {
+  key: string;
+  tag: string;
+  state: NotificationDeliveryStateName;
+}
+
+/**
+ * Migrate/normalise a stored ledger. Legacy `string[]` values (first feature
+ * version) become `{ key, tag: key, state: "DELIVERED" }` so existing dedupe is
+ * preserved. Malformed items are dropped fail-closed; the result is de-duplicated
+ * by key and bounded (oldest-first pruning).
+ */
+export function normalizeLedgerEntries(
+  raw: unknown,
+  max: number = NOTIFICATION_LEDGER_MAX,
+): NotificationLedgerEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: NotificationLedgerEntry[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    let entry: NotificationLedgerEntry | null = null;
+    if (typeof item === "string" && item.length > 0) {
+      entry = { key: item, tag: item, state: "DELIVERED" };
+    } else if (item !== null && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      if (
+        typeof record.key === "string" &&
+        record.key.length > 0 &&
+        typeof record.tag === "string" &&
+        record.tag.length > 0 &&
+        (record.state === "PENDING" || record.state === "DELIVERED")
+      ) {
+        entry = { key: record.key, tag: record.tag, state: record.state };
+      }
+    }
+    if (entry !== null && !seen.has(entry.key)) {
+      seen.add(entry.key);
+      out.push(entry);
+    }
+  }
+  return out.length > max ? out.slice(out.length - max) : out;
+}
+
+export function findLedgerEntry(
+  entries: readonly NotificationLedgerEntry[],
+  key: string,
+): NotificationLedgerEntry | null {
+  return entries.find((entry) => entry.key === key) ?? null;
+}
+
+/** Insert or replace an entry by key, bounded with oldest-first pruning. */
+export function upsertLedgerEntry(
+  entries: readonly NotificationLedgerEntry[],
+  entry: NotificationLedgerEntry,
+  max: number = NOTIFICATION_LEDGER_MAX,
+): NotificationLedgerEntry[] {
+  const next = entries.filter((existing) => existing.key !== entry.key);
+  next.push(entry);
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+export function removeLedgerEntry(
+  entries: readonly NotificationLedgerEntry[],
+  key: string,
+): NotificationLedgerEntry[] {
+  return entries.filter((entry) => entry.key !== key);
+}
+
+/** DELIVERED entries whose tag is no longer an active intent → close candidates. */
+export function selectStaleDeliveredEntries(
+  entries: readonly NotificationLedgerEntry[],
+  activeIntents: readonly DirectSystemNotificationIntent[],
+): NotificationLedgerEntry[] {
+  const active = new Set(activeIntents.map((intent) => intent.tag));
+  return entries.filter(
+    (entry) => entry.state === "DELIVERED" && !active.has(entry.tag),
+  );
+}
 
 /**
  * Injectable ports for the delivery critical section. The pure reconciler drives
- * them; the hook wires real browser adapters and tests wire fakes (including a
- * shared ledger + serializing lock for concurrency).
+ * them; the hook wires real browser adapters (worker SHOW/CLOSE ACK over the
+ * accepted MessageChannel protocol) and tests wire fakes (shared entry ledger +
+ * serializing lock + async worker).
  */
 export interface NotificationDeliveryPorts {
-  readLedger: () => BrowserStorageReadResult<string[]>;
-  writeLedger: (keys: string[]) => boolean;
+  readLedger: () => BrowserStorageReadResult<NotificationLedgerEntry[]>;
+  writeLedger: (entries: NotificationLedgerEntry[]) => boolean;
   show: (intent: DirectSystemNotificationIntent) => Promise<boolean>;
-  // Resolves true only after the worker ACKs the close; a stale key is dropped
+  // Resolves true only after the worker ACKs the close; a stale entry is dropped
   // only on a confirmed close, so a failed/timed-out close is retried later.
   close: (tag: string) => Promise<boolean>;
   runExclusive: <T>(fn: () => Promise<T>) => Promise<NotificationLockResult<T>>;
@@ -351,66 +445,104 @@ export type NotificationReconcileOutcome =
   | { status: "DEGRADED"; reason: NotificationDegradeReason; shownKeys: string[] };
 
 /**
- * Fail-closed cross-tab delivery. Everything runs inside a real exclusive lock —
- * there is NO unsynchronised fallback. A delivered key is persisted only after a
- * confirmed show; if that persist fails the just-shown tag is closed, the intent
- * is quarantined in-memory (so the next tick cannot re-show it) and the run
- * degrades immediately without touching further intents. A missing/failed lock
- * or an unreadable ledger performs no show at all.
- *
- * `quarantine` is a caller-owned in-memory Set (per browser tab); it is mutated
- * only to record a shown-but-unpersisted key.
+ * Fail-closed, browser-wide, exactly-once cross-tab delivery — the whole flow
+ * runs inside a real exclusive lock (no unsynchronised fallback). Per intent:
+ *  1. read the current durable ledger;
+ *  2. if a PENDING/DELIVERED entry (any tab) or local quarantine exists — skip;
+ *  3. write PENDING durably BEFORE showing (fail → DEGRADED, no show, stop);
+ *  4. show via the accepted worker SHOW_ACK;
+ *  5. on ACK, promote PENDING → DELIVERED (final-write fail → keep durable
+ *     PENDING, await the worker CLOSE_ACK for the shown tag, quarantine locally,
+ *     DEGRADED, stop — PENDING keeps blocking every tab);
+ *  6. on no ACK, remove PENDING so it can be retried (removal fail → keep the
+ *     durable PENDING as a fail-closed block, quarantine, DEGRADED, stop).
+ * Stale DELIVERED entries are closed only after a confirmed CLOSE_ACK; a stale
+ * PENDING is never auto-treated as shown and is never removed without proof.
  */
 export async function reconcileNotificationDelivery(
   intents: readonly DirectSystemNotificationIntent[],
   quarantine: Set<string>,
   ports: NotificationDeliveryPorts,
 ): Promise<NotificationReconcileOutcome> {
-  const locked = await ports.runExclusive(async () => {
-    const read = ports.readLedger();
-    if (!read.ok) {
-      return { degraded: "LEDGER_READ" as NotificationDegradeReason, shownKeys: [] };
-    }
-    let ledger = read.value;
-    const shownKeys: string[] = [];
+  const locked = await ports.runExclusive(
+    async (): Promise<{
+      degraded: NotificationDegradeReason | null;
+      shownKeys: string[];
+    }> => {
+      const read = ports.readLedger();
+      if (!read.ok) return { degraded: "LEDGER_READ", shownKeys: [] };
+      let entries = read.value;
+      const shownKeys: string[] = [];
 
-    const undelivered = selectUndeliveredIntents(intents, ledger).filter(
-      (intent) => !quarantine.has(intent.key),
-    );
-    for (const intent of undelivered) {
-      const shown = await ports.show(intent);
-      // A failed show is never recorded — it is retried on a later tick.
-      if (!shown) continue;
-      const next = recordDeliveredKey(ledger, intent.key);
-      if (!ports.writeLedger(next)) {
-        // Shown but not persisted → quarantine, close, stop, degrade.
-        quarantine.add(intent.key);
-        void ports.close(intent.tag);
-        return { degraded: "LEDGER_WRITE" as NotificationDegradeReason, shownKeys };
-      }
-      ledger = next;
-      shownKeys.push(intent.key);
-    }
+      for (const intent of intents) {
+        // A durable PENDING/DELIVERED entry (any tab) or a local quarantine
+        // blocks a repeat show.
+        if (findLedgerEntry(entries, intent.key) !== null) continue;
+        if (quarantine.has(intent.key)) continue;
 
-    const staleTags = selectStaleNotificationTags(intents, ledger);
-    if (staleTags.length > 0) {
-      // Drop a stale key ONLY after its close is ACKed; unconfirmed closes keep
-      // their key so the close is retried on a later tick (fail-closed).
-      const confirmedClosed: string[] = [];
-      for (const tag of staleTags) {
-        if (await ports.close(tag)) confirmedClosed.push(tag);
-      }
-      if (confirmedClosed.length > 0) {
-        const forgotten = forgetDeliveredKeys(ledger, confirmedClosed);
-        if (!ports.writeLedger(forgotten)) {
-          return { degraded: "LEDGER_WRITE" as NotificationDegradeReason, shownKeys };
+        // Phase 1: durably record PENDING BEFORE the OS notification appears.
+        const pending = upsertLedgerEntry(entries, {
+          key: intent.key,
+          tag: intent.tag,
+          state: "PENDING",
+        });
+        if (!ports.writeLedger(pending)) {
+          return { degraded: "LEDGER_WRITE", shownKeys };
         }
-        ledger = forgotten;
-      }
-    }
+        entries = pending;
 
-    return { degraded: null as NotificationDegradeReason | null, shownKeys };
-  });
+        // Phase 2: show and wait for the accepted worker SHOW_ACK.
+        const acknowledged = await ports.show(intent);
+        if (acknowledged) {
+          const delivered = upsertLedgerEntry(entries, {
+            key: intent.key,
+            tag: intent.tag,
+            state: "DELIVERED",
+          });
+          if (!ports.writeLedger(delivered)) {
+            // Shown but final write failed: keep durable PENDING (still blocks
+            // every tab), close the shown tag and WAIT for the CLOSE_ACK,
+            // quarantine locally, degrade, stop.
+            await ports.close(intent.tag);
+            quarantine.add(intent.key);
+            return { degraded: "LEDGER_WRITE", shownKeys };
+          }
+          entries = delivered;
+          shownKeys.push(intent.key);
+        } else {
+          // No SHOW_ACK: remove PENDING so a later reconcile can retry.
+          const cleaned = removeLedgerEntry(entries, intent.key);
+          if (!ports.writeLedger(cleaned)) {
+            // Cleanup failed: keep the durable PENDING as a fail-closed block.
+            quarantine.add(intent.key);
+            return { degraded: "LEDGER_WRITE", shownKeys };
+          }
+          entries = cleaned;
+          return { degraded: "SHOW_FAILED", shownKeys };
+        }
+      }
+
+      // Close DELIVERED notifications whose entity is no longer actionable, and
+      // drop the entry ONLY after a confirmed CLOSE_ACK.
+      const stale = selectStaleDeliveredEntries(entries, intents);
+      if (stale.length > 0) {
+        const closed: NotificationLedgerEntry[] = [];
+        for (const entry of stale) {
+          if (await ports.close(entry.tag)) closed.push(entry);
+        }
+        if (closed.length > 0) {
+          let forgotten = entries;
+          for (const entry of closed) forgotten = removeLedgerEntry(forgotten, entry.key);
+          if (!ports.writeLedger(forgotten)) {
+            return { degraded: "LEDGER_WRITE", shownKeys };
+          }
+          entries = forgotten;
+        }
+      }
+
+      return { degraded: null, shownKeys };
+    },
+  );
 
   if (!locked.ok) {
     return { status: "DEGRADED", reason: locked.reason, shownKeys: [] };

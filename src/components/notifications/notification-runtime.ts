@@ -5,9 +5,11 @@ import {
 } from "@/prototype/browser-adapters";
 import {
   intentToPayload,
+  normalizeLedgerEntries,
   type BrowserNotificationPermission,
   type BrowserStorageReadResult,
   type DirectSystemNotificationIntent,
+  type NotificationLedgerEntry,
   type NotificationLockResult,
 } from "@/prototype/direct-notifications";
 import { validateWorkerNotificationMessage } from "@/prototype/direct-notification-worker-contract";
@@ -127,7 +129,7 @@ export function writeNotificationPreference(key: string, on: boolean): boolean {
  */
 export function readNotificationLedger(
   scope: string,
-): BrowserStorageReadResult<string[]> {
+): BrowserStorageReadResult<NotificationLedgerEntry[]> {
   let raw: string | null;
   try {
     if (typeof window === "undefined") return { ok: false, error: "UNAVAILABLE" };
@@ -139,23 +141,21 @@ export function readNotificationLedger(
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return { ok: false, error: "INVALID_DATA" };
-    return {
-      ok: true,
-      value: parsed.filter((item): item is string => typeof item === "string"),
-    };
+    // Migrate legacy string[] and normalise structured entries fail-closed.
+    return { ok: true, value: normalizeLedgerEntries(parsed) };
   } catch {
     return { ok: false, error: "INVALID_DATA" };
   }
 }
 
-/** Ledger write; true only when the keys were actually persisted. */
+/** Ledger write; true only when the entries were actually persisted. */
 export function writeNotificationLedger(
   scope: string,
-  keys: readonly string[],
+  entries: readonly NotificationLedgerEntry[],
 ): boolean {
   try {
     if (typeof window === "undefined") return false;
-    window.localStorage.setItem(ledgerStorageKey(scope), JSON.stringify(keys));
+    window.localStorage.setItem(ledgerStorageKey(scope), JSON.stringify(entries));
     return true;
   } catch {
     return false;

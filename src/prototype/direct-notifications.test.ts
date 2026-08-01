@@ -336,8 +336,17 @@ test("32: kitchen body carries only the public number, no phone/address", () => 
   assert.ok(!intent.body.toLowerCase().includes("ул."));
   assert.equal(
     intent.tag,
-    kitchenOrderNotificationTag(REST, kitchenActionableEvidenceId(reviewOrder({ publicNumber: "R-42" }))),
+    kitchenOrderNotificationTag(
+      REST,
+      "COMBINED",
+      kitchenActionableEvidenceId(reviewOrder({ publicNumber: "R-42" })),
+    ),
   );
+  // Role-scoped: OPERATOR gets a different tag for the same order.
+  const operatorTag = buildKitchenNotificationIntents(state, REST, "OPERATOR", NOW)[0].tag;
+  assert.notEqual(operatorTag, intent.tag);
+  assert.ok(intent.tag.includes(":COMBINED:"));
+  assert.ok(operatorTag.includes(":OPERATOR:"));
 });
 
 // --- 33-37: dedupe ledger ------------------------------------------------------
