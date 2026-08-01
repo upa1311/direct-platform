@@ -3,139 +3,60 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
-  computeCashTenderView,
-  intentForChangeFromText,
+  cashTenderIntentKey,
   isCashTenderIntentValidForTotal,
   tenderCentsToText,
 } from "./cash-tender-checkout-view.ts";
 import { getDriverCashOfferDisclosureView } from "../../prototype/selectors.ts";
-import type { CashTenderIntent, Order } from "../../prototype/models.ts";
+import type { Order } from "../../prototype/models.ts";
 
 /**
- * Corrective coverage for `fix: synchronize cash tender disclosure`.
- * Blocker 1: checkout-раскрытие всегда отражает authoritative cart intent
- * (чистый computeCashTenderView / isCashTenderIntentValidForTotal). Blocker 2:
- * повреждённый наличный заказ классифицируется REVIEW_REQUIRED, а не
- * NOT_APPLICABLE. Поведенческие тесты не опираются только на source-string.
+ * Общие примитивы наличной сдачи + классификация раскрытия водителю (Blocker 2).
+ * Поведенческие проверки, не source-string.
  */
 
-const TOTAL = 1600;
-
-// --- Blocker 1: checkout state synchronization (1–10) -------------------------
-
-test("1: persisted EXACT → корректный checkout view", () => {
-  const view = computeCashTenderView({ mode: "EXACT" }, null, TOTAL);
-  assert.equal(view.selectedMode, "EXACT");
-  assert.equal(view.showChangeInput, false);
-  assert.equal(view.changeAmountText, "");
-  assert.equal(view.error, null);
-  assert.equal(view.intentValidForTotal, true);
-});
-
-test("2: persisted CHANGE_FROM → input содержит фактический tender", () => {
-  const view = computeCashTenderView(
-    { mode: "CHANGE_FROM", tenderCents: 2000 },
-    null,
-    TOTAL,
-  );
-  assert.equal(view.selectedMode, "CHANGE_FROM");
-  assert.equal(view.changeAmountText, "20.00");
-  assert.equal(view.previewChangeCents, 400);
-  assert.equal(view.intentValidForTotal, true);
-});
-
-test("3: reload не создаёт скрытый tender с пустым обязательным input", () => {
-  const view = computeCashTenderView(
-    { mode: "CHANGE_FROM", tenderCents: 2000 },
-    null,
-    TOTAL,
-  );
-  // Валидный CHANGE_FROM intent НИКОГДА не отображается с пустым полем.
-  assert.notEqual(view.changeAmountText, "");
-  assert.equal(view.showChangeInput, true);
-});
-
-test("4: CASH→ONLINE→CASH — очищенный intent даёт пустой выбор", () => {
-  // Домен очищает intent при уходе с CASH; при возврате intent = null.
-  const view = computeCashTenderView(null, null, TOTAL);
-  assert.equal(view.selectedMode, null);
-  assert.equal(view.showChangeInput, false);
-  assert.equal(view.intentValidForTotal, false);
-});
-
-test("5: внешний intent null очищает UI", () => {
-  const view = computeCashTenderView(null, null, TOTAL);
-  assert.equal(view.selectedMode, null);
-  assert.equal(view.changeAmountText, "");
-});
-
-test("6: внешний CHANGE_FROM обновляет mode и amount", () => {
-  const view = computeCashTenderView(
-    { mode: "CHANGE_FROM", tenderCents: 2500 },
-    null,
-    TOTAL,
-  );
-  assert.equal(view.selectedMode, "CHANGE_FROM");
-  assert.equal(view.changeAmountText, "25.00");
-});
-
-test("7: UI и submitted intent используют одну сумму (round-trip)", () => {
-  const intent: CashTenderIntent = { mode: "CHANGE_FROM", tenderCents: 2000 };
-  const view = computeCashTenderView(intent, null, TOTAL);
-  // Показанный текст, разобранный обратно, даёт тот же tender, что и intent.
-  assert.deepEqual(
-    intentForChangeFromText(view.changeAmountText, TOTAL),
-    intent,
-  );
-});
-
-test("8: cart total вырос выше tender → submit disabled немедленно", () => {
-  const intent: CashTenderIntent = { mode: "CHANGE_FROM", tenderCents: 2000 };
-  const grownTotal = 2500;
-  assert.equal(isCashTenderIntentValidForTotal(intent, grownTotal), false);
-  const view = computeCashTenderView(intent, null, grownTotal);
-  assert.notEqual(view.error, null);
-  assert.equal(view.intentValidForTotal, false);
-});
-
-test("9: EXACT после изменения total остаётся валидным для нового итога", () => {
-  assert.equal(isCashTenderIntentValidForTotal({ mode: "EXACT" }, 2500), true);
-  assert.equal(isCashTenderIntentValidForTotal({ mode: "EXACT" }, 999), true);
-  // Некорректный итог всё равно fail-closed.
-  assert.equal(isCashTenderIntentValidForTotal({ mode: "EXACT" }, null), false);
-  assert.equal(isCashTenderIntentValidForTotal({ mode: "EXACT" }, 0), false);
-});
-
-test("10: failed intent mutation не показывает ложный saved state", () => {
-  // При провале сохранения authoritative intent не меняется (остаётся null);
-  // submit-гейт и «сохранённый» вид зависят только от него.
-  assert.equal(isCashTenderIntentValidForTotal(null, TOTAL), false);
-  assert.equal(computeCashTenderView(null, null, TOTAL).selectedMode, null);
-  // Сохранение намерения идёт через общий mutation-ack/error path.
-  const page = readFileSync("src/app/client/cart/page.tsx", "utf8");
-  assert.ok(page.includes("runCartMutation(() => setCashTenderIntentAck"));
-});
-
-test("draft: активный ввод невалидной суммы держит CHANGE_FROM выбранным", () => {
-  // Пользователь выбрал «нужна сдача» и вводит незаконченную сумму: radio не
-  // слетает, ошибка показана, intent не сохраняется (submit заблокирован).
-  const view = computeCashTenderView(
-    null,
-    { activeChangeFromText: "5" },
-    TOTAL,
-  );
-  assert.equal(view.selectedMode, "CHANGE_FROM");
-  assert.equal(view.changeAmountText, "5");
-  assert.notEqual(view.error, null);
-  assert.equal(view.intentValidForTotal, false);
-});
+// --- shared helpers -----------------------------------------------------------
 
 test("tenderCentsToText форматирует целые центы в доллары", () => {
   assert.equal(tenderCentsToText(2000), "20.00");
   assert.equal(tenderCentsToText(2050), "20.50");
 });
 
-// --- Blocker 2: disclosure classification (11–18) ----------------------------
+test("cashTenderIntentKey — отпечаток intent", () => {
+  assert.equal(cashTenderIntentKey(null), "NULL");
+  assert.equal(cashTenderIntentKey({ mode: "EXACT" }), "EXACT");
+  assert.equal(
+    cashTenderIntentKey({ mode: "CHANGE_FROM", tenderCents: 2500 }),
+    "CHANGE_FROM:2500",
+  );
+  // Разные суммы различимы.
+  assert.notEqual(
+    cashTenderIntentKey({ mode: "CHANGE_FROM", tenderCents: 2000 }),
+    cashTenderIntentKey({ mode: "CHANGE_FROM", tenderCents: 2500 }),
+  );
+});
+
+test("isCashTenderIntentValidForTotal: EXACT/CHANGE_FROM/итог", () => {
+  assert.equal(isCashTenderIntentValidForTotal({ mode: "EXACT" }, 2500), true);
+  assert.equal(isCashTenderIntentValidForTotal({ mode: "EXACT" }, null), false);
+  assert.equal(isCashTenderIntentValidForTotal({ mode: "EXACT" }, 0), false);
+  assert.equal(
+    isCashTenderIntentValidForTotal({ mode: "CHANGE_FROM", tenderCents: 2000 }, 1600),
+    true,
+  );
+  // Устаревший tender, не покрывающий вырос­ший итог → невалиден.
+  assert.equal(
+    isCashTenderIntentValidForTotal({ mode: "CHANGE_FROM", tenderCents: 2000 }, 2500),
+    false,
+  );
+  assert.equal(
+    isCashTenderIntentValidForTotal({ mode: "CHANGE_FROM", tenderCents: 2000 }, 2000),
+    false,
+  );
+  assert.equal(isCashTenderIntentValidForTotal(null, 1600), false);
+});
+
+// --- Blocker 2: disclosure classification (audit item 21) --------------------
 
 const CASH = {
   currencyCode: "USD" as const,
@@ -176,7 +97,7 @@ function order(over: {
   } as unknown as Order;
 }
 
-test("11: non-CASH заказ → NOT_APPLICABLE", () => {
+test("disclosure-11: non-CASH заказ → NOT_APPLICABLE", () => {
   assert.equal(
     getDriverCashOfferDisclosureView(order({ paymentMethod: "ONLINE" })).status,
     "NOT_APPLICABLE",
@@ -187,14 +108,14 @@ test("11: non-CASH заказ → NOT_APPLICABLE", () => {
   );
 });
 
-test("12: CASH без основного snapshot → REVIEW_REQUIRED", () => {
+test("disclosure-12: CASH без основного snapshot → REVIEW_REQUIRED", () => {
   assert.equal(
     getDriverCashOfferDisclosureView(order({ snapshot: null })).status,
     "REVIEW_REQUIRED",
   );
 });
 
-test("13: CASH с повреждённым основным snapshot → REVIEW_REQUIRED", () => {
+test("disclosure-13: CASH с повреждённым основным snapshot → REVIEW_REQUIRED", () => {
   assert.equal(
     getDriverCashOfferDisclosureView(
       order({ snapshot: { ...CASH_SNAPSHOT, restaurantHandoffCents: 599 } }),
@@ -203,14 +124,14 @@ test("13: CASH с повреждённым основным snapshot → REVIEW_
   );
 });
 
-test("14: CASH без tender snapshot → REVIEW_REQUIRED", () => {
+test("disclosure-14: CASH без tender snapshot → REVIEW_REQUIRED", () => {
   assert.equal(
     getDriverCashOfferDisclosureView(order({ tender: null })).status,
     "REVIEW_REQUIRED",
   );
 });
 
-test("15: CASH с повреждённым tender → REVIEW_REQUIRED", () => {
+test("disclosure-15: CASH с повреждённым tender → REVIEW_REQUIRED", () => {
   assert.equal(
     getDriverCashOfferDisclosureView(
       order({ tender: { mode: "CHANGE_FROM", tenderCents: 1500, changeDueCents: 1 } }),
@@ -225,7 +146,7 @@ test("15: CASH с повреждённым tender → REVIEW_REQUIRED", () => {
   );
 });
 
-test("16: валидные EXACT / CHANGE_FROM → READY", () => {
+test("disclosure-16: валидные EXACT / CHANGE_FROM → READY", () => {
   assert.equal(getDriverCashOfferDisclosureView(order({})).status, "READY");
   const cf = getDriverCashOfferDisclosureView(order({ tender: CHANGE_TENDER }));
   assert.equal(cf.status, "READY");
@@ -244,39 +165,26 @@ const WORKSPACE = readFileSync(
   "utf8",
 );
 
-test("17: REVIEW_REQUIRED карточка не вызывает accept mutation", () => {
-  // Классификация повреждённого наличного заказа — REVIEW_REQUIRED (поведенческое).
+test("disclosure-17: REVIEW_REQUIRED карточка не проводит accept", () => {
   assert.equal(
     getDriverCashOfferDisclosureView(order({ tender: null })).status,
     "REVIEW_REQUIRED",
   );
-  // Кнопка принятия заблокирована для REVIEW_REQUIRED, и handleAccept не
-  // проводит такой заказ через online one-tap (accept только для READY).
-  assert.ok(
-    OFFER_CARD.includes('cashDisclosure.status === "REVIEW_REQUIRED"'),
-  );
+  assert.ok(OFFER_CARD.includes('cashDisclosure.status === "REVIEW_REQUIRED"'));
   assert.ok(WORKSPACE.includes('disclosure.status === "READY"'));
   assert.ok(WORKSPACE.includes('disclosure.status === "NOT_APPLICABLE"'));
 });
 
-test("18: CASH REVIEW_REQUIRED не подписывается как «Оплата онлайн»", () => {
-  // Раскрытие остаётся наличным (status !== NOT_APPLICABLE) → карточка покажет
-  // «Оплата наличными», а не «онлайн»; ярлык управляется этим флагом.
+test("disclosure-18: CASH REVIEW_REQUIRED не подписывается как «Оплата онлайн»", () => {
   assert.notEqual(
     getDriverCashOfferDisclosureView(order({ tender: null })).status,
     "NOT_APPLICABLE",
   );
-  assert.ok(
-    OFFER_CARD.includes('cashDisclosure.status !== "NOT_APPLICABLE"'),
-  );
+  assert.ok(OFFER_CARD.includes('cashDisclosure.status !== "NOT_APPLICABLE"'));
   assert.ok(OFFER_CARD.includes("Оплата наличными"));
 });
 
-test("19: валидный наличный заказ остаётся READY (регрессии eligibility не задеты)", () => {
-  assert.equal(getDriverCashOfferDisclosureView(order({})).status, "READY");
-});
-
-test("20: audit report не изменён (маркеры на месте)", () => {
+test("audit report не изменён (маркеры на месте)", () => {
   const audit = readFileSync("docs/driver-v1-final-audit.md", "utf8");
   assert.ok(audit.includes("SHIP-OK: NO"));
   assert.ok(audit.includes("F-5"));

@@ -6,13 +6,16 @@ import { useRouter } from "next/navigation";
 import { Gift } from "lucide-react";
 
 import { ClientAddressPicker } from "@/components/client/client-address-picker";
+import { cashTenderIntentKey } from "@/components/client/cash-tender-checkout-view";
 import {
-  computeCashTenderView,
-  intentForChangeFromText,
-  isCashTenderIntentValidForTotal,
-  tenderCentsToText,
-  type CashTenderDraft,
-} from "@/components/client/cash-tender-checkout-view";
+  canSubmitCashTender,
+  cashTenderEditorView,
+  initCashTenderEditor,
+  reduceCashTenderEditor,
+  type CashTenderEditorAction,
+  type CashTenderEditorState,
+  type CashTenderEditorView,
+} from "@/components/client/cash-tender-editor";
 import { REPEAT_NOTICE_KEY } from "@/components/order-flow/client-order-actions";
 import { RestaurantAvailabilityBadge } from "@/components/order-flow/restaurant-availability-badge";
 import flowStyles from "@/components/order-flow/order-flow.module.css";
@@ -108,13 +111,69 @@ export default function ClientCartPage() {
     deliveryMode === "PLATFORM_DRIVER";
   const isCashSelected =
     cashCheckoutAvailable && state.cart.paymentMethod === "CASH";
-  // Submit-гейт наличных зависит ТОЛЬКО от сохранённого intent и текущего итога
-  // (не от локального черновика): устаревший CHANGE_FROM, не покрывающий вырос­ший
-  // итог, немедленно блокирует отправку; EXACT остаётся валидным для нового итога.
-  const cashTenderReady = isCashTenderIntentValidForTotal(
-    state.cart.cashTenderIntent,
-    pricing.customerTotalCents,
+
+  // --- Наличный tender-редактор (v31) --------------------------------------
+  // authoritative source — только state.cart.cashTenderIntent; editor держит
+  // локальный draft со строгим ack-протоколом. Ввод меняет только draft; запись
+  // в state происходит явным подтверждением и считается сохранённой лишь после
+  // фактического совпадения authoritative intent с ожидаемым.
+  const cashIntent = state.cart.cashTenderIntent;
+  const cashTotalCents = pricing.customerTotalCents;
+  const cashSavingRef = useRef(false);
+  const [cashEditor, setCashEditor] = useState<CashTenderEditorState>(() =>
+    initCashTenderEditor(cashIntent),
   );
+  const [lastPaymentMethod, setLastPaymentMethod] = useState(
+    state.cart.paymentMethod,
+  );
+  // Смена способа оплаты (CASH→ONLINE→CASH) сбрасывает редактор к свежему intent.
+  if (state.cart.paymentMethod !== lastPaymentMethod) {
+    setLastPaymentMethod(state.cart.paymentMethod);
+    setCashEditor(initCashTenderEditor(cashIntent));
+  } else if (cashTenderIntentKey(cashIntent) !== cashEditor.baseIntentKey) {
+    // Пришёл новый authoritative intent (сохранение приземлилось / другая вкладка).
+    setCashEditor(
+      reduceCashTenderEditor(
+        cashEditor,
+        { type: "SYNC", intent: cashIntent },
+        { intent: cashIntent, customerTotalCents: cashTotalCents },
+      ).state,
+    );
+  }
+  const runCashSave = async (candidate: CashTenderIntent) => {
+    if (cashSavingRef.current) return; // защита от двойного save
+    cashSavingRef.current = true;
+    try {
+      const ack = await setCashTenderIntent(candidate);
+      if (!ack.ok) {
+        setCashEditor(
+          (s) =>
+            reduceCashTenderEditor(
+              s,
+              {
+                type: "SAVE_FAILED",
+                error: ack.error ?? "Не удалось сохранить выбор.",
+              },
+              { intent: cashIntent, customerTotalCents: cashTotalCents },
+            ).state,
+        );
+      }
+      // ok: фактический incoming intent переведёт редактор в CLEAN через SYNC.
+    } finally {
+      cashSavingRef.current = false;
+    }
+  };
+  const dispatchCashEditor = (action: CashTenderEditorAction) => {
+    const result = reduceCashTenderEditor(cashEditor, action, {
+      intent: cashIntent,
+      customerTotalCents: cashTotalCents,
+    });
+    setCashEditor(result.state);
+    if (result.shouldSave) void runCashSave(result.saveIntent);
+  };
+  const cashView = cashTenderEditorView(cashEditor, cashIntent, cashTotalCents);
+  const cashSubmitReady = canSubmitCashTender(cashEditor, cashIntent, cashTotalCents);
+
   const providerLabel = deliveryMode
     ? getDeliveryModeProviderLabel(deliveryMode)
     : null;
@@ -139,10 +198,11 @@ export default function ClientCartPage() {
     customerNameIsValid &&
     customerPhoneIsValid &&
     itemViews.length > 0 &&
-    // Оплата: ONLINE всегда; CASH — только когда наличные доступны и сохранённое
-    // намерение валидно для текущего итога. Финальная проверка сумм — в домене.
+    // Оплата: ONLINE всегда; CASH — только когда наличные доступны и tender-
+    // редактор CLEAN с валидным для текущего итога сохранённым намерением
+    // (показанное = authoritative, нет pending). Финальная проверка сумм — в домене.
     (state.cart.paymentMethod === "ONLINE" ||
-      (isCashSelected && cashTenderReady)) &&
+      (isCashSelected && cashSubmitReady)) &&
     canAcceptOrders &&
     !hasUnavailableItem &&
     (isPickup ? pricing.customerTotalCents !== null : true);
@@ -510,9 +570,16 @@ export default function ClientCartPage() {
                 selected={state.cart.paymentMethod}
                 onSelect={(method) => void setPaymentMethod(method)}
                 isCashSelected={isCashSelected}
-                intent={state.cart.cashTenderIntent}
+                view={cashView}
                 customerTotalCents={pricing.customerTotalCents}
-                onIntentChange={(intent) => void setCashTenderIntent(intent)}
+                onSelectExact={() => dispatchCashEditor({ type: "SELECT_EXACT" })}
+                onSelectChangeFrom={() =>
+                  dispatchCashEditor({ type: "SELECT_CHANGE_FROM" })
+                }
+                onEditText={(text) =>
+                  dispatchCashEditor({ type: "EDIT_TEXT", text })
+                }
+                onConfirm={() => dispatchCashEditor({ type: "CONFIRM" })}
               />
             ) : (
               <p className={flowStyles.compactPayment}>Оплата онлайн</p>
@@ -676,65 +743,34 @@ export default function ClientCartPage() {
 }
 
 /**
- * Выбор способа оплаты и наличного намерения (сдачи) для CASH PLATFORM_DRIVER
- * (v31, §5). Показывается только когда наличные доступны. Ввод суммы для сдачи
- * разбирается существующим parseMoneyInput в целые центы (без floating-point для
- * authoritative расчёта); authoritative changeDueCents создаёт domain builder при
- * создании заказа. Пока сумма невалидна или не больше итога — наличное намерение
- * очищается (null), поэтому кнопка отправки остаётся заблокированной.
+ * Презентационный выбор способа оплаты и наличной сдачи (v31, §5). Никакого
+ * собственного состояния: всё отображение приходит готовым `view` из чистой
+ * editor state machine (см. cash-tender-editor). Ввод суммы меняет только
+ * локальный draft (onEditText) и НЕ пишет в state; сохранение — только явной
+ * кнопкой «Подтвердить сумму» (onConfirm) по ack-протоколу. «Без сдачи»
+ * подтверждается сразу выбором. Пока идёт сохранение — контролы заблокированы.
  */
 function CheckoutPaymentChoice({
   selected,
   onSelect,
   isCashSelected,
-  intent,
+  view,
   customerTotalCents,
-  onIntentChange,
+  onSelectExact,
+  onSelectChangeFrom,
+  onEditText,
+  onConfirm,
 }: {
   selected: PaymentMethod;
   onSelect: (method: PaymentMethod) => void;
   isCashSelected: boolean;
-  intent: CashTenderIntent;
+  view: CashTenderEditorView;
   customerTotalCents: number | null;
-  onIntentChange: (intent: CashTenderIntent) => void;
+  onSelectExact: () => void;
+  onSelectChangeFrom: () => void;
+  onEditText: (text: string) => void;
+  onConfirm: () => void;
 }) {
-  // Единственное локальное состояние — активный ввод суммы CHANGE_FROM (когда она
-  // ещё невалидна и intent сохранить нельзя). Всё остальное отображение выводится
-  // из authoritative cart.cashTenderIntent через чистый computeCashTenderView,
-  // поэтому reload / cross-tab / сброс CASH→ONLINE→CASH отражаются честно.
-  const [draft, setDraft] = useState<CashTenderDraft | null>(null);
-
-  // Смена способа оплаты (в т.ч. CASH→ONLINE→CASH) сбрасывает локальный черновик:
-  // при возврате к CASH выбор нужно сделать заново, поверх свежего intent. Сброс
-  // выполняется по документированному паттерну «правка state во время рендера при
-  // изменении prop», без эффекта — черновик не переживает сброс authoritative intent.
-  const [lastSelected, setLastSelected] = useState(selected);
-  if (selected !== lastSelected) {
-    setLastSelected(selected);
-    setDraft(null);
-  }
-
-  const view = computeCashTenderView(intent, draft, customerTotalCents);
-
-  const selectExact = () => {
-    setDraft(null);
-    onIntentChange({ mode: "EXACT" });
-  };
-
-  const selectChangeFrom = () => {
-    const initialText =
-      intent !== null && intent.mode === "CHANGE_FROM"
-        ? tenderCentsToText(intent.tenderCents)
-        : "";
-    setDraft({ activeChangeFromText: initialText });
-    onIntentChange(intentForChangeFromText(initialText, customerTotalCents));
-  };
-
-  const editChangeFrom = (raw: string) => {
-    setDraft({ activeChangeFromText: raw });
-    onIntentChange(intentForChangeFromText(raw, customerTotalCents));
-  };
-
   return (
     <div>
       <fieldset
@@ -764,12 +800,18 @@ function CheckoutPaymentChoice({
       {isCashSelected ? (
         <div className={flowStyles.fieldGrid}>
           <p className={flowStyles.summaryHint}>Как вы оплатите наличными?</p>
+          {view.notice ? (
+            <p className={flowStyles.summaryHint} role="status">
+              {view.notice}
+            </p>
+          ) : null}
           <label className={flowStyles.fulfillmentOptionCompact}>
             <input
               type="radio"
               name="checkout-cash-tender"
               checked={view.selectedMode === "EXACT"}
-              onChange={selectExact}
+              disabled={view.saving}
+              onChange={onSelectExact}
             />
             <span>Без сдачи</span>
           </label>
@@ -778,20 +820,32 @@ function CheckoutPaymentChoice({
               type="radio"
               name="checkout-cash-tender"
               checked={view.selectedMode === "CHANGE_FROM"}
-              onChange={selectChangeFrom}
+              disabled={view.saving}
+              onChange={onSelectChangeFrom}
             />
             <span>Нужна сдача с суммы</span>
           </label>
           {view.showChangeInput ? (
-            <label className={flowStyles.field}>
-              <span>С какой суммы нужна сдача</span>
-              <input
-                inputMode="decimal"
-                value={view.changeAmountText}
-                onChange={(event) => editChangeFrom(event.target.value)}
-                placeholder="Например: 20.00"
-              />
-            </label>
+            <>
+              <label className={flowStyles.field}>
+                <span>С какой суммы нужна сдача</span>
+                <input
+                  inputMode="decimal"
+                  value={view.changeAmountText}
+                  disabled={view.saving}
+                  onChange={(event) => onEditText(event.target.value)}
+                  placeholder="Например: 20.00"
+                />
+              </label>
+              <button
+                type="button"
+                className={flowStyles.secondaryButton}
+                disabled={!view.confirmEnabled || view.saving}
+                onClick={onConfirm}
+              >
+                Подтвердить сумму
+              </button>
+            </>
           ) : null}
           {customerTotalCents !== null ? (
             <p className={flowStyles.summaryHint}>
@@ -799,6 +853,11 @@ function CheckoutPaymentChoice({
               {view.previewChangeCents !== null && view.previewChangeCents > 0
                 ? ` · Сдача: ${formatMoney(view.previewChangeCents)}`
                 : ""}
+            </p>
+          ) : null}
+          {view.saving ? (
+            <p className={flowStyles.summaryHint} role="status">
+              Сохранение выбора…
             </p>
           ) : null}
           {view.error ? (
