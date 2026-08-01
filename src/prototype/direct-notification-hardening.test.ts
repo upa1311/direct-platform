@@ -239,6 +239,43 @@ test("m16: duplicate key — same tag PENDING+DELIVERED → PENDING", () => {
   ]);
 });
 
+test("role-tag: a structured tag's role segment must match the scope role", () => {
+  const combinedKey = `kitchen-actionable:${REST}:COMBINED:e1`;
+  const operatorKey = `kitchen-actionable:${REST}:OPERATOR:e1`;
+  const operatorTag = `kitchen-actionable:${REST}:OPERATOR:e1`;
+  const combinedTag = `kitchen-actionable:${REST}:COMBINED:e1`;
+  const legacyTag = `kitchen-actionable:${REST}:e1`;
+  const colonEvidence = "o-rev:2026-07-31T10:00:00.000Z";
+  const legacyColonTag = `kitchen-actionable:${REST}:${colonEvidence}`;
+
+  const entry = (key: string, tag: string) => [{ key, tag, state: "DELIVERED" as const }];
+  const parse = (raw: unknown, scope: string) => parseNotificationLedger(raw, scope);
+
+  // 1. COMBINED key + OPERATOR tag → INVALID_DATA
+  assert.deepEqual(parse(entry(combinedKey, operatorTag), COMBINED_SCOPE), {
+    ok: false,
+    error: "INVALID_DATA",
+  });
+  // 2. OPERATOR key + COMBINED tag → INVALID_DATA
+  assert.deepEqual(parse(entry(operatorKey, combinedTag), OPERATOR_SCOPE), {
+    ok: false,
+    error: "INVALID_DATA",
+  });
+  // 3. COMBINED key + COMBINED tag → valid
+  const ok3 = parse(entry(combinedKey, combinedTag), COMBINED_SCOPE);
+  assert.ok(ok3.ok);
+  assert.deepEqual(ok3.entries, entry(combinedKey, combinedTag));
+  // 4. COMBINED key + genuine role-less legacy tag → valid
+  const ok4 = parse(entry(combinedKey, legacyTag), COMBINED_SCOPE);
+  assert.ok(ok4.ok);
+  assert.deepEqual(ok4.entries, entry(combinedKey, legacyTag));
+  // 5. Legacy evidence id with colons (role-less tag) → valid
+  const colonKey = `kitchen-actionable:${REST}:COMBINED:${colonEvidence}`;
+  const ok5 = parse(entry(colonKey, legacyColonTag), COMBINED_SCOPE);
+  assert.ok(ok5.ok);
+  assert.deepEqual(ok5.entries, entry(colonKey, legacyColonTag));
+});
+
 test("m15b: duplicate key with DIFFERENT tags → INVALID_DATA", () => {
   const legacy = `kitchen-actionable:${REST}:e1`;
   const roleScoped = `kitchen-actionable:${REST}:COMBINED:e1`;

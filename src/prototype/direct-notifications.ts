@@ -423,12 +423,42 @@ export function legacyKitchenLedgerScope(scope: string): string | null {
   return kitchen === null ? null : `kitchen:${kitchen.restaurantId}`;
 }
 
+/** Known workspace roles (used to detect a role segment inside a kitchen tag). */
+const KNOWN_WORKSPACE_ROLES = ["COMBINED", "OPERATOR", "KITCHEN"] as const;
+
+/**
+ * Whether a kitchen `tag` belongs to this restaurant AND this role. Accepts the
+ * role-scoped tag for THIS role (`kitchen-actionable:<rid>:<role>:…`) and a
+ * genuine legacy role-less tag (`kitchen-actionable:<rid>:<evidenceId>` whose
+ * first segment is NOT a known role). A tag carrying ANOTHER known role is
+ * rejected. `evidenceId` may contain colons — only the first segment is examined,
+ * and only an EXACT role match rejects.
+ */
+function kitchenTagMatchesRole(
+  tag: string,
+  restaurantId: string,
+  workspaceRole: string,
+): boolean {
+  const roleLessPrefix = `${KITCHEN_TAG_PREFIX}${restaurantId}:`;
+  if (!tag.startsWith(roleLessPrefix)) return false;
+  const rest = tag.slice(roleLessPrefix.length);
+  if (rest.length === 0) return false;
+  const nextColon = rest.indexOf(":");
+  const firstSegment = nextColon === -1 ? rest : rest.slice(0, nextColon);
+  if ((KNOWN_WORKSPACE_ROLES as readonly string[]).includes(firstSegment)) {
+    // A role-scoped tag is valid only for this scope's role.
+    return firstSegment === workspaceRole;
+  }
+  // First segment is not a role → a genuine legacy role-less tag.
+  return true;
+}
+
 /**
  * Whether a structured entry's key/tag belong to the current audience scope (or
  * a valid legacy kitchen migration): a driver entry must use a `driver-offer:`
  * tag; a kitchen entry's key must be role-scoped for this restaurant+role and its
- * tag must belong to this restaurant (role-scoped or the legacy role-less form).
- * An entry of another restaurant/role/driver fails closed.
+ * tag must match the SAME role (or be a genuine legacy role-less tag). An entry
+ * of another restaurant/role/driver fails closed.
  */
 function entryMatchesScope(key: string, tag: string, scope: string): boolean {
   if (scope.startsWith("driver:")) {
@@ -437,8 +467,10 @@ function entryMatchesScope(key: string, tag: string, scope: string): boolean {
   const kitchen = parseKitchenScope(scope);
   if (kitchen === null) return false;
   const roleKeyPrefix = `${KITCHEN_TAG_PREFIX}${kitchen.restaurantId}:${kitchen.workspaceRole}:`;
-  const roleLessTagPrefix = `${KITCHEN_TAG_PREFIX}${kitchen.restaurantId}:`;
-  return key.startsWith(roleKeyPrefix) && tag.startsWith(roleLessTagPrefix);
+  return (
+    key.startsWith(roleKeyPrefix) &&
+    kitchenTagMatchesRole(tag, kitchen.restaurantId, kitchen.workspaceRole)
+  );
 }
 
 /**

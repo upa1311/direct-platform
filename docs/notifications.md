@@ -267,9 +267,12 @@ service worker получает сообщение от активного кл�
   после подтверждённого CLOSE-ACK, а `stale PENDING` никогда автоматически не
   считается показанным и не удаляется без доказанного безопасного восстановления.
   Structured-записи проходят scope-validation: driver-запись должна использовать
-  `driver-offer:`-tag, kitchen-запись — role-scoped `key` этого ресторана+роли и
-  `tag` этого ресторана; запись другого ресторана/роли/аудитории → `INVALID_DATA`.
-  Дубликат key с РАЗНЫМ tag → `INVALID_DATA`.
+  `driver-offer:`-tag, kitchen-запись — role-scoped `key` этого ресторана+роли; её
+  `tag` должен быть role-scoped ДЛЯ ТОЙ ЖЕ роли либо настоящим legacy role-less
+  (`kitchen-actionable:<rid>:<evidenceId>`, где первый сегмент — не известная
+  роль; evidenceId может содержать двоеточия). `tag` другой известной роли
+  (`COMBINED`/`OPERATOR`/`KITCHEN`) → `INVALID_DATA`; запись другого ресторана/
+  роли/аудитории → `INVALID_DATA`. Дубликат key с РАЗНЫМ tag → `INVALID_DATA`.
 - **Миграция storage-ключа кухни.** Первая версия хранила kitchen-ledger под
   общим role-less ключом `direct-notification-ledger:kitchen:<restaurantId>`;
   текущая читает role-scoped ключ `…:kitchen:<restaurantId>:<workspaceRole>`.
