@@ -352,22 +352,92 @@ export interface NotificationLedgerEntry {
 }
 
 /**
- * Migrate/normalise a stored ledger. Legacy `string[]` values (first feature
- * version) become `{ key, tag: key, state: "DELIVERED" }` so existing dedupe is
- * preserved. Malformed items are dropped fail-closed; the result is de-duplicated
- * by key and bounded (oldest-first pruning).
+ * Explicit ledger parse result. A corrupt stored array is NEVER silently treated
+ * as a valid (empty) ledger: any element of unknown shape fails the whole read
+ * closed, which degrades capability and blocks delivery until it is fixed.
  */
-export function normalizeLedgerEntries(
+export type NotificationLedgerParseResult =
+  | { ok: true; entries: NotificationLedgerEntry[]; migrated: boolean }
+  | { ok: false; error: "INVALID_DATA" };
+
+const KITCHEN_TAG_PREFIX = "kitchen-actionable:";
+
+/** Split a `kitchen:<restaurantId>:<workspaceRole>` scope (role is last segment). */
+function parseKitchenScope(
+  scope: string,
+): { restaurantId: string; workspaceRole: string } | null {
+  if (!scope.startsWith("kitchen:")) return null;
+  const rest = scope.slice("kitchen:".length);
+  const lastColon = rest.lastIndexOf(":");
+  if (lastColon <= 0 || lastColon === rest.length - 1) return null;
+  return {
+    restaurantId: rest.slice(0, lastColon),
+    workspaceRole: rest.slice(lastColon + 1),
+  };
+}
+
+/**
+ * Migrate one legacy bare-string ledger value into a structured entry, using the
+ * audience `scope`. Returns null when the string cannot belong to this scope
+ * (fail-closed). Driver strings keep their key/tag. A role-less kitchen string
+ * `kitchen-actionable:<restaurantId>:<evidenceId>` gets a role-scoped `key` (so a
+ * new role-scoped intent counts as already delivered) while keeping the original
+ * role-less `tag` (so the old OS notification can still be closed). `evidenceId`
+ * may itself contain colons — the known prefix is stripped, never split by count.
+ */
+function migrateLegacyLedgerString(
+  value: string,
+  scope: string,
+): NotificationLedgerEntry | null {
+  if (value.length === 0) return null;
+  if (scope.startsWith("driver:")) {
+    // Driver legacy keys are unchanged.
+    return { key: value, tag: value, state: "DELIVERED" };
+  }
+  const kitchen = parseKitchenScope(scope);
+  if (kitchen === null) return null;
+  const roleScopedPrefix = `${KITCHEN_TAG_PREFIX}${kitchen.restaurantId}:${kitchen.workspaceRole}:`;
+  const roleLessPrefix = `${KITCHEN_TAG_PREFIX}${kitchen.restaurantId}:`;
+  if (value.startsWith(roleScopedPrefix)) {
+    // Already new-format (defensive: bare strings are normally role-less legacy).
+    if (value.length === roleScopedPrefix.length) return null;
+    return { key: value, tag: value, state: "DELIVERED" };
+  }
+  if (value.startsWith(roleLessPrefix)) {
+    const evidenceId = value.slice(roleLessPrefix.length);
+    if (evidenceId.length === 0) return null;
+    return {
+      key: `${roleScopedPrefix}${evidenceId}`,
+      tag: value,
+      state: "DELIVERED",
+    };
+  }
+  return null;
+}
+
+/**
+ * Parse/migrate a stored ledger fail-closed. `[]` is a valid empty ledger; a
+ * valid legacy `string[]` migrates (see migrateLegacyLedgerString); valid
+ * structured entries are accepted. If ANY element has an unknown shape, a blank
+ * key/tag, an unknown state or the whole value is not an array, the result is
+ * `INVALID_DATA` (no silent drop). Duplicate keys are resolved conservatively:
+ * the entry stays PENDING if any occurrence is PENDING (never loses a block). The
+ * result is bounded (oldest-first pruning).
+ */
+export function parseNotificationLedger(
   raw: unknown,
+  scope: string,
   max: number = NOTIFICATION_LEDGER_MAX,
-): NotificationLedgerEntry[] {
-  if (!Array.isArray(raw)) return [];
-  const out: NotificationLedgerEntry[] = [];
-  const seen = new Set<string>();
+): NotificationLedgerParseResult {
+  if (!Array.isArray(raw)) return { ok: false, error: "INVALID_DATA" };
+  const byKey = new Map<string, NotificationLedgerEntry>();
+  let migrated = false;
   for (const item of raw) {
-    let entry: NotificationLedgerEntry | null = null;
-    if (typeof item === "string" && item.length > 0) {
-      entry = { key: item, tag: item, state: "DELIVERED" };
+    let entry: NotificationLedgerEntry | null;
+    if (typeof item === "string") {
+      entry = migrateLegacyLedgerString(item, scope);
+      if (entry === null) return { ok: false, error: "INVALID_DATA" };
+      migrated = true;
     } else if (item !== null && typeof item === "object") {
       const record = item as Record<string, unknown>;
       if (
@@ -378,14 +448,28 @@ export function normalizeLedgerEntries(
         (record.state === "PENDING" || record.state === "DELIVERED")
       ) {
         entry = { key: record.key, tag: record.tag, state: record.state };
+      } else {
+        return { ok: false, error: "INVALID_DATA" };
       }
+    } else {
+      return { ok: false, error: "INVALID_DATA" };
     }
-    if (entry !== null && !seen.has(entry.key)) {
-      seen.add(entry.key);
-      out.push(entry);
+    const existing = byKey.get(entry.key);
+    if (existing) {
+      // Conflicting duplicate key → keep it PENDING (fail-closed: a PENDING
+      // block is never downgraded to DELIVERED by a stray duplicate).
+      const state =
+        existing.state === "PENDING" || entry.state === "PENDING"
+          ? "PENDING"
+          : "DELIVERED";
+      byKey.set(entry.key, { key: entry.key, tag: existing.tag, state });
+    } else {
+      byKey.set(entry.key, entry);
     }
   }
-  return out.length > max ? out.slice(out.length - max) : out;
+  let entries = [...byKey.values()];
+  if (entries.length > max) entries = entries.slice(entries.length - max);
+  return { ok: true, entries, migrated };
 }
 
 export function findLedgerEntry(
@@ -413,14 +497,20 @@ export function removeLedgerEntry(
   return entries.filter((entry) => entry.key !== key);
 }
 
-/** DELIVERED entries whose tag is no longer an active intent → close candidates. */
+/**
+ * DELIVERED entries whose entity is no longer active → close candidates. Active
+ * identity is compared by `key` (not `tag`), because a migrated legacy kitchen
+ * entry has a role-scoped `key` but keeps the original role-less `tag`. The
+ * reconciler closes the stored `entry.tag` (the real OS-notification tag) and
+ * removes the entry by `entry.key`.
+ */
 export function selectStaleDeliveredEntries(
   entries: readonly NotificationLedgerEntry[],
   activeIntents: readonly DirectSystemNotificationIntent[],
 ): NotificationLedgerEntry[] {
-  const active = new Set(activeIntents.map((intent) => intent.tag));
+  const active = new Set(activeIntents.map((intent) => intent.key));
   return entries.filter(
-    (entry) => entry.state === "DELIVERED" && !active.has(entry.tag),
+    (entry) => entry.state === "DELIVERED" && !active.has(entry.key),
   );
 }
 

@@ -5,7 +5,7 @@ import {
 } from "@/prototype/browser-adapters";
 import {
   intentToPayload,
-  normalizeLedgerEntries,
+  parseNotificationLedger,
   type BrowserNotificationPermission,
   type BrowserStorageReadResult,
   type DirectSystemNotificationIntent,
@@ -138,14 +138,18 @@ export function readNotificationLedger(
     return { ok: false, error: "UNAVAILABLE" };
   }
   if (raw === null) return { ok: true, value: [] };
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return { ok: false, error: "INVALID_DATA" };
-    // Migrate legacy string[] and normalise structured entries fail-closed.
-    return { ok: true, value: normalizeLedgerEntries(parsed) };
+    parsed = JSON.parse(raw);
   } catch {
     return { ok: false, error: "INVALID_DATA" };
   }
+  // Fail-closed parse/migration (scope-aware). Any malformed element → the whole
+  // read is INVALID_DATA, never a silently-emptied ledger.
+  const result = parseNotificationLedger(parsed, scope);
+  return result.ok
+    ? { ok: true, value: result.entries }
+    : { ok: false, error: "INVALID_DATA" };
 }
 
 /** Ledger write; true only when the entries were actually persisted. */

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
-  normalizeLedgerEntries,
+  parseNotificationLedger,
   notificationAudienceScope,
   reconcileNotificationDelivery,
   resolveDirectNotificationCapability,
@@ -126,31 +126,149 @@ function ports(
   };
 }
 
-// --- 1-3: migration / empty / corrupt ------------------------------------------
+// --- migration / fail-closed parse --------------------------------------------
 
-test("1: legacy string[] ledger migrates to DELIVERED entries", () => {
-  assert.deepEqual(normalizeLedgerEntries(["driver-offer:a", "driver-offer:b"]), [
-    { key: "driver-offer:a", tag: "driver-offer:a", state: "DELIVERED" },
-    { key: "driver-offer:b", tag: "driver-offer:b", state: "DELIVERED" },
-  ]);
-  // Mixed structured + legacy + junk: keep valid, drop junk, de-dupe by key.
-  assert.deepEqual(
-    normalizeLedgerEntries([
-      "k1",
-      { key: "k2", tag: "t2", state: "PENDING" },
-      { key: "k1", tag: "k1", state: "DELIVERED" },
-      { nope: true },
-      42,
-    ]),
-    [
-      { key: "k1", tag: "k1", state: "DELIVERED" },
-      { key: "k2", tag: "t2", state: "PENDING" },
-    ],
-  );
+const DRIVER_SCOPE = `driver:${DRIVER}`;
+const COMBINED_SCOPE = `kitchen:${REST}:COMBINED`;
+const OPERATOR_SCOPE = `kitchen:${REST}:OPERATOR`;
+
+test("m1: [] is a valid empty ledger", () => {
+  assert.deepEqual(parseNotificationLedger([], DRIVER_SCOPE), {
+    ok: true,
+    entries: [],
+    migrated: false,
+  });
 });
 
-test("2-3: empty ledger reads as []; corrupt ledger degrades (not empty)", async () => {
-  assert.deepEqual(normalizeLedgerEntries([]), []);
+test("m2: a fully valid structured ledger is accepted (no migration)", () => {
+  const entries = [
+    { key: "driver-offer:a", tag: "driver-offer:a", state: "DELIVERED" as const },
+    { key: "driver-offer:b", tag: "driver-offer:b", state: "PENDING" as const },
+  ];
+  assert.deepEqual(parseNotificationLedger(entries, DRIVER_SCOPE), {
+    ok: true,
+    entries,
+    migrated: false,
+  });
+});
+
+test("m3: legacy driver string → DELIVERED with unchanged key/tag", () => {
+  const result = parseNotificationLedger(["driver-offer:a"], DRIVER_SCOPE);
+  assert.ok(result.ok);
+  assert.equal(result.migrated, true);
+  assert.deepEqual(result.entries, [
+    { key: "driver-offer:a", tag: "driver-offer:a", state: "DELIVERED" },
+  ]);
+});
+
+test("m4-m5: legacy role-less kitchen string → role-scoped key, legacy tag kept", () => {
+  const legacy = `kitchen-actionable:${REST}:evt-1`;
+  const combined = parseNotificationLedger([legacy], COMBINED_SCOPE);
+  assert.ok(combined.ok);
+  assert.deepEqual(combined.entries, [
+    { key: `kitchen-actionable:${REST}:COMBINED:evt-1`, tag: legacy, state: "DELIVERED" },
+  ]);
+  const operator = parseNotificationLedger([legacy], OPERATOR_SCOPE);
+  assert.ok(operator.ok);
+  assert.deepEqual(operator.entries, [
+    { key: `kitchen-actionable:${REST}:OPERATOR:evt-1`, tag: legacy, state: "DELIVERED" },
+  ]);
+});
+
+test("m6: evidenceId with colons migrates without corruption", () => {
+  const evidence = "o-rev:2026-07-31T10:00:00.000Z";
+  const legacy = `kitchen-actionable:${REST}:${evidence}`;
+  const result = parseNotificationLedger([legacy], COMBINED_SCOPE);
+  assert.ok(result.ok);
+  assert.deepEqual(result.entries, [
+    {
+      key: `kitchen-actionable:${REST}:COMBINED:${evidence}`,
+      tag: legacy,
+      state: "DELIVERED",
+    },
+  ]);
+});
+
+test("m12-m15: any malformed element fails the whole read closed", () => {
+  const cases: unknown[] = [
+    "not an array",
+    [{ nope: true }], // unknown object shape
+    ["k1", { nope: true }], // mixed valid + malformed
+    [{ key: "k", tag: "t", state: "SENT" }], // unknown state
+    [{ key: "", tag: "t", state: "DELIVERED" }], // blank key
+    [{ key: "k", tag: "", state: "DELIVERED" }], // blank tag
+    [42],
+    [""], // blank legacy string
+    [`kitchen-actionable:other-restaurant:evt`], // wrong scope prefix
+  ];
+  for (const raw of cases) {
+    assert.deepEqual(
+      parseNotificationLedger(raw, COMBINED_SCOPE),
+      { ok: false, error: "INVALID_DATA" },
+      JSON.stringify(raw),
+    );
+  }
+});
+
+test("m16: conflicting duplicate key resolves fail-closed to PENDING", () => {
+  const result = parseNotificationLedger(
+    [
+      { key: "k", tag: "k", state: "DELIVERED" },
+      { key: "k", tag: "k", state: "PENDING" },
+    ],
+    DRIVER_SCOPE,
+  );
+  assert.ok(result.ok);
+  assert.deepEqual(result.entries, [{ key: "k", tag: "k", state: "PENDING" }]);
+});
+
+test("m7-m8: a migrated legacy kitchen entry blocks a new intent with no SHOW", async () => {
+  const legacy = `kitchen-actionable:${REST}:evt-1`;
+  const parsed = parseNotificationLedger([legacy], COMBINED_SCOPE);
+  assert.ok(parsed.ok);
+  const store = new FakeLedgerStore();
+  store.entries = parsed.entries;
+  const counters = newCounters();
+  // A fresh role-scoped intent for the same order is already deduped.
+  const intentSameOrder: DirectSystemNotificationIntent = {
+    key: `kitchen-actionable:${REST}:COMBINED:evt-1`,
+    tag: `kitchen-actionable:${REST}:COMBINED:evt-1`,
+    audience: { type: "KITCHEN", restaurantId: REST, workspaceRole: "COMBINED" },
+    kind: "KITCHEN_NEW_ACTIONABLE_ORDER",
+    entityKind: "KITCHEN_ORDER",
+    entityId: "o1",
+    title: "Новый заказ для кухни",
+    body: "Заказ R-1 готов к работе.",
+    targetUrl: "/restaurant/kitchen",
+  };
+  const outcome = await reconcileNotificationDelivery(
+    [intentSameOrder],
+    new Set(),
+    ports(store, new FakeLock(), counters),
+  );
+  assert.equal(outcome.status, "OK");
+  assert.equal(counters.shown, 0); // migration never shows
+});
+
+test("m9-m11: migrated legacy kitchen entry goes stale by key, closes by legacy tag", async () => {
+  const legacy = `kitchen-actionable:${REST}:evt-1`;
+  const parsed = parseNotificationLedger([legacy], COMBINED_SCOPE);
+  assert.ok(parsed.ok);
+  const store = new FakeLedgerStore();
+  store.entries = parsed.entries;
+  const counters = newCounters();
+  // Order no longer actionable (no active intents) → stale by key, close by tag.
+  const outcome = await reconcileNotificationDelivery(
+    [],
+    new Set(),
+    ports(store, new FakeLock(), counters, () => true, () => true),
+  );
+  assert.equal(outcome.status, "OK");
+  assert.deepEqual(counters.closed, [legacy]); // CLOSE uses the legacy tag
+  assert.deepEqual(store.states(), []); // removed after CLOSE_ACK
+});
+
+test("corrupt ledger read → DEGRADED, zero show", async () => {
   for (const mode of ["unavailable", "invalid"] as const) {
     const store = new FakeLedgerStore();
     store.readMode = mode;
@@ -345,9 +463,10 @@ test("18: a failed CLOSE_ACK keeps the DELIVERED entry (retry later)", async () 
 
 test("19: ledger stays bounded (migration + upsert prune oldest)", () => {
   const raw = Array.from({ length: NOTIFICATION_LEDGER_MAX + 5 }, (_, i) => `k${i}`);
-  const migrated = normalizeLedgerEntries(raw);
-  assert.equal(migrated.length, NOTIFICATION_LEDGER_MAX);
-  assert.equal(migrated[0].key, "k5");
+  const parsed = parseNotificationLedger(raw, DRIVER_SCOPE);
+  assert.ok(parsed.ok);
+  assert.equal(parsed.entries.length, NOTIFICATION_LEDGER_MAX);
+  assert.equal(parsed.entries[0].key, "k5");
   let entries: NotificationLedgerEntry[] = [];
   for (let i = 0; i < NOTIFICATION_LEDGER_MAX + 3; i += 1) {
     entries = upsertLedgerEntry(entries, { key: `u${i}`, tag: `u${i}`, state: "DELIVERED" });
@@ -452,7 +571,7 @@ const CORE = readFileSync("src/prototype/direct-notifications.ts", "utf8");
 test("28-30 (source): enable needs a durable write; no sound/state writes; ledger migrates", () => {
   assert.ok(HOOK.includes("writeNotificationPreference(preferenceKey, true)"));
   assert.ok(HOOK.includes("setPreferenceEnabled(durable)"));
-  assert.ok(RUNTIME.includes("normalizeLedgerEntries"));
+  assert.ok(RUNTIME.includes("parseNotificationLedger"));
   for (const forbidden of [
     "direct-driver-offer-sound-enabled",
     "direct-kitchen-sound-enabled",
