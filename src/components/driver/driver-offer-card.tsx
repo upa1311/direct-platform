@@ -168,7 +168,9 @@ export function DriverOfferCard({
         <button
           type="button"
           className={styles.primaryButton}
-          disabled={disabled}
+          // Наличный заказ без валидного раскрытия сдачи принять нельзя (F-5,
+          // fail-closed): кнопка заблокирована, отказ остаётся доступным.
+          disabled={disabled || cashDisclosure.status === "REVIEW_REQUIRED"}
           onClick={onAccept}
         >
           Принять заказ

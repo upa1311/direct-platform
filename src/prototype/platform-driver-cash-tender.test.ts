@@ -236,7 +236,7 @@ test("tender-32: CHANGE_FROM → READY с четырьмя суммами", () =
   assert.equal(view.restaurantHandoffCents, 700);
 });
 
-test("tender-33: отсутствие/рассинхрон снимка → REVIEW_REQUIRED / NOT_APPLICABLE", () => {
+test("tender-33: повреждённый НАЛИЧНЫЙ заказ → REVIEW_REQUIRED (не NOT_APPLICABLE)", () => {
   assert.equal(
     getDriverCashOfferDisclosureView(cashOrder({ tender: null })).status,
     "REVIEW_REQUIRED",
@@ -247,10 +247,11 @@ test("tender-33: отсутствие/рассинхрон снимка → REVI
     ).status,
     "REVIEW_REQUIRED",
   );
-  // Нет валидного cash snapshot → раскрытие вообще неприменимо.
+  // Наличный заказ без валидного основного снимка — тоже REVIEW_REQUIRED: он не
+  // маскируется под NOT_APPLICABLE (это классификация только для не-наличных).
   assert.equal(
     getDriverCashOfferDisclosureView(cashOrder({ snapshot: null })).status,
-    "NOT_APPLICABLE",
+    "REVIEW_REQUIRED",
   );
 });
 

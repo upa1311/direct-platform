@@ -1532,9 +1532,10 @@ test("cash-ui-40: карточка раскрывает получение, пе
 });
 
 test("cash-ui-41-42: «Принять заказ» наличного открывает лист, а не назначает сразу", () => {
-  // Наличное принятие ветвится по наличному раскрытию: сначала setCashConfirm.
+  // READY-наличное принятие ветвится в лист (setCashConfirm), ONLINE — one-tap.
   assert.ok(WORKSPACE.includes("setCashConfirm"));
-  assert.ok(WORKSPACE.includes('disclosure.status !== "NOT_APPLICABLE"'));
+  assert.ok(WORKSPACE.includes('disclosure.status === "READY"'));
+  assert.ok(WORKSPACE.includes('disclosure.status === "NOT_APPLICABLE"'));
 });
 
 test("cash-ui-43: есть кнопка «У меня есть необходимую сумму»", () => {

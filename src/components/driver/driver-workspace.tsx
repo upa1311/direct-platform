@@ -1133,15 +1133,17 @@ function NewOffersSection({
   const decline = (offerId: string) =>
     void run(() => driverDeclineOffer(driver.id, offerId));
 
-  // Онлайн — принять сразу (one-tap, без подтверждения). Наличные — первое
-  // нажатие открывает лист подтверждения с полным раскрытием, а не назначает.
+  // READY-наличный — первое нажатие открывает лист подтверждения (не назначает).
+  // ONLINE (NOT_APPLICABLE) — принять сразу one-tap. REVIEW_REQUIRED — наличный
+  // заказ без валидного раскрытия сдачи: принять нельзя (кнопка заблокирована в
+  // карточке); он НЕ проходит через online one-tap. Доменный guard — доп. защита.
   const handleAccept =
     (offer: DriverOffer, disclosure: DriverCashOfferDisclosureView) =>
     (event: React.MouseEvent<HTMLButtonElement>) => {
-      if (disclosure.status !== "NOT_APPLICABLE") {
+      if (disclosure.status === "READY") {
         cashTriggerRef.current = event.currentTarget;
         setCashConfirm({ offerId: offer.id, disclosure });
-      } else {
+      } else if (disclosure.status === "NOT_APPLICABLE") {
         void run(() =>
           driverAcceptOffer(driver.id, offer.id, { cashReserveConfirmed: false }),
         );
@@ -1269,23 +1271,6 @@ function NewOffersSection({
                 {error}
               </p>
             ) : null}
-          </>
-        ) : cashConfirm !== null ? (
-          <>
-            {/* Наличный заказ без валидного снимка сдачи: принять нельзя. */}
-            <p className={styles.cashSheetText}>
-              Данные о сдаче требуют проверки Direct.
-            </p>
-            <div className={styles.cashConfirmActions}>
-              <button
-                type="button"
-                className={`${styles.secondaryButton} ${styles.cashConfirmSecondary}`}
-                disabled={pending}
-                onClick={closeCash}
-              >
-                Закрыть
-              </button>
-            </div>
           </>
         ) : null}
       </DriverControlSheet>

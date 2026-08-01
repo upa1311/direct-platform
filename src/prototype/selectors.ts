@@ -2850,8 +2850,15 @@ export type DriverCashOfferDisclosureView =
 export function getDriverCashOfferDisclosureView(
   order: Order,
 ): DriverCashOfferDisclosureView {
+  // Только заказ, который вообще не наличный PLATFORM_DRIVER, — NOT_APPLICABLE.
+  // Повреждённый/неполный НАЛИЧНЫЙ заказ обязан быть REVIEW_REQUIRED, а не
+  // маскироваться под «онлайн»: отсутствие/рассинхрон основного или tender-снимка
+  // требует проверки Direct, а не тихого пропуска раскрытия.
+  if (order.deliveryMode !== "PLATFORM_DRIVER" || order.paymentMethod !== "CASH") {
+    return { status: "NOT_APPLICABLE" };
+  }
   const cash = getPlatformDriverCashSnapshot(order);
-  if (cash === null) return { status: "NOT_APPLICABLE" };
+  if (cash === null) return { status: "REVIEW_REQUIRED" };
   const tender = getPlatformDriverCashTenderSnapshot(order);
   if (tender === null) return { status: "REVIEW_REQUIRED" };
   return {
