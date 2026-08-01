@@ -14,6 +14,7 @@ import {
   type DirectSystemNotificationIntent,
   type NotificationDeliveryPorts,
 } from "@/prototype/direct-notifications";
+import { shouldRunNotificationReconcile } from "@/prototype/direct-notification-ack";
 import {
   closeNotificationViaWorker,
   getSystemNotificationPermission,
@@ -55,6 +56,7 @@ export function useDirectSystemNotifications({
   audience,
   intents,
   nowMs,
+  active = true,
 }: {
   audience: DirectSystemNotificationAudience;
   /**
@@ -63,6 +65,12 @@ export function useDirectSystemNotifications({
    */
   intents: DirectSystemNotificationIntent[];
   nowMs: number;
+  /**
+   * Whether this screen owns notification delivery. When false the reconcile
+   * loop does nothing at all: it does not show, does not close stale tags, and
+   * never reads or writes the shared audience ledger.
+   */
+  active?: boolean;
 }): {
   capability: DirectNotificationCapability;
   enable: () => Promise<void>;
@@ -141,12 +149,22 @@ export function useDirectSystemNotifications({
     deliveryFailed,
   });
 
-  // Reconcile only when we can guarantee one-intent-one-notification (ENABLED).
+  // Reconcile only when we can guarantee one-intent-one-notification (ENABLED)
+  // AND this screen is active. An inactive screen does nothing: no show, no
+  // close of stale tags, and no read/write of the shared audience ledger.
   useEffect(() => {
-    if (capability.status !== "ENABLED") return;
-    if (nowMs === 0) return;
     const registration = registrationRef.current;
-    if (!registration) return;
+    if (
+      !shouldRunNotificationReconcile({
+        active,
+        enabled: capability.status === "ENABLED",
+        nowMs,
+        hasRegistration: registration !== null,
+      })
+    ) {
+      return;
+    }
+    if (registration === null) return;
     if (reconcilingRef.current) return;
     reconcilingRef.current = true;
 
@@ -171,7 +189,7 @@ export function useDirectSystemNotifications({
       .finally(() => {
         reconcilingRef.current = false;
       });
-  }, [capability.status, intents, nowMs, scope]);
+  }, [active, capability.status, intents, nowMs, scope]);
 
   const enable = useCallback(async () => {
     if (!isSystemNotificationSupported()) {

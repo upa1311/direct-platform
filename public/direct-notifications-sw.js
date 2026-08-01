@@ -76,9 +76,31 @@ self.addEventListener("activate", function (event) {
   event.waitUntil(self.clients.claim());
 });
 
+// Confirmed request/response: reply on the MessageChannel port the client opened,
+// echoing its requestId, only after the show/close actually settled. The client
+// records/removes its ledger key only on this ACK (fail-closed otherwise).
+function ackPort(event, ok) {
+  var raw = event.data;
+  var requestId =
+    raw !== null && typeof raw === "object" && typeof raw.requestId === "string"
+      ? raw.requestId
+      : null;
+  var port = event.ports && event.ports[0];
+  if (port) {
+    port.postMessage({
+      type: "DIRECT_NOTIFICATION_ACK",
+      requestId: requestId,
+      ok: ok === true,
+    });
+  }
+}
+
 self.addEventListener("message", function (event) {
   var message = validateMessage(event.data);
-  if (message === null) return;
+  if (message === null) {
+    ackPort(event, false);
+    return;
+  }
 
   if (message.type === "CLOSE_DIRECT_NOTIFICATION") {
     event.waitUntil(
@@ -86,6 +108,10 @@ self.addEventListener("message", function (event) {
         .getNotifications({ tag: message.tag })
         .then(function (list) {
           for (var i = 0; i < list.length; i += 1) list[i].close();
+          ackPort(event, true);
+        })
+        .catch(function () {
+          ackPort(event, false);
         })
     );
     return;
@@ -93,34 +119,72 @@ self.addEventListener("message", function (event) {
 
   var n = message.notification;
   event.waitUntil(
-    self.registration.showNotification(n.title, {
-      body: n.body,
-      tag: n.tag,
-      // Store only the validated, approved relative route + safe identity.
-      data: { url: n.url, entityKind: n.entityKind, entityId: n.entityId },
-      renotify: false,
-    })
+    self.registration
+      .showNotification(n.title, {
+        body: n.body,
+        tag: n.tag,
+        // Store only the validated, approved relative route + safe identity.
+        data: { url: n.url, entityKind: n.entityKind, entityId: n.entityId },
+        renotify: false,
+      })
+      .then(function () {
+        ackPort(event, true);
+      })
+      .catch(function () {
+        ackPort(event, false);
+      })
   );
 });
+
+// Mirrors the client-side selectNotificationClickAction helper:
+// 1) focus a tab already on the exact route; 2) else navigate a same-origin tab
+// to the route and focus it; 3) else open a new window on the route.
+function sameOrigin(url, origin) {
+  return (
+    url === origin ||
+    url.indexOf(origin + "/") === 0 ||
+    url.indexOf(origin + "?") === 0 ||
+    url.indexOf(origin + "#") === 0
+  );
+}
+
+function sameOriginPath(url, origin) {
+  if (!sameOrigin(url, origin)) return "";
+  var rest = url.slice(origin.length) || "/";
+  var path = rest.split("?")[0].split("#")[0];
+  return path === "" ? "/" : path;
+}
 
 self.addEventListener("notificationclick", function (event) {
   event.notification.close();
   var data = event.notification.data || {};
-  var url = isApprovedRoute(data.url) ? data.url : "/";
+  var route = isApprovedRoute(data.url) ? data.url : "/";
   event.waitUntil(
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then(function (clientsList) {
-        var targetOrigin = self.location.origin;
+        var origin = self.location.origin;
+        var targetUrl = origin + route;
+        var reusable = null;
         for (var i = 0; i < clientsList.length; i += 1) {
           var client = clientsList[i];
-          // Focus an existing same-origin Direct tab instead of opening a new one.
-          if (client.url.indexOf(targetOrigin) === 0 && "focus" in client) {
+          if (!sameOrigin(client.url, origin)) continue;
+          if (sameOriginPath(client.url, origin) === route && "focus" in client) {
             return client.focus();
           }
+          if (reusable === null) reusable = client;
+        }
+        if (reusable !== null) {
+          if ("navigate" in reusable && typeof reusable.navigate === "function") {
+            return reusable.navigate(targetUrl).then(function (navigated) {
+              var target = navigated || reusable;
+              return target && "focus" in target ? target.focus() : undefined;
+            });
+          }
+          if ("focus" in reusable) return reusable.focus();
         }
         if (self.clients.openWindow) {
-          return self.clients.openWindow(targetOrigin + url);
+          return self.clients.openWindow(targetUrl);
         }
         return undefined;
       })

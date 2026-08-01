@@ -87,6 +87,7 @@ function ports(
   lock: FakeLock,
   counters: { shown: number; closed: string[] },
   showResult: (intent: DirectSystemNotificationIntent) => boolean = () => true,
+  closeResult: (tag: string) => boolean = () => true,
 ): NotificationDeliveryPorts {
   return {
     readLedger: () => store.read(),
@@ -96,7 +97,11 @@ function ports(
       if (ok) counters.shown += 1;
       return ok;
     },
-    close: (tag) => counters.closed.push(tag),
+    // Confirmed close (ACK) by default; a stale key is dropped only on a true ACK.
+    close: async (tag) => {
+      counters.closed.push(tag);
+      return closeResult(tag);
+    },
     runExclusive: (fn) => lock.run(fn),
   };
 }
@@ -393,4 +398,34 @@ test("20-22: service worker routes unchanged; no push/offline regressions", () =
       assert.ok(!source.includes(forbidden), forbidden);
     }
   }
+});
+
+// --- 23-24: CLOSE key removed only after a confirmed ACK ------------------------
+
+test("23: a stale key is dropped only after its close is ACKed", async () => {
+  const store = new FakeLedgerStore();
+  store.write(["driver-offer:a"]); // previously delivered
+  const counters = { shown: 0, closed: [] as string[] };
+  const outcome = await reconcileNotificationDelivery(
+    [], // no active intents → the delivered key is stale
+    new Set<string>(),
+    ports(store, new FakeLock(), counters, () => true, () => true),
+  );
+  assert.equal(outcome.status, "OK");
+  assert.deepEqual(counters.closed, ["driver-offer:a"]); // close attempted
+  assert.deepEqual(store.snapshot(), []); // ACKed → key removed
+});
+
+test("24: an un-ACKed close keeps the key for a later retry (fail-closed)", async () => {
+  const store = new FakeLedgerStore();
+  store.write(["driver-offer:a"]);
+  const counters = { shown: 0, closed: [] as string[] };
+  const outcome = await reconcileNotificationDelivery(
+    [],
+    new Set<string>(),
+    ports(store, new FakeLock(), counters, () => true, () => false), // close not ACKed
+  );
+  assert.equal(outcome.status, "OK");
+  assert.deepEqual(counters.closed, ["driver-offer:a"]); // close was attempted
+  assert.deepEqual(store.snapshot(), ["driver-offer:a"]); // NOT ACKed → key retained
 });

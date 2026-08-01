@@ -38,6 +38,7 @@ export function KitchenSystemNotifications({
     audience: { type: "KITCHEN", restaurantId, workspaceRole },
     intents,
     nowMs,
+    active,
   });
   return (
     <SystemNotificationControl

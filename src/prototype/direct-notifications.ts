@@ -340,7 +340,9 @@ export interface NotificationDeliveryPorts {
   readLedger: () => BrowserStorageReadResult<string[]>;
   writeLedger: (keys: string[]) => boolean;
   show: (intent: DirectSystemNotificationIntent) => Promise<boolean>;
-  close: (tag: string) => void;
+  // Resolves true only after the worker ACKs the close; a stale key is dropped
+  // only on a confirmed close, so a failed/timed-out close is retried later.
+  close: (tag: string) => Promise<boolean>;
   runExclusive: <T>(fn: () => Promise<T>) => Promise<NotificationLockResult<T>>;
 }
 
@@ -383,7 +385,7 @@ export async function reconcileNotificationDelivery(
       if (!ports.writeLedger(next)) {
         // Shown but not persisted → quarantine, close, stop, degrade.
         quarantine.add(intent.key);
-        ports.close(intent.tag);
+        void ports.close(intent.tag);
         return { degraded: "LEDGER_WRITE" as NotificationDegradeReason, shownKeys };
       }
       ledger = next;
@@ -392,12 +394,19 @@ export async function reconcileNotificationDelivery(
 
     const staleTags = selectStaleNotificationTags(intents, ledger);
     if (staleTags.length > 0) {
-      for (const tag of staleTags) ports.close(tag);
-      const forgotten = forgetDeliveredKeys(ledger, staleTags);
-      if (!ports.writeLedger(forgotten)) {
-        return { degraded: "LEDGER_WRITE" as NotificationDegradeReason, shownKeys };
+      // Drop a stale key ONLY after its close is ACKed; unconfirmed closes keep
+      // their key so the close is retried on a later tick (fail-closed).
+      const confirmedClosed: string[] = [];
+      for (const tag of staleTags) {
+        if (await ports.close(tag)) confirmedClosed.push(tag);
       }
-      ledger = forgotten;
+      if (confirmedClosed.length > 0) {
+        const forgotten = forgetDeliveredKeys(ledger, confirmedClosed);
+        if (!ports.writeLedger(forgotten)) {
+          return { degraded: "LEDGER_WRITE" as NotificationDegradeReason, shownKeys };
+        }
+        ledger = forgotten;
+      }
     }
 
     return { degraded: null as NotificationDegradeReason | null, shownKeys };

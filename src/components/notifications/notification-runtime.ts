@@ -11,6 +11,11 @@ import {
   type NotificationLockResult,
 } from "@/prototype/direct-notifications";
 import { validateWorkerNotificationMessage } from "@/prototype/direct-notification-worker-contract";
+import {
+  isAckOk,
+  nextNotificationRequestId,
+  NOTIFICATION_ACK_TIMEOUT_MS,
+} from "@/prototype/direct-notification-ack";
 
 /**
  * Thin, fully-guarded browser adapters for Direct system notifications. None of
@@ -206,6 +211,51 @@ export async function runWithNotificationLock<T>(
  * exists afterwards. Returns true only when the notification was actually shown,
  * so a failure never records the intent as delivered.
  */
+/**
+ * Post a message to the worker with an explicit requestId over a MessageChannel
+ * and resolve to true only on a matching ACK. Fail-closed: a missing/mismatched
+ * ACK or a bounded timeout resolves false, and the single-shot timer prevents any
+ * retry storm. Never throws.
+ */
+export async function requestWorkerAck(
+  worker: ServiceWorker,
+  message: Record<string, unknown>,
+  timeoutMs: number = NOTIFICATION_ACK_TIMEOUT_MS,
+): Promise<boolean> {
+  if (typeof MessageChannel === "undefined") return false;
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const requestId = nextNotificationRequestId();
+    const channel = new MessageChannel();
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        channel.port1.onmessage = null;
+        channel.port1.close();
+      } catch {
+        // ignore
+      }
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    channel.port1.onmessage = (event: MessageEvent) => {
+      finish(isAckOk(event.data, requestId));
+    };
+    try {
+      worker.postMessage({ ...message, requestId }, [channel.port2]);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+/**
+ * Post a validated SHOW and confirm it via a worker ACK. Returns true only when
+ * the worker acknowledged the show, so a failure never records the intent as
+ * delivered (SHOW key written only after SHOW_ACK).
+ */
 export async function showNotificationViaWorker(
   registration: ServiceWorkerRegistration | null,
   intent: DirectSystemNotificationIntent,
@@ -218,30 +268,31 @@ export async function showNotificationViaWorker(
       notification: intentToPayload(intent),
     });
     if (message === null) return false;
-    worker.postMessage(message);
-    // Confirm delivery: the worker shows synchronously enough that the tagged
-    // notification is queryable. If we cannot confirm, do not mark delivered.
-    const shown = await registration.getNotifications({ tag: intent.tag });
-    return shown.length > 0;
+    return await requestWorkerAck(worker, message as unknown as Record<string, unknown>);
   } catch {
     return false;
   }
 }
 
-export function closeNotificationViaWorker(
+/**
+ * Post a validated CLOSE and confirm it via a worker ACK. Returns true only when
+ * the worker acknowledged the close, so the caller removes the ledger key only
+ * after CLOSE_ACK; a failed/timed-out close keeps the key for a later retry.
+ */
+export async function closeNotificationViaWorker(
   registration: ServiceWorkerRegistration | null,
   tag: string,
-): void {
+): Promise<boolean> {
   try {
     const worker = registration?.active;
-    if (!worker) return;
+    if (!worker) return false;
     const message = validateWorkerNotificationMessage({
       type: "CLOSE_DIRECT_NOTIFICATION",
       tag,
     });
-    if (message === null) return;
-    worker.postMessage(message);
+    if (message === null) return false;
+    return await requestWorkerAck(worker, message as unknown as Record<string, unknown>);
   } catch {
-    // no-op
+    return false;
   }
 }
