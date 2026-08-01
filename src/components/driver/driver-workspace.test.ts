@@ -401,7 +401,7 @@ test("logout: OFFLINE очищает сессию сразу", () => {
 test("logout: AVAILABLE/PAUSED сначала driverGoOffline, при ошибке сессия сохраняется", () => {
   const block = WORKSPACE.slice(
     WORKSPACE.indexOf("const logout = async"),
-    WORKSPACE.indexOf("const logout = async") + 900,
+    WORKSPACE.indexOf("const logout = async") + 1400,
   );
   assert.ok(block.includes("await driverGoOffline(driver.id)"));
   // При ошибке — ранний выход до очистки сессии.

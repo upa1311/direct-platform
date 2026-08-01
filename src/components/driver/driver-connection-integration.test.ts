@@ -55,6 +55,49 @@ const view0 = {
   canMutate: false,
 };
 
+test("note-gate: Save/Delete go through the shared gate — blocked → no mutation", () => {
+  const nf = WORKSPACE.slice(
+    WORKSPACE.indexOf("function NoteForm"),
+    WORKSPACE.indexOf("// --- Управление статусом"),
+  );
+  assert.ok(nf.length > 0);
+  assert.ok(nf.includes("const blocked = useDriverActionsBlocked()"));
+  const saveBody = nf.slice(
+    nf.indexOf("const save = async"),
+    nf.indexOf("return ("),
+  );
+  // The gate blocks BEFORE the provider mutation and shows the shared message.
+  assert.ok(
+    saveBody.indexOf("if (blocked)") < saveBody.indexOf("updateDriverStatusNote"),
+  );
+  assert.ok(saveBody.includes("DRIVER_CONNECTION_BLOCKED_MESSAGE"));
+  // Both buttons are disabled while blocked; typed text is not discarded here.
+  assert.equal((nf.match(/disabled=\{pending \|\| blocked\}/g) ?? []).length, 2);
+});
+
+test("logout: uses the shared gate; blocked non-offline status runs no driverGoOffline", () => {
+  const pm = WORKSPACE.slice(
+    WORKSPACE.indexOf("function ProfileMenu"),
+    WORKSPACE.indexOf("function NoteForm"),
+  );
+  assert.ok(pm.length > 0);
+  // Shared connection view — not a direct navigator.onLine read inside the menu.
+  assert.ok(pm.includes("useDriverActionsBlocked()"));
+  assert.ok(!pm.includes("navigator.onLine"));
+  const logoutBody = pm.slice(
+    pm.indexOf("const logout = async"),
+    pm.indexOf("return ("),
+  );
+  const goOfflineCall = logoutBody.indexOf("await driverGoOffline(driver.id)");
+  assert.ok(goOfflineCall !== -1);
+  // OFFLINE driver status: pure local logout (clear session), no mutation.
+  assert.ok(logoutBody.indexOf('driver.status === "OFFLINE"') < goOfflineCall);
+  // Blocked connection: return with the logout-blocked message BEFORE the mutation.
+  assert.ok(logoutBody.indexOf("if (blocked)") < goOfflineCall);
+  assert.ok(logoutBody.includes("DRIVER_LOGOUT_BLOCKED_MESSAGE"));
+  assert.ok(pm.includes("Сначала завершите текущий заказ"));
+});
+
 test("32-33: no hidden queue, no automatic replay, no polling", () => {
   for (const source of [CONNECTION, HOOK]) {
     assert.ok(!source.toLowerCase().includes("queue"));

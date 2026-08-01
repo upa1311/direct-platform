@@ -374,12 +374,23 @@ function ProfileMenu({ driver }: { driver: DriverProfile }) {
   });
 
   const busy = driver.status === "BUSY_DIRECT";
+  // Logout consults the shared connection gate (useDriverActionsBlocked), not a
+  // per-menu network check.
+  const blocked = useDriverActionsBlocked();
 
   const logout = async () => {
     if (pending) return;
     if (driver.status === "OFFLINE") {
+      // Already offline: pure local-session action, no domain mutation needed.
       setOpen(false);
       clearAuthenticatedDriverId();
+      return;
+    }
+    // AVAILABLE / PAUSED / ZONE_CONFIRMATION_REQUIRED require driverGoOffline
+    // first — a domain mutation. Without a confirmed connection we must not run
+    // it or show a false success: keep the session and ask to reconnect.
+    if (blocked) {
+      setError(DRIVER_LOGOUT_BLOCKED_MESSAGE);
       return;
     }
     // AVAILABLE / PAUSED / ZONE_CONFIRMATION_REQUIRED: сначала уходим из сети.
@@ -504,9 +515,18 @@ function NoteForm({
   const [text, setText] = useState(driver.statusNote ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Saving/removing the note is a driver mutation → same connection gate.
+  const blocked = useDriverActionsBlocked();
 
   const save = async (value: string) => {
     if (pending) return;
+    // Connection gate: without a confirmed connection the note mutation is not
+    // run, not queued and not replayed. The typed text stays in the form so the
+    // driver can press Save again once ONLINE.
+    if (blocked) {
+      setError(DRIVER_CONNECTION_BLOCKED_MESSAGE);
+      return;
+    }
     setPending(true);
     setError(null);
     const result = await updateDriverStatusNote(driver.id, value);
@@ -547,7 +567,7 @@ function NoteForm({
         <button
           type="button"
           className={styles.noteEditorSave}
-          disabled={pending}
+          disabled={pending || blocked}
           onClick={() => void save(text)}
         >
           Сохранить
@@ -556,7 +576,7 @@ function NoteForm({
           <button
             type="button"
             className={styles.noteEditorDelete}
-            disabled={pending}
+            disabled={pending || blocked}
             onClick={() => void save("")}
           >
             Удалить заметку
@@ -583,6 +603,10 @@ const DriverConnectionContext = createContext<DriverConnectionView | null>(null)
 
 export const DRIVER_CONNECTION_BLOCKED_MESSAGE =
   "Действие недоступно без соединения. Данные обновятся автоматически.";
+
+/** Logout requires driverGoOffline (a mutation); blocked while offline. */
+export const DRIVER_LOGOUT_BLOCKED_MESSAGE =
+  "Чтобы выйти из аккаунта, сначала восстановите соединение.";
 
 /** Whether driver mutations are currently blocked by the connection gate. */
 function useDriverActionsBlocked(): boolean {

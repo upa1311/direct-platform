@@ -154,11 +154,23 @@ export function createDriverConnectionController(
 
   const runRefresh = (): void => {
     if (stopped || refreshing) return;
+    // Fail-closed: never refresh (or reach ONLINE) while the browser is offline.
+    // A successful persisted-state read is NOT proof of network connectivity.
+    if (!env.isOnline()) {
+      deps.dispatch({ type: "BROWSER_OFFLINE" });
+      return;
+    }
     refreshing = true;
     deps
       .refresh()
       .then((result) => {
         if (stopped) return;
+        // The network may have dropped during the refresh — re-check right before
+        // claiming ONLINE, so a stale success cannot flip state to ONLINE.
+        if (!env.isOnline()) {
+          deps.dispatch({ type: "BROWSER_OFFLINE" });
+          return;
+        }
         if (result.ok) {
           deps.dispatch({
             type: "REFRESH_SUCCEEDED",
@@ -170,7 +182,10 @@ export function createDriverConnectionController(
         }
       })
       .catch(() => {
-        if (!stopped) deps.dispatch({ type: "REFRESH_FAILED" });
+        if (stopped) return;
+        deps.dispatch(
+          env.isOnline() ? { type: "REFRESH_FAILED" } : { type: "BROWSER_OFFLINE" },
+        );
       })
       .finally(() => {
         refreshing = false;
@@ -217,6 +232,12 @@ export function createDriverConnectionController(
     },
     retry() {
       if (stopped) return;
+      // Fail-closed: a retry while offline cannot reach ONLINE — reflect OFFLINE
+      // and do not start a refresh.
+      if (!env.isOnline()) {
+        deps.dispatch({ type: "BROWSER_OFFLINE" });
+        return;
+      }
       deps.dispatch({ type: "RETRY" });
       runRefresh();
     },

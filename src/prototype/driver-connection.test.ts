@@ -344,6 +344,61 @@ test("24-25: refresh never bumps revision or changes updatedAt", () => {
   assert.equal(keep.updatedAt, "2026-07-31T10:00:00.000Z");
 });
 
+// --- fail-closed retry / offline-during-refresh --------------------------------
+
+test("gate-8: retry while offline dispatches OFFLINE and starts no refresh", () => {
+  const env = new FakeEnv();
+  env.online = false;
+  const events: DriverConnectionEvent[] = [];
+  const ref = deferredRefresh();
+  const c = createDriverConnectionController(env, {
+    dispatch: (e) => events.push(e),
+    refresh: ref.refresh,
+  });
+  c.start();
+  c.retry();
+  assert.deepEqual(events.at(-1), { type: "BROWSER_OFFLINE" });
+  assert.equal(ref.callCount, 0);
+  assert.notEqual(reduce(events).status, "ONLINE");
+  c.stop();
+});
+
+test("gate-9: network dropping during a refresh never yields ONLINE", async () => {
+  const env = new FakeEnv();
+  env.online = true;
+  const events: DriverConnectionEvent[] = [];
+  const ref = deferredRefresh();
+  const c = createDriverConnectionController(env, {
+    dispatch: (e) => events.push(e),
+    refresh: ref.refresh,
+  });
+  c.start();
+  env.fire("online"); // starts a refresh while online
+  env.online = false; // network drops mid-refresh
+  ref.resolveNext({ ok: true, revision: 9, updatedAt: "2026-08-01T10:00:00.000Z" });
+  await flush();
+  assert.ok(!events.some((e) => e.type === "REFRESH_SUCCEEDED"));
+  assert.deepEqual(events.at(-1), { type: "BROWSER_OFFLINE" });
+  assert.equal(reduce(events).status, "OFFLINE");
+  c.stop();
+});
+
+test("gate-10: a missed offline event + retry cannot reach ONLINE", () => {
+  const env = new FakeEnv();
+  env.online = false; // offline, but no 'offline' event was ever fired
+  const events: DriverConnectionEvent[] = [];
+  const ref = deferredRefresh();
+  const c = createDriverConnectionController(env, {
+    dispatch: (e) => events.push(e),
+    refresh: ref.refresh,
+  });
+  c.start();
+  c.retry();
+  assert.equal(ref.callCount, 0);
+  assert.equal(reduce(events).status, "OFFLINE");
+  c.stop();
+});
+
 test("view message differs per status (not colour-only signalling)", () => {
   const statuses = ["INITIALIZING", "ONLINE", "OFFLINE", "RECOVERING", "DEGRADED"] as const;
   const messages = statuses.map((status) => getDriverConnectionView({ ...R, status }).message);
