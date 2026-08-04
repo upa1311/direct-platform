@@ -5,6 +5,11 @@
 // selectors/store и их зависимости загружались напрямую.
 
 export async function resolve(specifier, context, nextResolve) {
+  // `server-only` intentionally throws outside Next.js. Unit tests replace only
+  // that marker; production bundling still enforces the server boundary.
+  if (specifier === "server-only") {
+    return { url: "data:text/javascript,export {};", shortCircuit: true };
+  }
   if (
     (specifier.startsWith("./") || specifier.startsWith("../")) &&
     !/\.(ts|mts|cts|tsx|js|mjs|cjs|json)$/.test(specifier)

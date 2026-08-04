@@ -86,7 +86,7 @@ test("пустое состояние, предупреждения и пере�
   assert.ok(PAGE.includes("Открытых заказов для расчёта нет"));
   assert.ok(PAGE.includes("Есть заказы, требующие проверки данных"));
   assert.ok(PAGE.includes("Есть самовывозы, ожидающие подтверждения способа оплаты"));
-  assert.ok(PAGE.includes(">Все заказы<") || PAGE.includes("Все заказы\n"));
+  assert.ok(PAGE.includes(">Все заказы<") || /Все заказы\r?\n/.test(PAGE));
   assert.ok(PAGE.includes("История расчётов"));
   // Возврат называет цель, а не текущий раздел: пользователь уже в «Расчётах».
   assert.ok(PAGE.includes("← Общий баланс"));

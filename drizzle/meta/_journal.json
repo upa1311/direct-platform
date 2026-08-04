@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1785805100000,
+      "tag": "0000_lethal_northstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785805208729,
+      "tag": "0001_spooky_scalphunter",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785805216093,
+      "tag": "0002_quote_snapshot_immutability",
+      "breakpoints": true
+    }
+  ]
+}

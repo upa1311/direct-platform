@@ -9,6 +9,7 @@ export interface AdminNavItem {
 }
 
 export const ADMIN_NAVIGATION: readonly AdminNavItem[] = [
+  { href: "/admin/delivery-quotes", label: "Котировки доставки" },
   { href: "/admin", label: "Обзор" },
   { href: "/admin/orders", label: "Заказы" },
   { href: "/admin/restaurants", label: "Рестораны" },

@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "dotenv -e .env.local -- tsx scripts/migrate-delivery-quotes.ts",
     "verify:zones": "node scripts/verify-zone-release.mjs",
     "prebuild": "npm run verify:zones",
     "build": "next build",
@@ -11,23 +13,33 @@
     "prelint": "npm run verify:zones",
     "lint": "eslint",
     "pretest": "npm run verify:zones",
-    "test": "node --import ./scripts/ts-node-register.mjs --test \"src/**/*.test.ts\""
+    "test": "node --import ./scripts/ts-node-register.mjs --test \"src/**/*.test.ts\"",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "drizzle-orm": "^0.45.2",
     "geist": "^1.7.2",
     "lucide-react": "^1.24.0",
-    "next": "16.2.10",
+    "next": "16.3.0",
+    "next-auth": "^5.0.0-beta.32",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv-cli": "^11.0.0",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^9",
-    "eslint-config-next": "16.2.10",
+    "eslint-config-next": "16.3.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.5",
     "typescript": "^5"
   }
 }

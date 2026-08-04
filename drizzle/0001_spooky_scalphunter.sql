@@ -1,0 +1,1 @@
+ALTER TABLE "delivery_quotes" ADD COLUMN "calculated_at" timestamp with time zone NOT NULL;

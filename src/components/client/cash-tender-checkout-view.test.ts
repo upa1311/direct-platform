@@ -184,8 +184,8 @@ test("disclosure-18: CASH REVIEW_REQUIRED не подписывается как
   assert.ok(OFFER_CARD.includes("Оплата наличными"));
 });
 
-test("audit report не изменён (маркеры на месте)", () => {
+test("audit report сохраняет принятый итог targeted F-5 re-audit", () => {
   const audit = readFileSync("docs/driver-v1-final-audit.md", "utf8");
-  assert.ok(audit.includes("SHIP-OK: NO"));
-  assert.ok(audit.includes("F-5"));
+  assert.ok(audit.includes("SHIP-OK: YES"));
+  assert.ok(audit.includes("F-5 status:** RESOLVED"));
 });

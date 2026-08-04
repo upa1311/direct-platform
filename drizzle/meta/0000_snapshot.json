@@ -1,0 +1,391 @@
+{
+  "id": "2ad531a1-d71e-4f21-a1a0-e93562a44a8e",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.delivery_quote_rate_limits": {
+      "name": "delivery_quote_rate_limits",
+      "schema": "",
+      "columns": {
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "window_started_at": {
+          "name": "window_started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_count": {
+          "name": "request_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.delivery_quotes": {
+      "name": "delivery_quotes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "quote_number": {
+          "name": "quote_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "origin_address_id": {
+          "name": "origin_address_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "origin_address_label": {
+          "name": "origin_address_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "origin_zone_id": {
+          "name": "origin_zone_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "destination_address_id": {
+          "name": "destination_address_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "destination_address_label": {
+          "name": "destination_address_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "destination_zone_id": {
+          "name": "destination_zone_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "origin_lat": {
+          "name": "origin_lat",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "origin_lon": {
+          "name": "origin_lon",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "destination_lat": {
+          "name": "destination_lat",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "destination_lon": {
+          "name": "destination_lon",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_distance_meters": {
+          "name": "route_distance_meters",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_distance_km": {
+          "name": "route_distance_km",
+          "type": "numeric(10, 3)",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "route_distance_meters / 1000.0",
+            "type": "stored"
+          }
+        },
+        "route_duration_seconds": {
+          "name": "route_duration_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_duration_min": {
+          "name": "route_duration_min",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "route_duration_seconds / 60.0",
+            "type": "stored"
+          }
+        },
+        "external_meters": {
+          "name": "external_meters",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_km": {
+          "name": "external_km",
+          "type": "numeric(10, 3)",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "external_meters / 1000.0",
+            "type": "stored"
+          }
+        },
+        "crosses_checkpoint": {
+          "name": "crosses_checkpoint",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_price_cents": {
+          "name": "base_price_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_price": {
+          "name": "base_price",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "base_price_cents / 100.0",
+            "type": "stored"
+          }
+        },
+        "external_surcharge_cents": {
+          "name": "external_surcharge_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_surcharge": {
+          "name": "external_surcharge",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "external_surcharge_cents / 100.0",
+            "type": "stored"
+          }
+        },
+        "total_price_cents": {
+          "name": "total_price_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "total_price": {
+          "name": "total_price",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "total_price_cents / 100.0",
+            "type": "stored"
+          }
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "checkpoint_id": {
+          "name": "checkpoint_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "checkpoint_lat": {
+          "name": "checkpoint_lat",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "checkpoint_lon": {
+          "name": "checkpoint_lon",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "checkpoint_route_index": {
+          "name": "checkpoint_route_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "checkpoint_status": {
+          "name": "checkpoint_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "checkpoint_approved_at": {
+          "name": "checkpoint_approved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tariff_version": {
+          "name": "tariff_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_provider": {
+          "name": "route_provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_geometry": {
+          "name": "route_geometry",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        }
+      },
+      "indexes": {
+        "delivery_quotes_quote_number_unique": {
+          "name": "delivery_quotes_quote_number_unique",
+          "columns": [
+            {
+              "expression": "quote_number",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "delivery_quotes_created_at_idx": {
+          "name": "delivery_quotes_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "delivery_quotes_status_idx": {
+          "name": "delivery_quotes_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "delivery_quotes_status_check": {
+          "name": "delivery_quotes_status_check",
+          "value": "\"delivery_quotes\".\"status\" IN ('draft', 'confirmed', 'cancelled')"
+        },
+        "delivery_quotes_currency_check": {
+          "name": "delivery_quotes_currency_check",
+          "value": "\"delivery_quotes\".\"currency\" = 'RUB'"
+        },
+        "delivery_quotes_route_distance_check": {
+          "name": "delivery_quotes_route_distance_check",
+          "value": "\"delivery_quotes\".\"route_distance_meters\" > 0"
+        },
+        "delivery_quotes_external_distance_check": {
+          "name": "delivery_quotes_external_distance_check",
+          "value": "\"delivery_quotes\".\"external_meters\" >= 0"
+        },
+        "delivery_quotes_money_check": {
+          "name": "delivery_quotes_money_check",
+          "value": "\n    \"delivery_quotes\".\"base_price_cents\" >= 0\n    AND \"delivery_quotes\".\"external_surcharge_cents\" >= 0\n    AND \"delivery_quotes\".\"total_price_cents\" = \"delivery_quotes\".\"base_price_cents\" + \"delivery_quotes\".\"external_surcharge_cents\"\n  "
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
